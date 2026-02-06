@@ -29,8 +29,8 @@
     // ─────────────────────────────────────────────
     // ⚙️  SUPABASE CONFIG — Replace with your keys
     // ─────────────────────────────────────────────
-    const SUPABASE_URL  = "YOUR_SUPABASE_URL";
-    const SUPABASE_KEY  = "YOUR_SUPABASE_ANON_KEY";
+    const SUPABASE_URL  = "https://wylxvmkcrexwfpjpbhyy.supabase.co";   // e.g. https://xyzxyz.supabase.co
+    const SUPABASE_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind5bHh2bWtjcmV4d2ZwanBiaHl5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg2MzkxMDYsImV4cCI6MjA4NDIxNTEwNn0.6Bxo42hx4jwlJGWnfjiTpiDUsYfc1QLTN3YtrU1efak";
 
     const supabaseConfigured = SUPABASE_URL !== "YOUR_SUPABASE_URL" && SUPABASE_KEY !== "YOUR_SUPABASE_ANON_KEY";
     const supabase = supabaseConfigured ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
