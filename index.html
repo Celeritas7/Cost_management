@@ -29,15 +29,187 @@
     // ─────────────────────────────────────────────
     // ⚙️  SUPABASE CONFIG — Replace with your keys
     // ─────────────────────────────────────────────
-    const SUPABASE_URL  = "https://wylxvmkcrexwfpjpbhyy.supabase.co";   // e.g. https://xyzxyz.supabase.co
-    const SUPABASE_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind5bHh2bWtjcmV4d2ZwanBiaHl5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg2MzkxMDYsImV4cCI6MjA4NDIxNTEwNn0.6Bxo42hx4jwlJGWnfjiTpiDUsYfc1QLTN3YtrU1efak";
+    const SUPABASE_URL  = "YOUR_SUPABASE_URL";
+    const SUPABASE_KEY  = "YOUR_SUPABASE_ANON_KEY";
 
     const supabaseConfigured = SUPABASE_URL !== "YOUR_SUPABASE_URL" && SUPABASE_KEY !== "YOUR_SUPABASE_ANON_KEY";
     const supabase = supabaseConfigured ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
 
     // ─────────────────────────────────────────────
-    const { useState, useMemo, useEffect, useCallback, useRef } = React;
+    // 🎨 THEMES
+    // ─────────────────────────────────────────────
+    const THEMES = {
+      midnight: {
+        name: "Midnight",
+        icon: "🌙",
+        bg: "linear-gradient(145deg, #0d0d1a 0%, #1a1a2e 50%, #16213e 100%)",
+        headerBg: "rgba(255,255,255,0.03)",
+        cardBg: "rgba(255,255,255,0.04)",
+        cardBorder: "rgba(255,255,255,0.06)",
+        inputBg: "rgba(255,255,255,0.06)",
+        inputBorder: "rgba(255,255,255,0.12)",
+        primary: "#2563eb",
+        primaryGlow: "rgba(37,99,235,0.3)",
+        accent: "#7c3aed",
+        text: "#e0e0e0",
+        textMuted: "#888",
+        textDim: "#666",
+        success: "#10b981",
+        warning: "#f59e0b",
+        danger: "#ef4444",
+      },
+      sakura: {
+        name: "Sakura",
+        icon: "🌸",
+        bg: "linear-gradient(145deg, #1a0a10 0%, #2d1520 50%, #3d1a2a 100%)",
+        headerBg: "rgba(255,182,193,0.05)",
+        cardBg: "rgba(255,182,193,0.04)",
+        cardBorder: "rgba(255,182,193,0.08)",
+        inputBg: "rgba(255,182,193,0.06)",
+        inputBorder: "rgba(255,182,193,0.15)",
+        primary: "#ec4899",
+        primaryGlow: "rgba(236,72,153,0.3)",
+        accent: "#f472b6",
+        text: "#fce7f3",
+        textMuted: "#f9a8d4",
+        textDim: "#9d174d",
+        success: "#34d399",
+        warning: "#fbbf24",
+        danger: "#f87171",
+      },
+      ocean: {
+        name: "Ocean",
+        icon: "🌊",
+        bg: "linear-gradient(145deg, #0a1628 0%, #0c2340 50%, #0f3052 100%)",
+        headerBg: "rgba(56,189,248,0.05)",
+        cardBg: "rgba(56,189,248,0.04)",
+        cardBorder: "rgba(56,189,248,0.08)",
+        inputBg: "rgba(56,189,248,0.06)",
+        inputBorder: "rgba(56,189,248,0.15)",
+        primary: "#0ea5e9",
+        primaryGlow: "rgba(14,165,233,0.3)",
+        accent: "#38bdf8",
+        text: "#e0f2fe",
+        textMuted: "#7dd3fc",
+        textDim: "#0369a1",
+        success: "#22d3ee",
+        warning: "#fbbf24",
+        danger: "#fb7185",
+      },
+      forest: {
+        name: "Forest",
+        icon: "🌲",
+        bg: "linear-gradient(145deg, #0a1a0f 0%, #132a1a 50%, #1a3a22 100%)",
+        headerBg: "rgba(34,197,94,0.05)",
+        cardBg: "rgba(34,197,94,0.04)",
+        cardBorder: "rgba(34,197,94,0.08)",
+        inputBg: "rgba(34,197,94,0.06)",
+        inputBorder: "rgba(34,197,94,0.15)",
+        primary: "#22c55e",
+        primaryGlow: "rgba(34,197,94,0.3)",
+        accent: "#4ade80",
+        text: "#dcfce7",
+        textMuted: "#86efac",
+        textDim: "#166534",
+        success: "#34d399",
+        warning: "#facc15",
+        danger: "#f87171",
+      },
+      sunset: {
+        name: "Sunset",
+        icon: "🌅",
+        bg: "linear-gradient(145deg, #1a0f0a 0%, #2d1810 50%, #3d2018 100%)",
+        headerBg: "rgba(251,146,60,0.05)",
+        cardBg: "rgba(251,146,60,0.04)",
+        cardBorder: "rgba(251,146,60,0.08)",
+        inputBg: "rgba(251,146,60,0.06)",
+        inputBorder: "rgba(251,146,60,0.15)",
+        primary: "#f97316",
+        primaryGlow: "rgba(249,115,22,0.3)",
+        accent: "#fb923c",
+        text: "#ffedd5",
+        textMuted: "#fdba74",
+        textDim: "#9a3412",
+        success: "#4ade80",
+        warning: "#fbbf24",
+        danger: "#ef4444",
+      },
+      lavender: {
+        name: "Lavender",
+        icon: "💜",
+        bg: "linear-gradient(145deg, #110f1a 0%, #1e1a2e 50%, #2a2440 100%)",
+        headerBg: "rgba(167,139,250,0.05)",
+        cardBg: "rgba(167,139,250,0.04)",
+        cardBorder: "rgba(167,139,250,0.08)",
+        inputBg: "rgba(167,139,250,0.06)",
+        inputBorder: "rgba(167,139,250,0.15)",
+        primary: "#8b5cf6",
+        primaryGlow: "rgba(139,92,246,0.3)",
+        accent: "#a78bfa",
+        text: "#ede9fe",
+        textMuted: "#c4b5fd",
+        textDim: "#5b21b6",
+        success: "#34d399",
+        warning: "#fbbf24",
+        danger: "#f87171",
+      },
+      mono: {
+        name: "Monochrome",
+        icon: "⚪",
+        bg: "linear-gradient(145deg, #0a0a0a 0%, #171717 50%, #1f1f1f 100%)",
+        headerBg: "rgba(255,255,255,0.03)",
+        cardBg: "rgba(255,255,255,0.03)",
+        cardBorder: "rgba(255,255,255,0.06)",
+        inputBg: "rgba(255,255,255,0.05)",
+        inputBorder: "rgba(255,255,255,0.1)",
+        primary: "#a3a3a3",
+        primaryGlow: "rgba(163,163,163,0.3)",
+        accent: "#d4d4d4",
+        text: "#e5e5e5",
+        textMuted: "#a3a3a3",
+        textDim: "#525252",
+        success: "#86efac",
+        warning: "#fde047",
+        danger: "#fca5a5",
+      },
+    };
+
+    const THEME_KEYS = Object.keys(THEMES);
+    const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+    // Theme persistence
+    function getStoredTheme() {
+      try {
+        const stored = localStorage.getItem("cost_mgmt_theme");
+        if (stored) {
+          const { theme, timestamp } = JSON.parse(stored);
+          const now = Date.now();
+          // If more than a week, pick random new theme
+          if (now - timestamp > ONE_WEEK_MS) {
+            const newTheme = THEME_KEYS[Math.floor(Math.random() * THEME_KEYS.length)];
+            localStorage.setItem("cost_mgmt_theme", JSON.stringify({ theme: newTheme, timestamp: now }));
+            return newTheme;
+          }
+          return theme;
+        }
+      } catch (e) {}
+      // Default theme
+      const defaultTheme = "midnight";
+      localStorage.setItem("cost_mgmt_theme", JSON.stringify({ theme: defaultTheme, timestamp: Date.now() }));
+      return defaultTheme;
+    }
+
+    function setStoredTheme(theme) {
+      localStorage.setItem("cost_mgmt_theme", JSON.stringify({ theme, timestamp: Date.now() }));
+    }
+
+    // ─────────────────────────────────────────────
+    const { useState, useMemo, useEffect, useCallback, useRef, createContext, useContext } = React;
     const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area, CartesianGrid } = Recharts;
+
+    // Theme Context
+    const ThemeContext = createContext();
+    const useTheme = () => useContext(ThemeContext);
 
     const MONTHS_SHORT = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
     const MONTHS_FULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
@@ -57,41 +229,27 @@
       return { ...r, year: d.getFullYear(), month: d.getMonth() + 1, monthLabel: `${MONTHS_SHORT[d.getMonth()+1]} ${d.getFullYear()}` };
     }
 
-    const CustomTooltip = ({ active, payload, label }) => {
-      if (!active || !payload?.length) return null;
-      return (
-        <div style={{background:"#1a1a2e",border:"1px solid #333",borderRadius:8,padding:"10px 14px",color:"#e0e0e0",fontSize:13}}>
-          <div style={{fontWeight:600,marginBottom:4,color:"#fff"}}>{label}</div>
-          {payload.map((p,i) => <div key={i} style={{color:p.color||"#ccc"}}>{p.name}: {fmt(p.value)}</div>)}
-        </div>
-      );
-    };
-
-    const pillStyle = (active) => ({
-      padding:"7px 16px",fontSize:13,borderRadius:20,border:"none",cursor:"pointer",fontWeight:500,
-      background: active ? "rgba(37,99,235,0.9)" : "rgba(255,255,255,0.06)",
-      color: active ? "#fff" : "#aaa",transition:"all 0.2s",
-    });
-
-    const inputStyle = {
-      width:"100%",padding:"10px 14px",borderRadius:10,border:"1px solid rgba(255,255,255,0.12)",
-      background:"rgba(255,255,255,0.06)",color:"#eee",fontSize:14,outline:"none",
-      fontFamily:"inherit",transition:"border-color 0.2s",
-    };
-
-    const labelStyle = { fontSize:12,fontWeight:500,color:"#999",textTransform:"uppercase",letterSpacing:0.8,marginBottom:6,display:"block" };
-
     // ═══════════════════════════════════════════
     //  MAIN APP
     // ═══════════════════════════════════════════
     function App() {
+      const [themeName, setThemeName] = useState(getStoredTheme);
+      const theme = THEMES[themeName] || THEMES.midnight;
+
       const [data, setData] = useState([]);
       const [shops, setShops] = useState([]);
       const [loading, setLoading] = useState(true);
       const [yearFilter, setYearFilter] = useState("All");
       const [catFilter, setCatFilter] = useState("All");
-      const [view, setView] = useState("add"); // Default to Add Entry
+      const [view, setView] = useState("add");
       const [txPage, setTxPage] = useState(0);
+      const [showThemePicker, setShowThemePicker] = useState(false);
+
+      const changeTheme = (newTheme) => {
+        setThemeName(newTheme);
+        setStoredTheme(newTheme);
+        setShowThemePicker(false);
+      };
 
       const fetchData = useCallback(async () => {
         if (!supabase) { setLoading(false); return; }
@@ -161,16 +319,33 @@
       const txPages = Math.ceil(sortedTx.length / txPerPage);
       const pageTx = sortedTx.slice(txPage * txPerPage, (txPage+1) * txPerPage);
 
+      // Styles derived from theme
+      const pillStyle = (active) => ({
+        padding:"7px 16px",fontSize:13,borderRadius:20,border:"none",cursor:"pointer",fontWeight:500,
+        background: active ? theme.primaryGlow : theme.cardBg,
+        color: active ? "#fff" : theme.textMuted,
+        transition:"all 0.2s",
+        border: active ? `1px solid ${theme.primary}` : `1px solid ${theme.cardBorder}`,
+      });
+
+      const inputStyle = {
+        width:"100%",padding:"10px 14px",borderRadius:10,border:`1px solid ${theme.inputBorder}`,
+        background:theme.inputBg,color:theme.text,fontSize:14,outline:"none",
+        fontFamily:"inherit",transition:"border-color 0.2s",
+      };
+
+      const labelStyle = { fontSize:12,fontWeight:500,color:theme.textMuted,textTransform:"uppercase",letterSpacing:0.8,marginBottom:6,display:"block" };
+
       if (!supabaseConfigured) {
         return (
-          <div style={{minHeight:"100vh",background:"linear-gradient(145deg, #0d0d1a 0%, #1a1a2e 50%, #16213e 100%)",display:"flex",alignItems:"center",justifyContent:"center",padding:32}}>
-            <div style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:16,padding:"40px 32px",maxWidth:520,textAlign:"center",color:"#e0e0e0"}}>
+          <div style={{minHeight:"100vh",background:theme.bg,display:"flex",alignItems:"center",justifyContent:"center",padding:32}}>
+            <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:16,padding:"40px 32px",maxWidth:520,textAlign:"center",color:theme.text}}>
               <div style={{fontSize:48,marginBottom:16}}>⚙️</div>
               <h2 style={{color:"#fff",fontSize:20,marginBottom:12}}>Supabase Not Configured</h2>
-              <p style={{color:"#999",lineHeight:1.7,fontSize:14,marginBottom:20}}>
-                Open <code style={{background:"rgba(255,255,255,0.1)",padding:"2px 8px",borderRadius:4,color:"#7dd3fc"}}>index.html</code> and set your Supabase credentials.
+              <p style={{color:theme.textMuted,lineHeight:1.7,fontSize:14,marginBottom:20}}>
+                Open <code style={{background:theme.inputBg,padding:"2px 8px",borderRadius:4,color:theme.primary}}>index.html</code> and set your Supabase credentials.
               </p>
-              <div style={{background:"rgba(37,99,235,0.1)",border:"1px solid rgba(37,99,235,0.3)",borderRadius:10,padding:16,textAlign:"left",fontSize:13,color:"#93c5fd",lineHeight:1.8}}>
+              <div style={{background:`${theme.primary}15`,border:`1px solid ${theme.primary}40`,borderRadius:10,padding:16,textAlign:"left",fontSize:13,color:theme.accent,lineHeight:1.8}}>
                 <div><strong>1.</strong> Supabase Dashboard → Settings → API</div>
                 <div><strong>2.</strong> Copy <strong>Project URL</strong> + <strong>anon key</strong></div>
                 <div><strong>3.</strong> Paste in config at top of <code>index.html</code></div>
@@ -182,52 +357,89 @@
       }
 
       return (
-        <div style={{minHeight:"100vh",background:"linear-gradient(145deg, #0d0d1a 0%, #1a1a2e 50%, #16213e 100%)",color:"#e0e0e0",fontFamily:"'Noto Sans JP', system-ui, sans-serif"}}>
-          {/* Header */}
-          <div style={{background:"rgba(255,255,255,0.03)",borderBottom:"1px solid rgba(255,255,255,0.06)",padding:"20px 24px",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
-            <div>
-              <div style={{fontSize:11,letterSpacing:3,textTransform:"uppercase",color:"#666",marginBottom:4}}>家計簿</div>
-              <h1 style={{fontSize:22,fontWeight:700,color:"#fff",letterSpacing:-0.5,margin:0}}>Cost Management</h1>
-            </div>
-            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-              {["add","overview","transactions"].map(v => (
-                <button key={v} onClick={() => { setView(v); setTxPage(0); }} style={pillStyle(view===v)}>
-                  {v === "add" ? "➕ Add Entry" : v === "overview" ? "📊 Overview" : "📋 Transactions"}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Filters (only for overview/transactions) */}
-          {view !== "add" && (
-            <div style={{padding:"16px 24px",display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
-              <span style={{fontSize:12,color:"#666",marginRight:4}}>Filter:</span>
-              <select value={yearFilter} onChange={e => setYearFilter(e.target.value)} style={{background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.1)",color:"#ddd",padding:"6px 12px",borderRadius:8,fontSize:13}}>
-                <option value="All">All Years</option>
-                {years.map(y => <option key={y} value={y}>{y}</option>)}
-              </select>
-              <select value={catFilter} onChange={e => setCatFilter(e.target.value)} style={{background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.1)",color:"#ddd",padding:"6px 12px",borderRadius:8,fontSize:13}}>
-                <option value="All">All Categories</option>
-                {categories.map(c => <option key={c} value={c}>{CAT_ICONS[c]||"📦"} {c}</option>)}
-              </select>
-            </div>
-          )}
-
-          <div style={{padding:"0 24px 32px"}}>
-            {loading ? (
-              <div style={{textAlign:"center",padding:80,color:"#888"}}>
-                <div style={{fontSize:32,marginBottom:12}}>⏳</div>
-                <div>Loading…</div>
+        <ThemeContext.Provider value={{ theme, themeName, inputStyle, labelStyle, pillStyle }}>
+          <div style={{minHeight:"100vh",background:theme.bg,color:theme.text,fontFamily:"'Noto Sans JP', system-ui, sans-serif",transition:"background 0.5s"}}>
+            {/* Header */}
+            <div style={{background:theme.headerBg,borderBottom:`1px solid ${theme.cardBorder}`,padding:"20px 24px",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
+              <div>
+                <div style={{fontSize:11,letterSpacing:3,textTransform:"uppercase",color:theme.textDim,marginBottom:4}}>家計簿</div>
+                <h1 style={{fontSize:22,fontWeight:700,color:"#fff",letterSpacing:-0.5,margin:0}}>Cost Management</h1>
               </div>
-            ) : view === "add" ? (
-              <AddEntryView supabase={supabase} shops={shops} onAdded={fetchData} />
-            ) : view === "overview" ? (
-              <OverviewView {...{filtered,totalSpend,monthlyAvg,dailyAvg,txCount,monthlyData,catData,topShops}} />
-            ) : (
-              <TransactionsView {...{pageTx,txPage,setTxPage,txPages}} />
+              <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                {["add","overview","transactions"].map(v => (
+                  <button key={v} onClick={() => { setView(v); setTxPage(0); }} style={pillStyle(view===v)}>
+                    {v === "add" ? "➕ Add Entry" : v === "overview" ? "📊 Overview" : "📋 Transactions"}
+                  </button>
+                ))}
+                {/* Theme picker button */}
+                <div style={{position:"relative"}}>
+                  <button onClick={() => setShowThemePicker(!showThemePicker)}
+                    style={{...pillStyle(false),padding:"7px 12px",fontSize:18,lineHeight:1}}>
+                    {theme.icon}
+                  </button>
+                  {showThemePicker && (
+                    <>
+                      <div style={{position:"fixed",inset:0,zIndex:90}} onClick={() => setShowThemePicker(false)}/>
+                      <div style={{position:"absolute",top:"100%",right:0,marginTop:8,background:"#1a1a2e",border:`1px solid ${theme.cardBorder}`,borderRadius:12,padding:8,zIndex:100,minWidth:180,boxShadow:"0 8px 32px rgba(0,0,0,0.5)"}}>
+                        <div style={{fontSize:11,color:theme.textDim,padding:"4px 8px",marginBottom:4,textTransform:"uppercase",letterSpacing:1}}>Choose Theme</div>
+                        {THEME_KEYS.map(key => (
+                          <button key={key} onClick={() => changeTheme(key)}
+                            style={{
+                              display:"flex",alignItems:"center",gap:10,width:"100%",padding:"10px 12px",
+                              background: themeName === key ? `${THEMES[key].primary}20` : "transparent",
+                              border:"none",borderRadius:8,cursor:"pointer",textAlign:"left",
+                              transition:"background 0.15s",
+                            }}
+                            onMouseEnter={e => e.currentTarget.style.background = `${THEMES[key].primary}15`}
+                            onMouseLeave={e => e.currentTarget.style.background = themeName === key ? `${THEMES[key].primary}20` : "transparent"}>
+                            <span style={{fontSize:18}}>{THEMES[key].icon}</span>
+                            <span style={{color: themeName === key ? THEMES[key].primary : "#ccc",fontWeight: themeName === key ? 600 : 400,fontSize:14}}>{THEMES[key].name}</span>
+                            {themeName === key && <span style={{marginLeft:"auto",color:THEMES[key].primary}}>✓</span>}
+                          </button>
+                        ))}
+                        <div style={{borderTop:`1px solid ${theme.cardBorder}`,marginTop:8,paddingTop:8}}>
+                          <div style={{fontSize:10,color:theme.textDim,padding:"4px 8px",lineHeight:1.4}}>
+                            Theme auto-changes weekly 🔄
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Filters */}
+            {view !== "add" && (
+              <div style={{padding:"16px 24px",display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
+                <span style={{fontSize:12,color:theme.textDim,marginRight:4}}>Filter:</span>
+                <select value={yearFilter} onChange={e => setYearFilter(e.target.value)} style={{background:theme.inputBg,border:`1px solid ${theme.inputBorder}`,color:theme.text,padding:"6px 12px",borderRadius:8,fontSize:13}}>
+                  <option value="All">All Years</option>
+                  {years.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+                <select value={catFilter} onChange={e => setCatFilter(e.target.value)} style={{background:theme.inputBg,border:`1px solid ${theme.inputBorder}`,color:theme.text,padding:"6px 12px",borderRadius:8,fontSize:13}}>
+                  <option value="All">All Categories</option>
+                  {categories.map(c => <option key={c} value={c}>{CAT_ICONS[c]||"📦"} {c}</option>)}
+                </select>
+              </div>
             )}
+
+            <div style={{padding:"0 24px 32px"}}>
+              {loading ? (
+                <div style={{textAlign:"center",padding:80,color:theme.textMuted}}>
+                  <div style={{fontSize:32,marginBottom:12}}>⏳</div>
+                  <div>Loading…</div>
+                </div>
+              ) : view === "add" ? (
+                <AddEntryView supabase={supabase} shops={shops} onAdded={fetchData} />
+              ) : view === "overview" ? (
+                <OverviewView {...{filtered,totalSpend,monthlyAvg,dailyAvg,txCount,monthlyData,catData,topShops}} />
+              ) : (
+                <TransactionsView {...{pageTx,txPage,setTxPage,txPages}} />
+              )}
+            </div>
           </div>
-        </div>
+        </ThemeContext.Provider>
       );
     }
 
@@ -235,6 +447,7 @@
     //  MULTI-DATE CALENDAR
     // ═══════════════════════════════════════════
     function MultiDateCalendar({ selectedDates, setSelectedDates }) {
+      const { theme } = useTheme();
       const [viewDate, setViewDate] = useState(() => {
         const d = selectedDates[0] ? new Date(selectedDates[0]) : new Date();
         return { year: d.getFullYear(), month: d.getMonth() };
@@ -262,22 +475,19 @@
       };
 
       return (
-        <div style={{background:"rgba(255,255,255,0.03)",borderRadius:12,padding:16,border:"1px solid rgba(255,255,255,0.06)"}}>
-          {/* Header with navigation */}
+        <div style={{background:theme.cardBg,borderRadius:12,padding:16,border:`1px solid ${theme.cardBorder}`}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-            <button onClick={prevMonth} style={{background:"rgba(255,255,255,0.06)",border:"none",borderRadius:8,width:32,height:32,cursor:"pointer",color:"#aaa",fontSize:14}}>◀</button>
+            <button onClick={prevMonth} style={{background:theme.inputBg,border:"none",borderRadius:8,width:32,height:32,cursor:"pointer",color:theme.textMuted,fontSize:14}}>◀</button>
             <div style={{fontSize:15,fontWeight:600,color:"#fff"}}>{MONTHS_FULL[viewDate.month]} {viewDate.year}</div>
-            <button onClick={nextMonth} style={{background:"rgba(255,255,255,0.06)",border:"none",borderRadius:8,width:32,height:32,cursor:"pointer",color:"#aaa",fontSize:14}}>▶</button>
+            <button onClick={nextMonth} style={{background:theme.inputBg,border:"none",borderRadius:8,width:32,height:32,cursor:"pointer",color:theme.textMuted,fontSize:14}}>▶</button>
           </div>
 
-          {/* Weekday headers */}
           <div style={{display:"grid",gridTemplateColumns:"repeat(7, 1fr)",gap:4,marginBottom:8}}>
             {["Su","Mo","Tu","We","Th","Fr","Sa"].map(d => (
-              <div key={d} style={{textAlign:"center",fontSize:10,color:"#666",fontWeight:500,padding:4}}>{d}</div>
+              <div key={d} style={{textAlign:"center",fontSize:10,color:theme.textDim,fontWeight:500,padding:4}}>{d}</div>
             ))}
           </div>
 
-          {/* Days grid */}
           <div style={{display:"grid",gridTemplateColumns:"repeat(7, 1fr)",gap:4}}>
             {Array.from({ length: firstDayOfWeek }).map((_, i) => <div key={`e-${i}`} />)}
             {Array.from({ length: daysInMonth }).map((_, i) => {
@@ -288,9 +498,10 @@
                 <button key={day} onClick={() => toggleDate(day)}
                   style={{
                     aspectRatio:"1",borderRadius:8,border:"none",cursor:"pointer",fontSize:13,fontWeight:selected?600:400,transition:"all 0.15s",
-                    background: selected ? "rgba(37,99,235,0.8)" : today ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.02)",
-                    color: selected ? "#fff" : today ? "#7dd3fc" : "#aaa",
-                    outline: today && !selected ? "1px solid rgba(125,211,252,0.3)" : "none",
+                    background: selected ? theme.primaryGlow : today ? theme.inputBg : theme.cardBg,
+                    color: selected ? "#fff" : today ? theme.primary : theme.textMuted,
+                    outline: today && !selected ? `1px solid ${theme.primary}40` : "none",
+                    border: selected ? `1px solid ${theme.primary}` : `1px solid transparent`,
                   }}>
                   {day}
                 </button>
@@ -298,22 +509,20 @@
             })}
           </div>
 
-          {/* Quick actions */}
           <div style={{display:"flex",gap:8,marginTop:12,justifyContent:"center"}}>
             <button onClick={() => setSelectedDates([new Date().toISOString().slice(0,10)])}
-              style={{background:"rgba(255,255,255,0.06)",border:"none",borderRadius:6,padding:"6px 12px",fontSize:11,color:"#aaa",cursor:"pointer"}}>Today</button>
+              style={{background:theme.inputBg,border:"none",borderRadius:6,padding:"6px 12px",fontSize:11,color:theme.textMuted,cursor:"pointer"}}>Today</button>
             <button onClick={() => setSelectedDates([])}
-              style={{background:"rgba(239,68,68,0.1)",border:"none",borderRadius:6,padding:"6px 12px",fontSize:11,color:"#ef4444",cursor:"pointer"}}>Clear All</button>
+              style={{background:`${theme.danger}15`,border:"none",borderRadius:6,padding:"6px 12px",fontSize:11,color:theme.danger,cursor:"pointer"}}>Clear All</button>
           </div>
 
-          {/* Selected dates chips */}
           {selectedDates.length > 0 && (
             <div style={{marginTop:12,display:"flex",flexWrap:"wrap",gap:6}}>
               {selectedDates.sort().map(d => (
-                <span key={d} style={{background:"rgba(37,99,235,0.2)",color:"#7dd3fc",padding:"4px 10px",borderRadius:8,fontSize:12,display:"flex",alignItems:"center",gap:6}}>
+                <span key={d} style={{background:theme.primaryGlow,color:theme.accent,padding:"4px 10px",borderRadius:8,fontSize:12,display:"flex",alignItems:"center",gap:6}}>
                   {d}
                   <button onClick={() => setSelectedDates(prev => prev.filter(x => x !== d))}
-                    style={{background:"none",border:"none",color:"#7dd3fc",cursor:"pointer",fontSize:14,lineHeight:1,padding:0}}>×</button>
+                    style={{background:"none",border:"none",color:theme.accent,cursor:"pointer",fontSize:14,lineHeight:1,padding:0}}>×</button>
                 </span>
               ))}
             </div>
@@ -326,6 +535,7 @@
     //  ADD ENTRY VIEW
     // ═══════════════════════════════════════════
     function AddEntryView({ supabase, shops, onAdded }) {
+      const { theme, inputStyle, labelStyle } = useTheme();
       const [amount, setAmount] = useState("");
       const [selectedDates, setSelectedDates] = useState([new Date().toISOString().slice(0,10)]);
       const [category, setCategory] = useState("Supermarket");
@@ -338,19 +548,15 @@
       const [showAddShop, setShowAddShop] = useState(false);
       const [newShopName, setNewShopName] = useState("");
       const [newShopCategory, setNewShopCategory] = useState("Supermarket");
-      const dropdownRef = useRef(null);
 
-      // Filter shops by category and search
       const filteredShops = useMemo(() => {
         let list = [...shops];
-        // First filter by category (unless searching)
         if (!shopSearch) {
           list = list.filter(s => s.category === category);
         } else {
           const q = shopSearch.toLowerCase();
           list = list.filter(s => s.name.toLowerCase().includes(q));
         }
-        // Sort: favorites first, then alphabetical
         return list.sort((a,b) => {
           if (a.is_favorite && !b.is_favorite) return -1;
           if (!a.is_favorite && b.is_favorite) return 1;
@@ -368,39 +574,32 @@
         if (!newShopName.trim()) return;
         const { error } = await supabase.from("cost_management_shops").insert({ name: newShopName.trim(), category: newShopCategory, is_favorite: false });
         if (!error) {
-          setToast({ type: "success", msg: `Added "${newShopName}" to shops` });
+          setToast({ type: "success", msg: `Added "${newShopName}"` });
           setNewShopName("");
           setShowAddShop(false);
           onAdded();
         } else {
-          setToast({ type: "error", msg: error.message.includes("duplicate") ? "Shop already exists" : error.message });
+          setToast({ type: "error", msg: error.message.includes("duplicate") ? "Shop exists" : error.message });
         }
         setTimeout(() => setToast(null), 3000);
       };
 
-      const selectShop = (name) => {
-        setShop(name);
-        setShopSearch(name);
-        setShowShopDropdown(false);
-      };
+      const selectShop = (name) => { setShop(name); setShopSearch(name); setShowShopDropdown(false); };
 
       const handleSubmit = async () => {
-        if (!amount || Number(amount) <= 0) { setToast({type:"error",msg:"Enter a valid amount"}); setTimeout(() => setToast(null), 3000); return; }
-        if (selectedDates.length === 0) { setToast({type:"error",msg:"Select at least one date"}); setTimeout(() => setToast(null), 3000); return; }
+        if (!amount || Number(amount) <= 0) { setToast({type:"error",msg:"Enter valid amount"}); setTimeout(() => setToast(null), 3000); return; }
+        if (selectedDates.length === 0) { setToast({type:"error",msg:"Select a date"}); setTimeout(() => setToast(null), 3000); return; }
         const finalShop = shop || shopSearch.trim() || "Other";
 
         setSaving(true);
-        const entries = selectedDates.map(date => ({
-          amount: Number(amount), date, category, shop: finalShop, notes: notes.trim(),
-        }));
-
+        const entries = selectedDates.map(date => ({ amount: Number(amount), date, category, shop: finalShop, notes: notes.trim() }));
         const { error } = await supabase.from("cost_management_expenses").insert(entries);
         setSaving(false);
 
         if (error) {
           setToast({type:"error",msg:"Failed: " + error.message});
         } else {
-          setToast({type:"success",msg:`Saved ¥${Number(amount).toLocaleString()} × ${selectedDates.length} entry(s)`});
+          setToast({type:"success",msg:`Saved ¥${Number(amount).toLocaleString()} × ${selectedDates.length}`});
           setAmount(""); setNotes(""); setShop(""); setShopSearch(""); setSelectedDates([new Date().toISOString().slice(0,10)]);
           onAdded();
         }
@@ -412,34 +611,31 @@
       return (
         <div style={{maxWidth:600,margin:"0 auto"}}>
           {toast && (
-            <div style={{position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",zIndex:999,padding:"12px 24px",borderRadius:12,fontSize:14,fontWeight:500,background:toast.type==="success"?"rgba(16,185,129,0.95)":"rgba(239,68,68,0.95)",color:"#fff",boxShadow:"0 8px 32px rgba(0,0,0,0.4)",animation:"slideDown 0.3s ease"}}>
+            <div style={{position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",zIndex:999,padding:"12px 24px",borderRadius:12,fontSize:14,fontWeight:500,background:toast.type==="success"?theme.success:theme.danger,color:"#fff",boxShadow:"0 8px 32px rgba(0,0,0,0.4)",animation:"slideDown 0.3s ease"}}>
               {toast.type==="success"?"✅":"❌"} {toast.msg}
             </div>
           )}
           <style>{`@keyframes slideDown { from { opacity:0; transform:translateX(-50%) translateY(-20px); } to { opacity:1; transform:translateX(-50%) translateY(0); } }`}</style>
 
-          <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:16,padding:"28px 24px",marginTop:8}}>
+          <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:16,padding:"28px 24px",marginTop:8}}>
             <h3 style={{fontSize:16,fontWeight:600,color:"#fff",marginTop:0,marginBottom:24,display:"flex",alignItems:"center",gap:10}}>
-              <span style={{background:"rgba(37,99,235,0.15)",width:36,height:36,borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>💰</span>
+              <span style={{background:theme.primaryGlow,width:36,height:36,borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>💰</span>
               New Expense
             </h3>
 
-            {/* Amount */}
             <div style={{marginBottom:20}}>
               <label style={labelStyle}>Amount (¥)</label>
               <input type="number" inputMode="numeric" placeholder="0" value={amount} onChange={e => setAmount(e.target.value)}
                 style={{...inputStyle,fontSize:24,fontWeight:700,letterSpacing:-0.5,textAlign:"center"}}
-                onFocus={e => e.target.style.borderColor="rgba(37,99,235,0.5)"}
-                onBlur={e => e.target.style.borderColor="rgba(255,255,255,0.12)"}/>
+                onFocus={e => e.target.style.borderColor=theme.primary}
+                onBlur={e => e.target.style.borderColor=theme.inputBorder}/>
             </div>
 
-            {/* Multi-Date Calendar */}
             <div style={{marginBottom:20}}>
               <label style={labelStyle}>Date(s) — click to select multiple</label>
               <MultiDateCalendar selectedDates={selectedDates} setSelectedDates={setSelectedDates} />
             </div>
 
-            {/* Category */}
             <div style={{marginBottom:20}}>
               <label style={labelStyle}>Category</label>
               <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
@@ -447,9 +643,9 @@
                   <button key={cat} onClick={() => { setCategory(cat); setShop(""); setShopSearch(""); }}
                     style={{
                       padding:"8px 14px",borderRadius:10,border:"none",cursor:"pointer",fontSize:13,fontWeight:500,transition:"all 0.2s",
-                      background: category===cat ? `${CAT_COLORS[cat]}30` : "rgba(255,255,255,0.04)",
-                      color: category===cat ? CAT_COLORS[cat] : "#888",
-                      outline: category===cat ? `2px solid ${CAT_COLORS[cat]}50` : "2px solid transparent",
+                      background: category===cat ? `${CAT_COLORS[cat]}30` : theme.cardBg,
+                      color: category===cat ? CAT_COLORS[cat] : theme.textMuted,
+                      outline: category===cat ? `2px solid ${CAT_COLORS[cat]}50` : `2px solid transparent`,
                     }}>
                     {CAT_ICONS[cat]} {cat}
                   </button>
@@ -457,56 +653,45 @@
               </div>
             </div>
 
-            {/* Shop — autocomplete with favorites */}
-            <div style={{marginBottom:20,position:"relative"}} ref={dropdownRef}>
+            <div style={{marginBottom:20,position:"relative"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                 <label style={{...labelStyle,marginBottom:0}}>Shop</label>
-                <button onClick={() => setShowAddShop(true)} style={{background:"rgba(16,185,129,0.15)",border:"none",borderRadius:6,padding:"4px 10px",fontSize:11,color:"#10b981",cursor:"pointer",fontWeight:500}}>
+                <button onClick={() => setShowAddShop(true)} style={{background:`${theme.success}20`,border:"none",borderRadius:6,padding:"4px 10px",fontSize:11,color:theme.success,cursor:"pointer",fontWeight:500}}>
                   + Add New Shop
                 </button>
               </div>
-              <input
-                type="text"
-                placeholder="Search or type shop name…"
-                value={shopSearch}
+              <input type="text" placeholder="Search or type shop name…" value={shopSearch}
                 onChange={e => { setShopSearch(e.target.value); setShop(""); setShowShopDropdown(true); }}
-                onFocus={() => setShowShopDropdown(true)}
-                style={inputStyle}
-              />
+                onFocus={() => setShowShopDropdown(true)} style={inputStyle}/>
               {showShopDropdown && (
                 <>
                   <div style={{position:"fixed",inset:0,zIndex:40}} onClick={() => setShowShopDropdown(false)}/>
-                  <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:50,background:"#1a1a2e",border:"1px solid rgba(255,255,255,0.1)",borderRadius:10,marginTop:4,maxHeight:280,overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.5)"}}>
-                    {filteredShops.length > 0 && filteredShops.map(s => (
+                  <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:50,background:"#1a1a2e",border:`1px solid ${theme.cardBorder}`,borderRadius:10,marginTop:4,maxHeight:280,overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.5)"}}>
+                    {filteredShops.map(s => (
                       <div key={s.id} onClick={() => selectShop(s.name)}
-                        style={{display:"flex",alignItems:"center",padding:"10px 14px",cursor:"pointer",borderBottom:"1px solid rgba(255,255,255,0.05)",transition:"background 0.15s"}}
-                        onMouseEnter={e => e.currentTarget.style.background="rgba(255,255,255,0.05)"}
+                        style={{display:"flex",alignItems:"center",padding:"10px 14px",cursor:"pointer",borderBottom:`1px solid ${theme.cardBorder}`,transition:"background 0.15s"}}
+                        onMouseEnter={e => e.currentTarget.style.background=theme.inputBg}
                         onMouseLeave={e => e.currentTarget.style.background="transparent"}>
-                        <button onClick={(e) => toggleFavorite(e, s)}
-                          style={{background:"none",border:"none",cursor:"pointer",fontSize:16,marginRight:10,opacity:s.is_favorite?1:0.3,transition:"opacity 0.2s"}}>⭐</button>
+                        <button onClick={(e) => toggleFavorite(e, s)} style={{background:"none",border:"none",cursor:"pointer",fontSize:16,marginRight:10,opacity:s.is_favorite?1:0.3}}>⭐</button>
                         <div style={{flex:1}}>
-                          <div style={{color:"#eee",fontSize:14}}>{s.name}</div>
-                          <div style={{color:"#666",fontSize:11}}>{s.category}</div>
+                          <div style={{color:theme.text,fontSize:14}}>{s.name}</div>
+                          <div style={{color:theme.textDim,fontSize:11}}>{s.category}</div>
                         </div>
                       </div>
                     ))}
-                    
-                    {/* Always show "Other" option */}
                     <div onClick={() => selectShop("Other")}
-                      style={{display:"flex",alignItems:"center",padding:"10px 14px",cursor:"pointer",background:"rgba(139,92,246,0.08)",borderTop:"1px solid rgba(255,255,255,0.08)"}}
-                      onMouseEnter={e => e.currentTarget.style.background="rgba(139,92,246,0.15)"}
-                      onMouseLeave={e => e.currentTarget.style.background="rgba(139,92,246,0.08)"}>
+                      style={{display:"flex",alignItems:"center",padding:"10px 14px",cursor:"pointer",background:`${CAT_COLORS.Other}10`,borderTop:`1px solid ${theme.cardBorder}`}}
+                      onMouseEnter={e => e.currentTarget.style.background=`${CAT_COLORS.Other}20`}
+                      onMouseLeave={e => e.currentTarget.style.background=`${CAT_COLORS.Other}10`}>
                       <span style={{marginRight:10}}>📦</span>
-                      <div style={{color:"#c4b5fd",fontSize:14}}>Other</div>
+                      <div style={{color:CAT_COLORS.Other,fontSize:14}}>Other</div>
                     </div>
-
-                    {/* Option to use typed value if not found */}
                     {shopSearch && !filteredShops.find(s => s.name.toLowerCase() === shopSearch.toLowerCase()) && shopSearch.toLowerCase() !== "other" && (
                       <div onClick={() => selectShop(shopSearch)}
-                        style={{padding:"10px 14px",background:"rgba(37,99,235,0.08)",borderTop:"1px solid rgba(255,255,255,0.08)",cursor:"pointer"}}
-                        onMouseEnter={e => e.currentTarget.style.background="rgba(37,99,235,0.15)"}
-                        onMouseLeave={e => e.currentTarget.style.background="rgba(37,99,235,0.08)"}>
-                        <span style={{color:"#7dd3fc",fontSize:13}}>Use "<strong>{shopSearch}</strong>" as shop name</span>
+                        style={{padding:"10px 14px",background:`${theme.primary}10`,borderTop:`1px solid ${theme.cardBorder}`,cursor:"pointer"}}
+                        onMouseEnter={e => e.currentTarget.style.background=`${theme.primary}20`}
+                        onMouseLeave={e => e.currentTarget.style.background=`${theme.primary}10`}>
+                        <span style={{color:theme.accent,fontSize:13}}>Use "<strong>{shopSearch}</strong>"</span>
                       </div>
                     )}
                   </div>
@@ -514,22 +699,20 @@
               )}
             </div>
 
-            {/* Notes */}
             <div style={{marginBottom:24}}>
               <label style={labelStyle}>Notes (optional)</label>
               <input type="text" placeholder="ramen, haircut, etc." value={notes} onChange={e => setNotes(e.target.value)}
                 style={inputStyle}
-                onFocus={e => e.target.style.borderColor="rgba(37,99,235,0.5)"}
-                onBlur={e => e.target.style.borderColor="rgba(255,255,255,0.12)"}/>
+                onFocus={e => e.target.style.borderColor=theme.primary}
+                onBlur={e => e.target.style.borderColor=theme.inputBorder}/>
             </div>
 
-            {/* Preview */}
             {canPreview && (
-              <div style={{background:"rgba(255,255,255,0.03)",borderRadius:10,padding:"12px 16px",marginBottom:16}}>
+              <div style={{background:theme.cardBg,borderRadius:10,padding:"12px 16px",marginBottom:16,border:`1px solid ${theme.cardBorder}`}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:selectedDates.length > 1 ? 8 : 0}}>
-                  <div style={{fontSize:13,color:"#aaa"}}>
+                  <div style={{fontSize:13,color:theme.textMuted}}>
                     {CAT_ICONS[category]} {shop || shopSearch || "Other"}
-                    {notes && <span style={{color:"#666"}}> · {notes}</span>}
+                    {notes && <span style={{color:theme.textDim}}> · {notes}</span>}
                   </div>
                   <div style={{fontSize:20,fontWeight:700,color:"#fff"}}>{fmt(Number(amount))}</div>
                 </div>
@@ -537,11 +720,11 @@
                   <>
                     <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
                       {selectedDates.sort().slice(0,5).map(d => (
-                        <span key={d} style={{background:"rgba(37,99,235,0.2)",color:"#7dd3fc",padding:"2px 8px",borderRadius:6,fontSize:11}}>{d}</span>
+                        <span key={d} style={{background:theme.primaryGlow,color:theme.accent,padding:"2px 8px",borderRadius:6,fontSize:11}}>{d}</span>
                       ))}
-                      {selectedDates.length > 5 && <span style={{color:"#888",fontSize:11}}>+{selectedDates.length - 5} more</span>}
+                      {selectedDates.length > 5 && <span style={{color:theme.textDim,fontSize:11}}>+{selectedDates.length - 5} more</span>}
                     </div>
-                    <div style={{fontSize:12,color:"#10b981",fontWeight:500}}>
+                    <div style={{fontSize:12,color:theme.success,fontWeight:500}}>
                       Total: {fmt(Number(amount) * selectedDates.length)} ({selectedDates.length} entries)
                     </div>
                   </>
@@ -549,42 +732,34 @@
               </div>
             )}
 
-            {/* Submit */}
             <button onClick={handleSubmit} disabled={saving}
               style={{
                 width:"100%",padding:"14px",borderRadius:12,border:"none",cursor:saving?"wait":"pointer",
                 fontSize:15,fontWeight:600,color:"#fff",
-                background:saving?"rgba(37,99,235,0.4)":"linear-gradient(135deg,#2563eb,#7c3aed)",
+                background:saving?`${theme.primary}60`:`linear-gradient(135deg,${theme.primary},${theme.accent})`,
                 transition:"all 0.2s",opacity:saving?0.7:1,
               }}>
               {saving ? "Saving…" : `💾 Save ${selectedDates.length > 1 ? `${selectedDates.length} Entries` : "Expense"}`}
             </button>
           </div>
 
-          {/* Add Shop Modal */}
           {showAddShop && (
             <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:20}}>
-              <div style={{background:"#1a1a2e",border:"1px solid rgba(255,255,255,0.1)",borderRadius:16,padding:24,width:"100%",maxWidth:400}}>
-                <h4 style={{color:"#fff",fontSize:16,marginTop:0,marginBottom:20,display:"flex",alignItems:"center",gap:8}}>
-                  <span style={{fontSize:20}}>🏪</span> Add New Shop
-                </h4>
+              <div style={{background:"#1a1a2e",border:`1px solid ${theme.cardBorder}`,borderRadius:16,padding:24,width:"100%",maxWidth:400}}>
+                <h4 style={{color:"#fff",fontSize:16,marginTop:0,marginBottom:20}}>🏪 Add New Shop</h4>
                 <div style={{marginBottom:16}}>
                   <label style={labelStyle}>Shop Name</label>
-                  <input type="text" placeholder="e.g., Life Supermarket" value={newShopName} onChange={e => setNewShopName(e.target.value)}
-                    style={inputStyle} autoFocus/>
+                  <input type="text" placeholder="e.g., Life Supermarket" value={newShopName} onChange={e => setNewShopName(e.target.value)} style={inputStyle} autoFocus/>
                 </div>
                 <div style={{marginBottom:20}}>
                   <label style={labelStyle}>Default Category</label>
-                  <select value={newShopCategory} onChange={e => setNewShopCategory(e.target.value)}
-                    style={{...inputStyle,cursor:"pointer"}}>
+                  <select value={newShopCategory} onChange={e => setNewShopCategory(e.target.value)} style={{...inputStyle,cursor:"pointer"}}>
                     {CATEGORIES.map(c => <option key={c} value={c}>{CAT_ICONS[c]} {c}</option>)}
                   </select>
                 </div>
                 <div style={{display:"flex",gap:10}}>
-                  <button onClick={() => setShowAddShop(false)}
-                    style={{flex:1,padding:"12px",borderRadius:10,border:"1px solid rgba(255,255,255,0.1)",background:"transparent",color:"#aaa",cursor:"pointer",fontSize:14}}>Cancel</button>
-                  <button onClick={handleAddShop}
-                    style={{flex:1,padding:"12px",borderRadius:10,border:"none",background:"#10b981",color:"#fff",cursor:"pointer",fontSize:14,fontWeight:600}}>Add Shop</button>
+                  <button onClick={() => setShowAddShop(false)} style={{flex:1,padding:"12px",borderRadius:10,border:`1px solid ${theme.cardBorder}`,background:"transparent",color:theme.textMuted,cursor:"pointer",fontSize:14}}>Cancel</button>
+                  <button onClick={handleAddShop} style={{flex:1,padding:"12px",borderRadius:10,border:"none",background:theme.success,color:"#fff",cursor:"pointer",fontSize:14,fontWeight:600}}>Add Shop</button>
                 </div>
               </div>
             </div>
@@ -597,39 +772,51 @@
     //  OVERVIEW VIEW
     // ═══════════════════════════════════════════
     function OverviewView({ filtered, totalSpend, monthlyAvg, dailyAvg, txCount, monthlyData, catData, topShops }) {
+      const { theme } = useTheme();
+
+      const CustomTooltip = ({ active, payload, label }) => {
+        if (!active || !payload?.length) return null;
+        return (
+          <div style={{background:"#1a1a2e",border:`1px solid ${theme.cardBorder}`,borderRadius:8,padding:"10px 14px",color:theme.text,fontSize:13}}>
+            <div style={{fontWeight:600,marginBottom:4,color:"#fff"}}>{label}</div>
+            {payload.map((p,i) => <div key={i} style={{color:p.color||theme.textMuted}}>{p.name}: {fmt(p.value)}</div>)}
+          </div>
+        );
+      };
+
       return (
         <>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(160px, 1fr))",gap:12,marginBottom:24}}>
             {[
-              {label:"Total Spent",value:fmt(totalSpend),accent:"#2563eb"},
-              {label:"Monthly Avg",value:fmt(monthlyAvg),accent:"#10b981"},
-              {label:"Daily Avg",value:fmt(dailyAvg),accent:"#f59e0b"},
+              {label:"Total Spent",value:fmt(totalSpend),accent:theme.primary},
+              {label:"Monthly Avg",value:fmt(monthlyAvg),accent:theme.success},
+              {label:"Daily Avg",value:fmt(dailyAvg),accent:theme.warning},
               {label:"Transactions",value:txCount.toLocaleString(),accent:"#ec4899"},
             ].map((card,i) => (
-              <div key={i} style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:12,padding:"18px 16px",borderLeft:`3px solid ${card.accent}`}}>
-                <div style={{fontSize:11,color:"#777",textTransform:"uppercase",letterSpacing:1,marginBottom:6}}>{card.label}</div>
+              <div key={i} style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:12,padding:"18px 16px",borderLeft:`3px solid ${card.accent}`}}>
+                <div style={{fontSize:11,color:theme.textMuted,textTransform:"uppercase",letterSpacing:1,marginBottom:6}}>{card.label}</div>
                 <div style={{fontSize:20,fontWeight:700,color:"#fff"}}>{card.value}</div>
               </div>
             ))}
           </div>
 
-          <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:14,padding:"20px 16px",marginBottom:20}}>
-            <h3 style={{fontSize:14,fontWeight:600,color:"#ccc",marginBottom:16,paddingLeft:8,marginTop:0}}>Monthly Spending Trend</h3>
+          <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:14,padding:"20px 16px",marginBottom:20}}>
+            <h3 style={{fontSize:14,fontWeight:600,color:theme.textMuted,marginBottom:16,paddingLeft:8,marginTop:0}}>Monthly Spending Trend</h3>
             <ResponsiveContainer width="100%" height={260}>
               <AreaChart data={monthlyData}>
-                <defs><linearGradient id="grad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#2563eb" stopOpacity={0.3}/><stop offset="100%" stopColor="#2563eb" stopOpacity={0.02}/></linearGradient></defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)"/>
-                <XAxis dataKey="label" tick={{fontSize:11,fill:"#666"}} axisLine={false} tickLine={false}/>
-                <YAxis tick={{fontSize:11,fill:"#666"}} axisLine={false} tickLine={false} tickFormatter={v => `¥${(v/1000).toFixed(0)}k`}/>
+                <defs><linearGradient id="grad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={theme.primary} stopOpacity={0.3}/><stop offset="100%" stopColor={theme.primary} stopOpacity={0.02}/></linearGradient></defs>
+                <CartesianGrid strokeDasharray="3 3" stroke={theme.cardBorder}/>
+                <XAxis dataKey="label" tick={{fontSize:11,fill:theme.textDim}} axisLine={false} tickLine={false}/>
+                <YAxis tick={{fontSize:11,fill:theme.textDim}} axisLine={false} tickLine={false} tickFormatter={v => `¥${(v/1000).toFixed(0)}k`}/>
                 <Tooltip content={<CustomTooltip/>}/>
-                <Area type="monotone" dataKey="total" name="Spending" stroke="#2563eb" fill="url(#grad)" strokeWidth={2}/>
+                <Area type="monotone" dataKey="total" name="Spending" stroke={theme.primary} fill="url(#grad)" strokeWidth={2}/>
               </AreaChart>
             </ResponsiveContainer>
           </div>
 
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(280px, 1fr))",gap:16}}>
-            <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:14,padding:"20px 16px"}}>
-              <h3 style={{fontSize:14,fontWeight:600,color:"#ccc",marginBottom:12,paddingLeft:8,marginTop:0}}>Category Breakdown</h3>
+            <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:14,padding:"20px 16px"}}>
+              <h3 style={{fontSize:14,fontWeight:600,color:theme.textMuted,marginBottom:12,paddingLeft:8,marginTop:0}}>Category Breakdown</h3>
               <ResponsiveContainer width="100%" height={200}>
                 <PieChart><Pie data={catData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={2}>
                   {catData.map((entry,i) => <Cell key={i} fill={CAT_COLORS[entry.name]||"#666"} stroke="none"/>)}
@@ -637,27 +824,27 @@
               </ResponsiveContainer>
               <div style={{display:"flex",flexWrap:"wrap",gap:8,justifyContent:"center",marginTop:8}}>
                 {catData.map((c,i) => (
-                  <div key={i} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"#aaa"}}>
+                  <div key={i} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:theme.textMuted}}>
                     <div style={{width:8,height:8,borderRadius:2,background:CAT_COLORS[c.name]||"#666"}}/>{CAT_ICONS[c.name]||""} {c.name}
                   </div>
                 ))}
               </div>
             </div>
-            <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:14,padding:"20px 16px"}}>
-              <h3 style={{fontSize:14,fontWeight:600,color:"#ccc",marginBottom:12,paddingLeft:8,marginTop:0}}>Top Shops</h3>
+            <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:14,padding:"20px 16px"}}>
+              <h3 style={{fontSize:14,fontWeight:600,color:theme.textMuted,marginBottom:12,paddingLeft:8,marginTop:0}}>Top Shops</h3>
               <div style={{display:"flex",flexDirection:"column",gap:8}}>
                 {topShops.map((shop,i) => {
                   const pct = topShops[0]?.value ? (shop.value / topShops[0].value)*100 : 0;
                   return (
                     <div key={i} style={{display:"flex",alignItems:"center",gap:10}}>
-                      <div style={{fontSize:11,color:"#888",width:18,textAlign:"right"}}>{i+1}</div>
+                      <div style={{fontSize:11,color:theme.textDim,width:18,textAlign:"right"}}>{i+1}</div>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
-                          <span style={{fontSize:12,color:"#ccc",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{shop.name}</span>
+                          <span style={{fontSize:12,color:theme.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{shop.name}</span>
                           <span style={{fontSize:12,color:"#fff",fontWeight:600,flexShrink:0,marginLeft:8}}>{fmt(shop.value)}</span>
                         </div>
-                        <div style={{height:4,background:"rgba(255,255,255,0.05)",borderRadius:2,overflow:"hidden"}}>
-                          <div style={{height:"100%",width:`${pct}%`,background:"linear-gradient(90deg,#2563eb,#7c3aed)",borderRadius:2,transition:"width 0.5s"}}/>
+                        <div style={{height:4,background:theme.inputBg,borderRadius:2,overflow:"hidden"}}>
+                          <div style={{height:"100%",width:`${pct}%`,background:`linear-gradient(90deg,${theme.primary},${theme.accent})`,borderRadius:2,transition:"width 0.5s"}}/>
                         </div>
                       </div>
                     </div>
@@ -667,15 +854,15 @@
             </div>
           </div>
 
-          <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:14,padding:"20px 16px",marginTop:16}}>
-            <h3 style={{fontSize:14,fontWeight:600,color:"#ccc",marginBottom:16,paddingLeft:8,marginTop:0}}>Monthly Comparison</h3>
+          <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:14,padding:"20px 16px",marginTop:16}}>
+            <h3 style={{fontSize:14,fontWeight:600,color:theme.textMuted,marginBottom:16,paddingLeft:8,marginTop:0}}>Monthly Comparison</h3>
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={monthlyData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)"/>
-                <XAxis dataKey="label" tick={{fontSize:10,fill:"#666"}} axisLine={false} tickLine={false}/>
-                <YAxis tick={{fontSize:10,fill:"#666"}} axisLine={false} tickLine={false} tickFormatter={v => `¥${(v/1000).toFixed(0)}k`}/>
+                <CartesianGrid strokeDasharray="3 3" stroke={theme.cardBorder}/>
+                <XAxis dataKey="label" tick={{fontSize:10,fill:theme.textDim}} axisLine={false} tickLine={false}/>
+                <YAxis tick={{fontSize:10,fill:theme.textDim}} axisLine={false} tickLine={false} tickFormatter={v => `¥${(v/1000).toFixed(0)}k`}/>
                 <Tooltip content={<CustomTooltip/>}/>
-                <Bar dataKey="total" name="Spending" fill="#2563eb" radius={[4,4,0,0]} maxBarSize={32}/>
+                <Bar dataKey="total" name="Spending" fill={theme.primary} radius={[4,4,0,0]} maxBarSize={32}/>
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -687,31 +874,32 @@
     //  TRANSACTIONS VIEW
     // ═══════════════════════════════════════════
     function TransactionsView({ pageTx, txPage, setTxPage, txPages }) {
+      const { theme } = useTheme();
       return (
-        <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:14,overflow:"hidden"}}>
+        <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:14,overflow:"hidden"}}>
           <div style={{overflowX:"auto"}}>
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
               <thead>
-                <tr style={{borderBottom:"1px solid rgba(255,255,255,0.08)"}}>
+                <tr style={{borderBottom:`1px solid ${theme.cardBorder}`}}>
                   {["Date","Shop","Category","Amount","Notes"].map(h => (
-                    <th key={h} style={{padding:"14px 12px",textAlign:"left",color:"#888",fontWeight:500,fontSize:11,textTransform:"uppercase",letterSpacing:1}}>{h}</th>
+                    <th key={h} style={{padding:"14px 12px",textAlign:"left",color:theme.textMuted,fontWeight:500,fontSize:11,textTransform:"uppercase",letterSpacing:1}}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {pageTx.map((tx,i) => (
-                  <tr key={tx.id || i} style={{borderBottom:"1px solid rgba(255,255,255,0.04)",transition:"background 0.15s"}}
-                    onMouseEnter={e => e.currentTarget.style.background="rgba(255,255,255,0.03)"}
+                  <tr key={tx.id || i} style={{borderBottom:`1px solid ${theme.cardBorder}`,transition:"background 0.15s"}}
+                    onMouseEnter={e => e.currentTarget.style.background=theme.inputBg}
                     onMouseLeave={e => e.currentTarget.style.background="transparent"}>
-                    <td style={{padding:"10px 12px",color:"#aaa",whiteSpace:"nowrap"}}>{tx.date}</td>
-                    <td style={{padding:"10px 12px",color:"#ddd",fontWeight:500}}>{tx.shop}</td>
+                    <td style={{padding:"10px 12px",color:theme.textMuted,whiteSpace:"nowrap"}}>{tx.date}</td>
+                    <td style={{padding:"10px 12px",color:theme.text,fontWeight:500}}>{tx.shop}</td>
                     <td style={{padding:"10px 12px"}}>
                       <span style={{display:"inline-block",padding:"3px 10px",borderRadius:12,fontSize:11,fontWeight:500,background:`${CAT_COLORS[tx.category]||"#666"}20`,color:CAT_COLORS[tx.category]||"#666"}}>
                         {CAT_ICONS[tx.category]||""} {tx.category}
                       </span>
                     </td>
                     <td style={{padding:"10px 12px",color:"#fff",fontWeight:600,fontVariantNumeric:"tabular-nums"}}>{fmt(tx.amount)}</td>
-                    <td style={{padding:"10px 12px",color:"#777",fontSize:12,maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{tx.notes || "—"}</td>
+                    <td style={{padding:"10px 12px",color:theme.textDim,fontSize:12,maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{tx.notes || "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -719,10 +907,10 @@
           </div>
           <div style={{display:"flex",justifyContent:"center",alignItems:"center",gap:8,padding:"16px"}}>
             <button onClick={() => setTxPage(p => Math.max(0,p-1))} disabled={txPage===0}
-              style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:txPage===0?"default":"pointer",background:txPage===0?"rgba(255,255,255,0.02)":"rgba(255,255,255,0.08)",color:txPage===0?"#444":"#ccc",fontSize:12}}>← Prev</button>
-            <span style={{fontSize:12,color:"#777"}}>{txPage+1} / {txPages || 1}</span>
+              style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:txPage===0?"default":"pointer",background:txPage===0?theme.cardBg:theme.inputBg,color:txPage===0?theme.textDim:theme.textMuted,fontSize:12}}>← Prev</button>
+            <span style={{fontSize:12,color:theme.textDim}}>{txPage+1} / {txPages || 1}</span>
             <button onClick={() => setTxPage(p => Math.min(txPages-1,p+1))} disabled={txPage>=txPages-1}
-              style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:txPage>=txPages-1?"default":"pointer",background:txPage>=txPages-1?"rgba(255,255,255,0.02)":"rgba(255,255,255,0.08)",color:txPage>=txPages-1?"#444":"#ccc",fontSize:12}}>Next →</button>
+              style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:txPage>=txPages-1?"default":"pointer",background:txPage>=txPages-1?theme.cardBg:theme.inputBg,color:txPage>=txPages-1?theme.textDim:theme.textMuted,fontSize:12}}>Next →</button>
           </div>
         </div>
       );
