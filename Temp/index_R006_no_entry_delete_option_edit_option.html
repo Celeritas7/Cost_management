@@ -29,8 +29,8 @@
     // ─────────────────────────────────────────────
     // ⚙️  SUPABASE CONFIG — Replace with your keys
     // ─────────────────────────────────────────────
-    const SUPABASE_URL  = "YOUR_SUPABASE_URL";
-    const SUPABASE_KEY  = "YOUR_SUPABASE_ANON_KEY";
+    const SUPABASE_URL  = "https://wylxvmkcrexwfpjpbhyy.supabase.co";   // e.g. https://xyzxyz.supabase.co
+    const SUPABASE_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind5bHh2bWtjcmV4d2ZwanBiaHl5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg2MzkxMDYsImV4cCI6MjA4NDIxNTEwNn0.6Bxo42hx4jwlJGWnfjiTpiDUsYfc1QLTN3YtrU1efak";
 
     const supabaseConfigured = SUPABASE_URL !== "YOUR_SUPABASE_URL" && SUPABASE_KEY !== "YOUR_SUPABASE_ANON_KEY";
     const supabase = supabaseConfigured ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
@@ -40,95 +40,163 @@
     // ─────────────────────────────────────────────
     const THEMES = {
       midnight: {
-        name: "Midnight", icon: "🌙",
+        name: "Midnight",
+        icon: "🌙",
         bg: "linear-gradient(145deg, #0d0d1a 0%, #1a1a2e 50%, #16213e 100%)",
-        headerBg: "rgba(255,255,255,0.03)", cardBg: "rgba(255,255,255,0.04)",
-        cardBorder: "rgba(255,255,255,0.06)", inputBg: "rgba(255,255,255,0.06)",
-        inputBorder: "rgba(255,255,255,0.12)", primary: "#2563eb",
-        primaryGlow: "rgba(37,99,235,0.3)", accent: "#7c3aed",
-        text: "#e0e0e0", textMuted: "#888", textDim: "#666",
-        success: "#10b981", warning: "#f59e0b", danger: "#ef4444",
+        headerBg: "rgba(255,255,255,0.03)",
+        cardBg: "rgba(255,255,255,0.04)",
+        cardBorder: "rgba(255,255,255,0.06)",
+        inputBg: "rgba(255,255,255,0.06)",
+        inputBorder: "rgba(255,255,255,0.12)",
+        primary: "#2563eb",
+        primaryGlow: "rgba(37,99,235,0.3)",
+        accent: "#7c3aed",
+        text: "#e0e0e0",
+        textMuted: "#888",
+        textDim: "#666",
+        success: "#10b981",
+        warning: "#f59e0b",
+        danger: "#ef4444",
       },
       sakura: {
-        name: "Sakura", icon: "🌸",
+        name: "Sakura",
+        icon: "🌸",
         bg: "linear-gradient(145deg, #1a0a10 0%, #2d1520 50%, #3d1a2a 100%)",
-        headerBg: "rgba(255,182,193,0.05)", cardBg: "rgba(255,182,193,0.04)",
-        cardBorder: "rgba(255,182,193,0.08)", inputBg: "rgba(255,182,193,0.06)",
-        inputBorder: "rgba(255,182,193,0.15)", primary: "#ec4899",
-        primaryGlow: "rgba(236,72,153,0.3)", accent: "#f472b6",
-        text: "#fce7f3", textMuted: "#f9a8d4", textDim: "#9d174d",
-        success: "#34d399", warning: "#fbbf24", danger: "#f87171",
+        headerBg: "rgba(255,182,193,0.05)",
+        cardBg: "rgba(255,182,193,0.04)",
+        cardBorder: "rgba(255,182,193,0.08)",
+        inputBg: "rgba(255,182,193,0.06)",
+        inputBorder: "rgba(255,182,193,0.15)",
+        primary: "#ec4899",
+        primaryGlow: "rgba(236,72,153,0.3)",
+        accent: "#f472b6",
+        text: "#fce7f3",
+        textMuted: "#f9a8d4",
+        textDim: "#9d174d",
+        success: "#34d399",
+        warning: "#fbbf24",
+        danger: "#f87171",
       },
       ocean: {
-        name: "Ocean", icon: "🌊",
+        name: "Ocean",
+        icon: "🌊",
         bg: "linear-gradient(145deg, #0a1628 0%, #0c2340 50%, #0f3052 100%)",
-        headerBg: "rgba(56,189,248,0.05)", cardBg: "rgba(56,189,248,0.04)",
-        cardBorder: "rgba(56,189,248,0.08)", inputBg: "rgba(56,189,248,0.06)",
-        inputBorder: "rgba(56,189,248,0.15)", primary: "#0ea5e9",
-        primaryGlow: "rgba(14,165,233,0.3)", accent: "#38bdf8",
-        text: "#e0f2fe", textMuted: "#7dd3fc", textDim: "#0369a1",
-        success: "#22d3ee", warning: "#fbbf24", danger: "#fb7185",
+        headerBg: "rgba(56,189,248,0.05)",
+        cardBg: "rgba(56,189,248,0.04)",
+        cardBorder: "rgba(56,189,248,0.08)",
+        inputBg: "rgba(56,189,248,0.06)",
+        inputBorder: "rgba(56,189,248,0.15)",
+        primary: "#0ea5e9",
+        primaryGlow: "rgba(14,165,233,0.3)",
+        accent: "#38bdf8",
+        text: "#e0f2fe",
+        textMuted: "#7dd3fc",
+        textDim: "#0369a1",
+        success: "#22d3ee",
+        warning: "#fbbf24",
+        danger: "#fb7185",
       },
       forest: {
-        name: "Forest", icon: "🌲",
+        name: "Forest",
+        icon: "🌲",
         bg: "linear-gradient(145deg, #0a1a0f 0%, #132a1a 50%, #1a3a22 100%)",
-        headerBg: "rgba(34,197,94,0.05)", cardBg: "rgba(34,197,94,0.04)",
-        cardBorder: "rgba(34,197,94,0.08)", inputBg: "rgba(34,197,94,0.06)",
-        inputBorder: "rgba(34,197,94,0.15)", primary: "#22c55e",
-        primaryGlow: "rgba(34,197,94,0.3)", accent: "#4ade80",
-        text: "#dcfce7", textMuted: "#86efac", textDim: "#166534",
-        success: "#34d399", warning: "#facc15", danger: "#f87171",
+        headerBg: "rgba(34,197,94,0.05)",
+        cardBg: "rgba(34,197,94,0.04)",
+        cardBorder: "rgba(34,197,94,0.08)",
+        inputBg: "rgba(34,197,94,0.06)",
+        inputBorder: "rgba(34,197,94,0.15)",
+        primary: "#22c55e",
+        primaryGlow: "rgba(34,197,94,0.3)",
+        accent: "#4ade80",
+        text: "#dcfce7",
+        textMuted: "#86efac",
+        textDim: "#166534",
+        success: "#34d399",
+        warning: "#facc15",
+        danger: "#f87171",
       },
       sunset: {
-        name: "Sunset", icon: "🌅",
+        name: "Sunset",
+        icon: "🌅",
         bg: "linear-gradient(145deg, #1a0f0a 0%, #2d1810 50%, #3d2018 100%)",
-        headerBg: "rgba(251,146,60,0.05)", cardBg: "rgba(251,146,60,0.04)",
-        cardBorder: "rgba(251,146,60,0.08)", inputBg: "rgba(251,146,60,0.06)",
-        inputBorder: "rgba(251,146,60,0.15)", primary: "#f97316",
-        primaryGlow: "rgba(249,115,22,0.3)", accent: "#fb923c",
-        text: "#ffedd5", textMuted: "#fdba74", textDim: "#9a3412",
-        success: "#4ade80", warning: "#fbbf24", danger: "#ef4444",
+        headerBg: "rgba(251,146,60,0.05)",
+        cardBg: "rgba(251,146,60,0.04)",
+        cardBorder: "rgba(251,146,60,0.08)",
+        inputBg: "rgba(251,146,60,0.06)",
+        inputBorder: "rgba(251,146,60,0.15)",
+        primary: "#f97316",
+        primaryGlow: "rgba(249,115,22,0.3)",
+        accent: "#fb923c",
+        text: "#ffedd5",
+        textMuted: "#fdba74",
+        textDim: "#9a3412",
+        success: "#4ade80",
+        warning: "#fbbf24",
+        danger: "#ef4444",
       },
       lavender: {
-        name: "Lavender", icon: "💜",
+        name: "Lavender",
+        icon: "💜",
         bg: "linear-gradient(145deg, #110f1a 0%, #1e1a2e 50%, #2a2440 100%)",
-        headerBg: "rgba(167,139,250,0.05)", cardBg: "rgba(167,139,250,0.04)",
-        cardBorder: "rgba(167,139,250,0.08)", inputBg: "rgba(167,139,250,0.06)",
-        inputBorder: "rgba(167,139,250,0.15)", primary: "#8b5cf6",
-        primaryGlow: "rgba(139,92,246,0.3)", accent: "#a78bfa",
-        text: "#ede9fe", textMuted: "#c4b5fd", textDim: "#5b21b6",
-        success: "#34d399", warning: "#fbbf24", danger: "#f87171",
+        headerBg: "rgba(167,139,250,0.05)",
+        cardBg: "rgba(167,139,250,0.04)",
+        cardBorder: "rgba(167,139,250,0.08)",
+        inputBg: "rgba(167,139,250,0.06)",
+        inputBorder: "rgba(167,139,250,0.15)",
+        primary: "#8b5cf6",
+        primaryGlow: "rgba(139,92,246,0.3)",
+        accent: "#a78bfa",
+        text: "#ede9fe",
+        textMuted: "#c4b5fd",
+        textDim: "#5b21b6",
+        success: "#34d399",
+        warning: "#fbbf24",
+        danger: "#f87171",
       },
       mono: {
-        name: "Monochrome", icon: "⚪",
+        name: "Monochrome",
+        icon: "⚪",
         bg: "linear-gradient(145deg, #0a0a0a 0%, #171717 50%, #1f1f1f 100%)",
-        headerBg: "rgba(255,255,255,0.03)", cardBg: "rgba(255,255,255,0.03)",
-        cardBorder: "rgba(255,255,255,0.06)", inputBg: "rgba(255,255,255,0.05)",
-        inputBorder: "rgba(255,255,255,0.1)", primary: "#a3a3a3",
-        primaryGlow: "rgba(163,163,163,0.3)", accent: "#d4d4d4",
-        text: "#e5e5e5", textMuted: "#a3a3a3", textDim: "#525252",
-        success: "#86efac", warning: "#fde047", danger: "#fca5a5",
+        headerBg: "rgba(255,255,255,0.03)",
+        cardBg: "rgba(255,255,255,0.03)",
+        cardBorder: "rgba(255,255,255,0.06)",
+        inputBg: "rgba(255,255,255,0.05)",
+        inputBorder: "rgba(255,255,255,0.1)",
+        primary: "#a3a3a3",
+        primaryGlow: "rgba(163,163,163,0.3)",
+        accent: "#d4d4d4",
+        text: "#e5e5e5",
+        textMuted: "#a3a3a3",
+        textDim: "#525252",
+        success: "#86efac",
+        warning: "#fde047",
+        danger: "#fca5a5",
       },
     };
 
     const THEME_KEYS = Object.keys(THEMES);
     const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
+    // Theme persistence
     function getStoredTheme() {
       try {
         const stored = localStorage.getItem("cost_mgmt_theme");
         if (stored) {
           const { theme, timestamp } = JSON.parse(stored);
-          if (Date.now() - timestamp > ONE_WEEK_MS) {
+          const now = Date.now();
+          // If more than a week, pick random new theme
+          if (now - timestamp > ONE_WEEK_MS) {
             const newTheme = THEME_KEYS[Math.floor(Math.random() * THEME_KEYS.length)];
-            localStorage.setItem("cost_mgmt_theme", JSON.stringify({ theme: newTheme, timestamp: Date.now() }));
+            localStorage.setItem("cost_mgmt_theme", JSON.stringify({ theme: newTheme, timestamp: now }));
             return newTheme;
           }
           return theme;
         }
       } catch (e) {}
-      localStorage.setItem("cost_mgmt_theme", JSON.stringify({ theme: "midnight", timestamp: Date.now() }));
-      return "midnight";
+      // Default theme
+      const defaultTheme = "midnight";
+      localStorage.setItem("cost_mgmt_theme", JSON.stringify({ theme: defaultTheme, timestamp: Date.now() }));
+      return defaultTheme;
     }
 
     function setStoredTheme(theme) {
@@ -139,6 +207,7 @@
     const { useState, useMemo, useEffect, useCallback, useRef, createContext, useContext } = React;
     const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area, CartesianGrid } = Recharts;
 
+    // Theme Context
     const ThemeContext = createContext();
     const useTheme = () => useContext(ThemeContext);
 
@@ -176,7 +245,11 @@
       const [txPage, setTxPage] = useState(0);
       const [showThemePicker, setShowThemePicker] = useState(false);
 
-      const changeTheme = (newTheme) => { setThemeName(newTheme); setStoredTheme(newTheme); setShowThemePicker(false); };
+      const changeTheme = (newTheme) => {
+        setThemeName(newTheme);
+        setStoredTheme(newTheme);
+        setShowThemePicker(false);
+      };
 
       const fetchData = useCallback(async () => {
         if (!supabase) { setLoading(false); return; }
@@ -241,14 +314,12 @@
         return Object.entries(map).map(([name,value]) => ({name,value})).sort((a,b) => b.value-a.value).slice(0,8);
       }, [filtered]);
 
-      const sortedTx = useMemo(() => [...filtered].sort((a,b) => b.date.localeCompare(a.date) || b.id - a.id), [filtered]);
+      const sortedTx = useMemo(() => [...filtered].sort((a,b) => b.date.localeCompare(a.date)), [filtered]);
       const txPerPage = 15;
       const txPages = Math.ceil(sortedTx.length / txPerPage);
       const pageTx = sortedTx.slice(txPage * txPerPage, (txPage+1) * txPerPage);
 
-      // Recent entries for duplicate check
-      const recentEntries = useMemo(() => [...RAW].sort((a,b) => b.id - a.id).slice(0, 5), [RAW]);
-
+      // Styles derived from theme
       const pillStyle = (active) => ({
         padding:"7px 16px",fontSize:13,borderRadius:20,border:"none",cursor:"pointer",fontWeight:500,
         background: active ? theme.primaryGlow : theme.cardBg,
@@ -274,13 +345,19 @@
               <p style={{color:theme.textMuted,lineHeight:1.7,fontSize:14,marginBottom:20}}>
                 Open <code style={{background:theme.inputBg,padding:"2px 8px",borderRadius:4,color:theme.primary}}>index.html</code> and set your Supabase credentials.
               </p>
+              <div style={{background:`${theme.primary}15`,border:`1px solid ${theme.primary}40`,borderRadius:10,padding:16,textAlign:"left",fontSize:13,color:theme.accent,lineHeight:1.8}}>
+                <div><strong>1.</strong> Supabase Dashboard → Settings → API</div>
+                <div><strong>2.</strong> Copy <strong>Project URL</strong> + <strong>anon key</strong></div>
+                <div><strong>3.</strong> Paste in config at top of <code>index.html</code></div>
+                <div><strong>4.</strong> Run the SQL migration files</div>
+              </div>
             </div>
           </div>
         );
       }
 
       return (
-        <ThemeContext.Provider value={{ theme, themeName, inputStyle, labelStyle, pillStyle, supabase, fetchData }}>
+        <ThemeContext.Provider value={{ theme, themeName, inputStyle, labelStyle, pillStyle }}>
           <div style={{minHeight:"100vh",background:theme.bg,color:theme.text,fontFamily:"'Noto Sans JP', system-ui, sans-serif",transition:"background 0.5s"}}>
             {/* Header */}
             <div style={{background:theme.headerBg,borderBottom:`1px solid ${theme.cardBorder}`,padding:"20px 24px",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
@@ -294,8 +371,12 @@
                     {v === "add" ? "➕ Add Entry" : v === "overview" ? "📊 Overview" : "📋 Transactions"}
                   </button>
                 ))}
+                {/* Theme picker button */}
                 <div style={{position:"relative"}}>
-                  <button onClick={() => setShowThemePicker(!showThemePicker)} style={{...pillStyle(false),padding:"7px 12px",fontSize:18,lineHeight:1}}>{theme.icon}</button>
+                  <button onClick={() => setShowThemePicker(!showThemePicker)}
+                    style={{...pillStyle(false),padding:"7px 12px",fontSize:18,lineHeight:1}}>
+                    {theme.icon}
+                  </button>
                   {showThemePicker && (
                     <>
                       <div style={{position:"fixed",inset:0,zIndex:90}} onClick={() => setShowThemePicker(false)}/>
@@ -303,7 +384,12 @@
                         <div style={{fontSize:11,color:theme.textDim,padding:"4px 8px",marginBottom:4,textTransform:"uppercase",letterSpacing:1}}>Choose Theme</div>
                         {THEME_KEYS.map(key => (
                           <button key={key} onClick={() => changeTheme(key)}
-                            style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"10px 12px",background: themeName === key ? `${THEMES[key].primary}20` : "transparent",border:"none",borderRadius:8,cursor:"pointer",textAlign:"left",transition:"background 0.15s"}}
+                            style={{
+                              display:"flex",alignItems:"center",gap:10,width:"100%",padding:"10px 12px",
+                              background: themeName === key ? `${THEMES[key].primary}20` : "transparent",
+                              border:"none",borderRadius:8,cursor:"pointer",textAlign:"left",
+                              transition:"background 0.15s",
+                            }}
                             onMouseEnter={e => e.currentTarget.style.background = `${THEMES[key].primary}15`}
                             onMouseLeave={e => e.currentTarget.style.background = themeName === key ? `${THEMES[key].primary}20` : "transparent"}>
                             <span style={{fontSize:18}}>{THEMES[key].icon}</span>
@@ -312,7 +398,9 @@
                           </button>
                         ))}
                         <div style={{borderTop:`1px solid ${theme.cardBorder}`,marginTop:8,paddingTop:8}}>
-                          <div style={{fontSize:10,color:theme.textDim,padding:"4px 8px",lineHeight:1.4}}>Theme auto-changes weekly 🔄</div>
+                          <div style={{fontSize:10,color:theme.textDim,padding:"4px 8px",lineHeight:1.4}}>
+                            Theme auto-changes weekly 🔄
+                          </div>
                         </div>
                       </div>
                     </>
@@ -343,11 +431,11 @@
                   <div>Loading…</div>
                 </div>
               ) : view === "add" ? (
-                <AddEntryView shops={shops} allExpenses={RAW} recentEntries={recentEntries} />
+                <AddEntryView supabase={supabase} shops={shops} onAdded={fetchData} />
               ) : view === "overview" ? (
                 <OverviewView {...{filtered,totalSpend,monthlyAvg,dailyAvg,txCount,monthlyData,catData,topShops}} />
               ) : (
-                <TransactionsView pageTx={pageTx} txPage={txPage} setTxPage={setTxPage} txPages={txPages} shops={shops} />
+                <TransactionsView {...{pageTx,txPage,setTxPage,txPages}} />
               )}
             </div>
           </div>
@@ -356,7 +444,7 @@
     }
 
     // ═══════════════════════════════════════════
-    //  MULTI-DATE CALENDAR (Monday Start)
+    //  MULTI-DATE CALENDAR
     // ═══════════════════════════════════════════
     function MultiDateCalendar({ selectedDates, setSelectedDates }) {
       const { theme } = useTheme();
@@ -366,9 +454,7 @@
       });
 
       const daysInMonth = new Date(viewDate.year, viewDate.month + 1, 0).getDate();
-      // Get day of week for 1st, convert Sunday=0 to Monday=0 format
-      const firstDayJS = new Date(viewDate.year, viewDate.month, 1).getDay();
-      const firstDayOfWeek = firstDayJS === 0 ? 6 : firstDayJS - 1; // Monday = 0, Sunday = 6
+      const firstDayOfWeek = new Date(viewDate.year, viewDate.month, 1).getDay();
 
       const prevMonth = () => setViewDate(v => v.month === 0 ? { year: v.year - 1, month: 11 } : { ...v, month: v.month - 1 });
       const nextMonth = () => setViewDate(v => v.month === 11 ? { year: v.year + 1, month: 0 } : { ...v, month: v.month + 1 });
@@ -396,9 +482,8 @@
             <button onClick={nextMonth} style={{background:theme.inputBg,border:"none",borderRadius:8,width:32,height:32,cursor:"pointer",color:theme.textMuted,fontSize:14}}>▶</button>
           </div>
 
-          {/* Monday-first weekday headers */}
           <div style={{display:"grid",gridTemplateColumns:"repeat(7, 1fr)",gap:4,marginBottom:8}}>
-            {["Mo","Tu","We","Th","Fr","Sa","Su"].map(d => (
+            {["Su","Mo","Tu","We","Th","Fr","Sa"].map(d => (
               <div key={d} style={{textAlign:"center",fontSize:10,color:theme.textDim,fontWeight:500,padding:4}}>{d}</div>
             ))}
           </div>
@@ -449,8 +534,8 @@
     // ═══════════════════════════════════════════
     //  ADD ENTRY VIEW
     // ═══════════════════════════════════════════
-    function AddEntryView({ shops, allExpenses, recentEntries }) {
-      const { theme, inputStyle, labelStyle, supabase, fetchData } = useTheme();
+    function AddEntryView({ supabase, shops, onAdded }) {
+      const { theme, inputStyle, labelStyle } = useTheme();
       const [amount, setAmount] = useState("");
       const [selectedDates, setSelectedDates] = useState([new Date().toISOString().slice(0,10)]);
       const [category, setCategory] = useState("Supermarket");
@@ -463,8 +548,6 @@
       const [showAddShop, setShowAddShop] = useState(false);
       const [newShopName, setNewShopName] = useState("");
       const [newShopCategory, setNewShopCategory] = useState("Supermarket");
-      const [showDuplicateWarning, setShowDuplicateWarning] = useState(false);
-      const [duplicates, setDuplicates] = useState([]);
 
       const filteredShops = useMemo(() => {
         let list = [...shops];
@@ -484,7 +567,7 @@
       const toggleFavorite = async (e, shopItem) => {
         e.stopPropagation();
         await supabase.from("cost_management_shops").update({ is_favorite: !shopItem.is_favorite }).eq("id", shopItem.id);
-        fetchData();
+        onAdded();
       };
 
       const handleAddShop = async () => {
@@ -494,7 +577,7 @@
           setToast({ type: "success", msg: `Added "${newShopName}"` });
           setNewShopName("");
           setShowAddShop(false);
-          fetchData();
+          onAdded();
         } else {
           setToast({ type: "error", msg: error.message.includes("duplicate") ? "Shop exists" : error.message });
         }
@@ -503,36 +586,11 @@
 
       const selectShop = (name) => { setShop(name); setShopSearch(name); setShowShopDropdown(false); };
 
-      // Check for duplicates
-      const checkDuplicates = () => {
-        const finalShop = shop || shopSearch.trim() || "Other";
-        const found = [];
-        selectedDates.forEach(date => {
-          const existing = allExpenses.find(e => 
-            e.date === date && 
-            e.shop === finalShop && 
-            e.amount === Number(amount)
-          );
-          if (existing) found.push(existing);
-        });
-        return found;
-      };
-
-      const handleSubmit = async (force = false) => {
+      const handleSubmit = async () => {
         if (!amount || Number(amount) <= 0) { setToast({type:"error",msg:"Enter valid amount"}); setTimeout(() => setToast(null), 3000); return; }
         if (selectedDates.length === 0) { setToast({type:"error",msg:"Select a date"}); setTimeout(() => setToast(null), 3000); return; }
-        
-        // Check for duplicates unless forced
-        if (!force) {
-          const dups = checkDuplicates();
-          if (dups.length > 0) {
-            setDuplicates(dups);
-            setShowDuplicateWarning(true);
-            return;
-          }
-        }
-
         const finalShop = shop || shopSearch.trim() || "Other";
+
         setSaving(true);
         const entries = selectedDates.map(date => ({ amount: Number(amount), date, category, shop: finalShop, notes: notes.trim() }));
         const { error } = await supabase.from("cost_management_expenses").insert(entries);
@@ -543,7 +601,7 @@
         } else {
           setToast({type:"success",msg:`Saved ¥${Number(amount).toLocaleString()} × ${selectedDates.length}`});
           setAmount(""); setNotes(""); setShop(""); setShopSearch(""); setSelectedDates([new Date().toISOString().slice(0,10)]);
-          fetchData();
+          onAdded();
         }
         setTimeout(() => setToast(null), 3500);
       };
@@ -565,13 +623,6 @@
               New Expense
             </h3>
 
-            {/* 1. DATE (moved to top) */}
-            <div style={{marginBottom:20}}>
-              <label style={labelStyle}>Date(s) — click to select multiple</label>
-              <MultiDateCalendar selectedDates={selectedDates} setSelectedDates={setSelectedDates} />
-            </div>
-
-            {/* 2. AMOUNT */}
             <div style={{marginBottom:20}}>
               <label style={labelStyle}>Amount (¥)</label>
               <input type="number" inputMode="numeric" placeholder="0" value={amount} onChange={e => setAmount(e.target.value)}
@@ -580,7 +631,11 @@
                 onBlur={e => e.target.style.borderColor=theme.inputBorder}/>
             </div>
 
-            {/* 3. CATEGORY */}
+            <div style={{marginBottom:20}}>
+              <label style={labelStyle}>Date(s) — click to select multiple</label>
+              <MultiDateCalendar selectedDates={selectedDates} setSelectedDates={setSelectedDates} />
+            </div>
+
             <div style={{marginBottom:20}}>
               <label style={labelStyle}>Category</label>
               <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
@@ -598,7 +653,6 @@
               </div>
             </div>
 
-            {/* 4. SHOP */}
             <div style={{marginBottom:20,position:"relative"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                 <label style={{...labelStyle,marginBottom:0}}>Shop</label>
@@ -645,7 +699,6 @@
               )}
             </div>
 
-            {/* 5. NOTES */}
             <div style={{marginBottom:24}}>
               <label style={labelStyle}>Notes (optional)</label>
               <input type="text" placeholder="ramen, haircut, etc." value={notes} onChange={e => setNotes(e.target.value)}
@@ -654,7 +707,6 @@
                 onBlur={e => e.target.style.borderColor=theme.inputBorder}/>
             </div>
 
-            {/* Preview */}
             {canPreview && (
               <div style={{background:theme.cardBg,borderRadius:10,padding:"12px 16px",marginBottom:16,border:`1px solid ${theme.cardBorder}`}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:selectedDates.length > 1 ? 8 : 0}}>
@@ -680,8 +732,7 @@
               </div>
             )}
 
-            {/* Submit */}
-            <button onClick={() => handleSubmit(false)} disabled={saving}
+            <button onClick={handleSubmit} disabled={saving}
               style={{
                 width:"100%",padding:"14px",borderRadius:12,border:"none",cursor:saving?"wait":"pointer",
                 fontSize:15,fontWeight:600,color:"#fff",
@@ -692,30 +743,6 @@
             </button>
           </div>
 
-          {/* Recent Entries */}
-          {recentEntries.length > 0 && (
-            <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:16,padding:"20px 24px",marginTop:16}}>
-              <h4 style={{fontSize:13,fontWeight:600,color:theme.textMuted,marginTop:0,marginBottom:12,textTransform:"uppercase",letterSpacing:1}}>
-                📋 Recently Added
-              </h4>
-              <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                {recentEntries.map(e => (
-                  <div key={e.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:theme.inputBg,borderRadius:8}}>
-                    <div style={{display:"flex",alignItems:"center",gap:10}}>
-                      <span style={{fontSize:16}}>{CAT_ICONS[e.category]||"📦"}</span>
-                      <div>
-                        <div style={{fontSize:13,color:theme.text}}>{e.shop}</div>
-                        <div style={{fontSize:11,color:theme.textDim}}>{e.date}{e.notes ? ` · ${e.notes}` : ""}</div>
-                      </div>
-                    </div>
-                    <div style={{fontSize:14,fontWeight:600,color:"#fff"}}>{fmt(e.amount)}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Add Shop Modal */}
           {showAddShop && (
             <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:20}}>
               <div style={{background:"#1a1a2e",border:`1px solid ${theme.cardBorder}`,borderRadius:16,padding:24,width:"100%",maxWidth:400}}>
@@ -733,210 +760,6 @@
                 <div style={{display:"flex",gap:10}}>
                   <button onClick={() => setShowAddShop(false)} style={{flex:1,padding:"12px",borderRadius:10,border:`1px solid ${theme.cardBorder}`,background:"transparent",color:theme.textMuted,cursor:"pointer",fontSize:14}}>Cancel</button>
                   <button onClick={handleAddShop} style={{flex:1,padding:"12px",borderRadius:10,border:"none",background:theme.success,color:"#fff",cursor:"pointer",fontSize:14,fontWeight:600}}>Add Shop</button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Duplicate Warning Modal */}
-          {showDuplicateWarning && (
-            <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:20}}>
-              <div style={{background:"#1a1a2e",border:`1px solid ${theme.warning}40`,borderRadius:16,padding:24,width:"100%",maxWidth:400}}>
-                <h4 style={{color:theme.warning,fontSize:16,marginTop:0,marginBottom:12,display:"flex",alignItems:"center",gap:8}}>
-                  ⚠️ Possible Duplicate
-                </h4>
-                <p style={{color:theme.textMuted,fontSize:14,marginBottom:16,lineHeight:1.6}}>
-                  Similar entry already exists:
-                </p>
-                <div style={{background:theme.inputBg,borderRadius:10,padding:12,marginBottom:20}}>
-                  {duplicates.map(d => (
-                    <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0"}}>
-                      <div>
-                        <div style={{fontSize:13,color:theme.text}}>{d.shop}</div>
-                        <div style={{fontSize:11,color:theme.textDim}}>{d.date}</div>
-                      </div>
-                      <div style={{fontSize:14,fontWeight:600,color:"#fff"}}>{fmt(d.amount)}</div>
-                    </div>
-                  ))}
-                </div>
-                <div style={{display:"flex",gap:10}}>
-                  <button onClick={() => setShowDuplicateWarning(false)} style={{flex:1,padding:"12px",borderRadius:10,border:`1px solid ${theme.cardBorder}`,background:"transparent",color:theme.textMuted,cursor:"pointer",fontSize:14}}>Cancel</button>
-                  <button onClick={() => { setShowDuplicateWarning(false); handleSubmit(true); }} style={{flex:1,padding:"12px",borderRadius:10,border:"none",background:theme.warning,color:"#000",cursor:"pointer",fontSize:14,fontWeight:600}}>Save Anyway</button>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    // ═══════════════════════════════════════════
-    //  TRANSACTIONS VIEW (with Edit/Delete)
-    // ═══════════════════════════════════════════
-    function TransactionsView({ pageTx, txPage, setTxPage, txPages, shops }) {
-      const { theme, inputStyle, labelStyle, supabase, fetchData } = useTheme();
-      const [editingTx, setEditingTx] = useState(null);
-      const [deletingTx, setDeletingTx] = useState(null);
-      const [editForm, setEditForm] = useState({});
-      const [toast, setToast] = useState(null);
-
-      const openEdit = (tx) => {
-        setEditForm({ ...tx });
-        setEditingTx(tx);
-      };
-
-      const handleUpdate = async () => {
-        const { error } = await supabase
-          .from("cost_management_expenses")
-          .update({
-            amount: Number(editForm.amount),
-            date: editForm.date,
-            category: editForm.category,
-            shop: editForm.shop,
-            notes: editForm.notes,
-          })
-          .eq("id", editForm.id);
-        
-        if (error) {
-          setToast({ type: "error", msg: error.message });
-        } else {
-          setToast({ type: "success", msg: "Entry updated" });
-          setEditingTx(null);
-          fetchData();
-        }
-        setTimeout(() => setToast(null), 3000);
-      };
-
-      const handleDelete = async () => {
-        const { error } = await supabase
-          .from("cost_management_expenses")
-          .delete()
-          .eq("id", deletingTx.id);
-        
-        if (error) {
-          setToast({ type: "error", msg: error.message });
-        } else {
-          setToast({ type: "success", msg: "Entry deleted" });
-          setDeletingTx(null);
-          fetchData();
-        }
-        setTimeout(() => setToast(null), 3000);
-      };
-
-      return (
-        <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:14,overflow:"hidden"}}>
-          {toast && (
-            <div style={{position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",zIndex:999,padding:"12px 24px",borderRadius:12,fontSize:14,fontWeight:500,background:toast.type==="success"?theme.success:theme.danger,color:"#fff",boxShadow:"0 8px 32px rgba(0,0,0,0.4)"}}>
-              {toast.type==="success"?"✅":"❌"} {toast.msg}
-            </div>
-          )}
-
-          <div style={{overflowX:"auto"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-              <thead>
-                <tr style={{borderBottom:`1px solid ${theme.cardBorder}`}}>
-                  {["Date","Shop","Category","Amount","Notes",""].map(h => (
-                    <th key={h} style={{padding:"14px 12px",textAlign:"left",color:theme.textMuted,fontWeight:500,fontSize:11,textTransform:"uppercase",letterSpacing:1}}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {pageTx.map((tx) => (
-                  <tr key={tx.id} style={{borderBottom:`1px solid ${theme.cardBorder}`,transition:"background 0.15s"}}
-                    onMouseEnter={e => e.currentTarget.style.background=theme.inputBg}
-                    onMouseLeave={e => e.currentTarget.style.background="transparent"}>
-                    <td style={{padding:"10px 12px",color:theme.textMuted,whiteSpace:"nowrap"}}>{tx.date}</td>
-                    <td style={{padding:"10px 12px",color:theme.text,fontWeight:500}}>{tx.shop}</td>
-                    <td style={{padding:"10px 12px"}}>
-                      <span style={{display:"inline-block",padding:"3px 10px",borderRadius:12,fontSize:11,fontWeight:500,background:`${CAT_COLORS[tx.category]||"#666"}20`,color:CAT_COLORS[tx.category]||"#666"}}>
-                        {CAT_ICONS[tx.category]||""} {tx.category}
-                      </span>
-                    </td>
-                    <td style={{padding:"10px 12px",color:"#fff",fontWeight:600,fontVariantNumeric:"tabular-nums"}}>{fmt(tx.amount)}</td>
-                    <td style={{padding:"10px 12px",color:theme.textDim,fontSize:12,maxWidth:150,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{tx.notes || "—"}</td>
-                    <td style={{padding:"10px 12px",whiteSpace:"nowrap"}}>
-                      <button onClick={() => openEdit(tx)} style={{background:"none",border:"none",cursor:"pointer",fontSize:16,padding:"4px 8px",opacity:0.6,transition:"opacity 0.2s"}}
-                        onMouseEnter={e => e.currentTarget.style.opacity=1} onMouseLeave={e => e.currentTarget.style.opacity=0.6}>✏️</button>
-                      <button onClick={() => setDeletingTx(tx)} style={{background:"none",border:"none",cursor:"pointer",fontSize:16,padding:"4px 8px",opacity:0.6,transition:"opacity 0.2s"}}
-                        onMouseEnter={e => e.currentTarget.style.opacity=1} onMouseLeave={e => e.currentTarget.style.opacity=0.6}>🗑️</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div style={{display:"flex",justifyContent:"center",alignItems:"center",gap:8,padding:"16px"}}>
-            <button onClick={() => setTxPage(p => Math.max(0,p-1))} disabled={txPage===0}
-              style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:txPage===0?"default":"pointer",background:txPage===0?theme.cardBg:theme.inputBg,color:txPage===0?theme.textDim:theme.textMuted,fontSize:12}}>← Prev</button>
-            <span style={{fontSize:12,color:theme.textDim}}>{txPage+1} / {txPages || 1}</span>
-            <button onClick={() => setTxPage(p => Math.min(txPages-1,p+1))} disabled={txPage>=txPages-1}
-              style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:txPage>=txPages-1?"default":"pointer",background:txPage>=txPages-1?theme.cardBg:theme.inputBg,color:txPage>=txPages-1?theme.textDim:theme.textMuted,fontSize:12}}>Next →</button>
-          </div>
-
-          {/* Edit Modal */}
-          {editingTx && (
-            <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:20}}>
-              <div style={{background:"#1a1a2e",border:`1px solid ${theme.cardBorder}`,borderRadius:16,padding:24,width:"100%",maxWidth:440}}>
-                <h4 style={{color:"#fff",fontSize:16,marginTop:0,marginBottom:20,display:"flex",alignItems:"center",gap:8}}>✏️ Edit Entry</h4>
-                
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
-                  <div>
-                    <label style={labelStyle}>Date</label>
-                    <input type="date" value={editForm.date} onChange={e => setEditForm({...editForm, date: e.target.value})} style={{...inputStyle,colorScheme:"dark"}}/>
-                  </div>
-                  <div>
-                    <label style={labelStyle}>Amount (¥)</label>
-                    <input type="number" value={editForm.amount} onChange={e => setEditForm({...editForm, amount: e.target.value})} style={inputStyle}/>
-                  </div>
-                </div>
-
-                <div style={{marginBottom:16}}>
-                  <label style={labelStyle}>Category</label>
-                  <select value={editForm.category} onChange={e => setEditForm({...editForm, category: e.target.value})} style={{...inputStyle,cursor:"pointer"}}>
-                    {CATEGORIES.map(c => <option key={c} value={c}>{CAT_ICONS[c]} {c}</option>)}
-                  </select>
-                </div>
-
-                <div style={{marginBottom:16}}>
-                  <label style={labelStyle}>Shop</label>
-                  <input type="text" value={editForm.shop} onChange={e => setEditForm({...editForm, shop: e.target.value})} style={inputStyle}/>
-                </div>
-
-                <div style={{marginBottom:20}}>
-                  <label style={labelStyle}>Notes</label>
-                  <input type="text" value={editForm.notes || ""} onChange={e => setEditForm({...editForm, notes: e.target.value})} style={inputStyle}/>
-                </div>
-
-                <div style={{display:"flex",gap:10}}>
-                  <button onClick={() => setEditingTx(null)} style={{flex:1,padding:"12px",borderRadius:10,border:`1px solid ${theme.cardBorder}`,background:"transparent",color:theme.textMuted,cursor:"pointer",fontSize:14}}>Cancel</button>
-                  <button onClick={handleUpdate} style={{flex:1,padding:"12px",borderRadius:10,border:"none",background:theme.primary,color:"#fff",cursor:"pointer",fontSize:14,fontWeight:600}}>Save Changes</button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Delete Confirmation Modal */}
-          {deletingTx && (
-            <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:20}}>
-              <div style={{background:"#1a1a2e",border:`1px solid ${theme.danger}40`,borderRadius:16,padding:24,width:"100%",maxWidth:400}}>
-                <h4 style={{color:theme.danger,fontSize:16,marginTop:0,marginBottom:12,display:"flex",alignItems:"center",gap:8}}>
-                  🗑️ Delete Entry?
-                </h4>
-                <p style={{color:theme.textMuted,fontSize:14,marginBottom:16}}>
-                  This action cannot be undone.
-                </p>
-                <div style={{background:theme.inputBg,borderRadius:10,padding:12,marginBottom:20}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                    <div>
-                      <div style={{fontSize:13,color:theme.text}}>{CAT_ICONS[deletingTx.category]} {deletingTx.shop}</div>
-                      <div style={{fontSize:11,color:theme.textDim}}>{deletingTx.date}{deletingTx.notes ? ` · ${deletingTx.notes}` : ""}</div>
-                    </div>
-                    <div style={{fontSize:16,fontWeight:600,color:"#fff"}}>{fmt(deletingTx.amount)}</div>
-                  </div>
-                </div>
-                <div style={{display:"flex",gap:10}}>
-                  <button onClick={() => setDeletingTx(null)} style={{flex:1,padding:"12px",borderRadius:10,border:`1px solid ${theme.cardBorder}`,background:"transparent",color:theme.textMuted,cursor:"pointer",fontSize:14}}>Cancel</button>
-                  <button onClick={handleDelete} style={{flex:1,padding:"12px",borderRadius:10,border:"none",background:theme.danger,color:"#fff",cursor:"pointer",fontSize:14,fontWeight:600}}>Delete</button>
                 </div>
               </div>
             </div>
@@ -1044,6 +867,52 @@
             </ResponsiveContainer>
           </div>
         </>
+      );
+    }
+
+    // ═══════════════════════════════════════════
+    //  TRANSACTIONS VIEW
+    // ═══════════════════════════════════════════
+    function TransactionsView({ pageTx, txPage, setTxPage, txPages }) {
+      const { theme } = useTheme();
+      return (
+        <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:14,overflow:"hidden"}}>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+              <thead>
+                <tr style={{borderBottom:`1px solid ${theme.cardBorder}`}}>
+                  {["Date","Shop","Category","Amount","Notes"].map(h => (
+                    <th key={h} style={{padding:"14px 12px",textAlign:"left",color:theme.textMuted,fontWeight:500,fontSize:11,textTransform:"uppercase",letterSpacing:1}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {pageTx.map((tx,i) => (
+                  <tr key={tx.id || i} style={{borderBottom:`1px solid ${theme.cardBorder}`,transition:"background 0.15s"}}
+                    onMouseEnter={e => e.currentTarget.style.background=theme.inputBg}
+                    onMouseLeave={e => e.currentTarget.style.background="transparent"}>
+                    <td style={{padding:"10px 12px",color:theme.textMuted,whiteSpace:"nowrap"}}>{tx.date}</td>
+                    <td style={{padding:"10px 12px",color:theme.text,fontWeight:500}}>{tx.shop}</td>
+                    <td style={{padding:"10px 12px"}}>
+                      <span style={{display:"inline-block",padding:"3px 10px",borderRadius:12,fontSize:11,fontWeight:500,background:`${CAT_COLORS[tx.category]||"#666"}20`,color:CAT_COLORS[tx.category]||"#666"}}>
+                        {CAT_ICONS[tx.category]||""} {tx.category}
+                      </span>
+                    </td>
+                    <td style={{padding:"10px 12px",color:"#fff",fontWeight:600,fontVariantNumeric:"tabular-nums"}}>{fmt(tx.amount)}</td>
+                    <td style={{padding:"10px 12px",color:theme.textDim,fontSize:12,maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{tx.notes || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{display:"flex",justifyContent:"center",alignItems:"center",gap:8,padding:"16px"}}>
+            <button onClick={() => setTxPage(p => Math.max(0,p-1))} disabled={txPage===0}
+              style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:txPage===0?"default":"pointer",background:txPage===0?theme.cardBg:theme.inputBg,color:txPage===0?theme.textDim:theme.textMuted,fontSize:12}}>← Prev</button>
+            <span style={{fontSize:12,color:theme.textDim}}>{txPage+1} / {txPages || 1}</span>
+            <button onClick={() => setTxPage(p => Math.min(txPages-1,p+1))} disabled={txPage>=txPages-1}
+              style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:txPage>=txPages-1?"default":"pointer",background:txPage>=txPages-1?theme.cardBg:theme.inputBg,color:txPage>=txPages-1?theme.textDim:theme.textMuted,fontSize:12}}>Next →</button>
+          </div>
+        </div>
       );
     }
 
