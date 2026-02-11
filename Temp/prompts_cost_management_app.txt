@@ -1,0 +1,71 @@
+
+
+
+XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+                6
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+* Add + Edit only — No delete from app (use SQL for that)
+
+Also I should be able to rename the cateogry or moving the expenses from one category to another.
+
+Also show me the prototype of app. also with this option, "Question: Should I also show a quick "Today" button inside the calendar to easily re-select today if you opened it by mistake?"
+
+XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+                7
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+Just a discussion. No need to generate the app. 
+
+Currently the shop selection is bit inconvinient to select from the dropdown as all the options were not visible at a time. So instead of that can I see all the options arranged in area as shown in the image?
+
+Once I will choose a category, the options releated to that cateogry will bw visible in the feild. Also initially cateogry feild will also be empty.
+
+When I toggle down the calender is the today is slected? I told you to unselect it after I toggle down. As the only reason I will toggle down the calender is I want to make the entry other than today
+
+
+
+
+XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+                8
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+
+Keep the cateogry selection as a dropdown same as in prototype before. The shops inside the category should be visible as chips after selecting the category.
+
+
+
+The calender is getting collapsed after selecting the date. I'm not sure whtehr it is good or not at this stage but It is not allowing the multiple date selection as before.
+
+
+
+show me the prototype.
+
+
+
+
+
+XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+                9
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+
+XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+                10
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+
+XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+                11
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+
+XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+                12
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+
+XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+                13
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+

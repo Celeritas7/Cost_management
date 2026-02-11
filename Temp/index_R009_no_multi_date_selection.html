@@ -222,16 +222,8 @@
 
       const labelStyle = { fontSize:12,fontWeight:500,color:theme.textMuted,textTransform:"uppercase",letterSpacing:0.8,marginBottom:8,display:"block" };
 
-      // Navigation tabs
-      const navTabs = [
-        { id: "add", label: "➕ Add Entry" },
-        { id: "overview", label: "📊 Overview" },
-        { id: "transactions", label: "📋 Transactions" },
-        { id: "settings", label: "⚙️ Settings" },
-      ];
-
       return (
-        <ThemeContext.Provider value={{ theme, themeName, inputStyle, labelStyle, pillStyle, supabase, fetchData, categories, getCatIcon, getCatColor, shops, changeTheme }}>
+        <ThemeContext.Provider value={{ theme, themeName, inputStyle, labelStyle, pillStyle, supabase, fetchData, categories, getCatIcon, getCatColor, shops }}>
           <div style={{minHeight:"100vh",background:theme.bg,color:theme.text,fontFamily:"'Noto Sans JP', system-ui, sans-serif",transition:"background 0.5s"}}>
             {/* Header */}
             <div style={{background:theme.headerBg,borderBottom:`1px solid ${theme.cardBorder}`,padding:"20px 24px",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
@@ -240,12 +232,11 @@
                 <h1 style={{fontSize:22,fontWeight:700,color:"#fff",letterSpacing:-0.5,margin:0}}>Cost Management</h1>
               </div>
               <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-                {navTabs.map(tab => (
-                  <button key={tab.id} onClick={() => { setView(tab.id); setTxPage(0); }} style={pillStyle(view===tab.id)}>
-                    {tab.label}
+                {["add","overview","transactions"].map(v => (
+                  <button key={v} onClick={() => { setView(v); setTxPage(0); }} style={pillStyle(view===v)}>
+                    {v === "add" ? "➕ Add Entry" : v === "overview" ? "📊 Overview" : "📋 Transactions"}
                   </button>
                 ))}
-                {/* Theme Picker */}
                 <div style={{position:"relative"}}>
                   <button onClick={() => setShowThemePicker(!showThemePicker)} style={{...pillStyle(false),padding:"7px 12px",fontSize:18,lineHeight:1}}>{theme.icon}</button>
                   {showThemePicker && (
@@ -268,8 +259,8 @@
               </div>
             </div>
 
-            {/* Filters - only show on overview and transactions */}
-            {(view === "overview" || view === "transactions") && (
+            {/* Filters */}
+            {view !== "add" && (
               <div style={{padding:"16px 24px",display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
                 <span style={{fontSize:12,color:theme.textDim,marginRight:4}}>Filter:</span>
                 <select value={yearFilter} onChange={e => setYearFilter(e.target.value)} style={{background:theme.inputBg,border:`1px solid ${theme.inputBorder}`,color:theme.text,padding:"6px 12px",borderRadius:8,fontSize:13}}>
@@ -293,11 +284,9 @@
                 <AddEntryView allExpenses={RAW} recentEntries={recentEntries} />
               ) : view === "overview" ? (
                 <OverviewView {...{filtered,totalSpend,monthlyAvg,dailyAvg,txCount,monthlyData,catData,topShops}} />
-              ) : view === "transactions" ? (
+              ) : (
                 <TransactionsView pageTx={pageTx} txPage={txPage} setTxPage={setTxPage} txPages={txPages} />
-              ) : view === "settings" ? (
-                <SettingsView allExpenses={RAW} />
-              ) : null}
+              )}
             </div>
           </div>
         </ThemeContext.Provider>
@@ -305,9 +294,9 @@
     }
 
     // ═══════════════════════════════════════════
-    //  MULTI-DATE CALENDAR
+    //  COLLAPSIBLE DATE PICKER (Fixed: clears selection on open)
     // ═══════════════════════════════════════════
-    function MultiDateCalendar({ selectedDates, setSelectedDates }) {
+    function CollapsibleDatePicker({ selectedDate, setSelectedDate }) {
       const { theme } = useTheme();
       const [isOpen, setIsOpen] = useState(false);
       const [viewDate, setViewDate] = useState(() => {
@@ -317,9 +306,21 @@
 
       const openCalendar = () => {
         setIsOpen(true);
-        setSelectedDates([]);
+        setSelectedDate(""); // Clear selection when opening
+        // Reset view to current month
         const d = new Date();
         setViewDate({ year: d.getFullYear(), month: d.getMonth() });
+      };
+
+      const selectToday = () => {
+        setSelectedDate(todayStr());
+        setIsOpen(false);
+      };
+
+      const selectDate = (day) => {
+        const dateStr = `${viewDate.year}-${String(viewDate.month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+        setSelectedDate(dateStr);
+        setIsOpen(false);
       };
 
       const daysInMonth = new Date(viewDate.year, viewDate.month + 1, 0).getDate();
@@ -329,43 +330,24 @@
       const prevMonth = () => setViewDate(v => v.month === 0 ? { year: v.year - 1, month: 11 } : { ...v, month: v.month - 1 });
       const nextMonth = () => setViewDate(v => v.month === 11 ? { year: v.year + 1, month: 0 } : { ...v, month: v.month + 1 });
 
-      const toggleDate = (day) => {
-        const dateStr = `${viewDate.year}-${String(viewDate.month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-        setSelectedDates(prev => prev.includes(dateStr) ? prev.filter(d => d !== dateStr) : [...prev, dateStr]);
-      };
-
-      const isSelected = (day) => {
-        const dateStr = `${viewDate.year}-${String(viewDate.month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-        return selectedDates.includes(dateStr);
-      };
-
       const isToday = (day) => {
         const today = new Date();
         return viewDate.year === today.getFullYear() && viewDate.month === today.getMonth() && day === today.getDate();
       };
 
-      const selectToday = () => {
-        setSelectedDates([todayStr()]);
-        setIsOpen(false);
+      const isSelected = (day) => {
+        if (!selectedDate) return false;
+        const dateStr = `${viewDate.year}-${String(viewDate.month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+        return selectedDate === dateStr;
       };
 
-      const confirmSelection = () => {
-        if (selectedDates.length === 0) {
-          setSelectedDates([todayStr()]);
-        }
-        setIsOpen(false);
-      };
-
-      const getDisplayText = () => {
-        if (selectedDates.length === 0) return { main: "Today", sub: todayStr() };
-        if (selectedDates.length === 1) return { main: formatDateDisplay(selectedDates[0]), sub: selectedDates[0] };
-        return { main: `${selectedDates.length} dates selected`, sub: selectedDates.sort().join(", ").substring(0, 30) + "..." };
-      };
-
-      const display = getDisplayText();
+      // Display: show "Today" if today selected, otherwise show selected date, or prompt
+      const displayDate = selectedDate || todayStr();
+      const isShowingToday = !selectedDate || selectedDate === todayStr();
 
       return (
         <div style={{marginBottom:20}}>
+          {/* Collapsed View - Date Chip */}
           {!isOpen && (
             <button onClick={openCalendar}
               style={{
@@ -379,22 +361,24 @@
               <div style={{display:"flex",alignItems:"center",gap:12}}>
                 <span style={{fontSize:24}}>📅</span>
                 <div style={{textAlign:"left"}}>
-                  <div style={{fontSize:16,fontWeight:600,color:"#fff"}}>{display.main}</div>
-                  <div style={{fontSize:12,color:theme.textDim,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{display.sub}</div>
+                  <div style={{fontSize:16,fontWeight:600,color:"#fff"}}>{formatDateDisplay(displayDate)}</div>
+                  <div style={{fontSize:12,color:theme.textDim}}>{displayDate}</div>
                 </div>
               </div>
               <span style={{color:theme.textMuted,fontSize:13}}>Change ▼</span>
             </button>
           )}
 
+          {/* Expanded Calendar */}
           {isOpen && (
-            <div style={{background:theme.cardBg,borderRadius:14,padding:20,border:`1px solid ${theme.cardBorder}`}}>
+            <div style={{background:theme.cardBg,borderRadius:12,padding:20,border:`1px solid ${theme.cardBorder}`}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
                 <button onClick={prevMonth} style={{background:theme.inputBg,border:"none",borderRadius:8,width:36,height:36,cursor:"pointer",color:theme.textMuted,fontSize:16}}>◀</button>
                 <div style={{fontSize:16,fontWeight:600,color:"#fff"}}>{MONTHS_FULL[viewDate.month]} {viewDate.year}</div>
                 <button onClick={nextMonth} style={{background:theme.inputBg,border:"none",borderRadius:8,width:36,height:36,cursor:"pointer",color:theme.textMuted,fontSize:16}}>▶</button>
               </div>
 
+              {/* Weekday headers (Monday first) */}
               <div style={{display:"grid",gridTemplateColumns:"repeat(7, 1fr)",gap:6,marginBottom:10}}>
                 {["Mo","Tu","We","Th","Fr","Sa","Su"].map(d => (
                   <div key={d} style={{textAlign:"center",fontSize:11,color:theme.textDim,fontWeight:600,padding:6}}>{d}</div>
@@ -408,7 +392,7 @@
                   const selected = isSelected(day);
                   const today = isToday(day);
                   return (
-                    <button key={day} onClick={() => toggleDate(day)}
+                    <button key={day} onClick={() => selectDate(day)}
                       style={{
                         aspectRatio:"1",borderRadius:10,border:"none",cursor:"pointer",fontSize:14,fontWeight:selected?600:today?500:400,transition:"all 0.15s",
                         background: selected ? theme.primary : "transparent",
@@ -423,26 +407,15 @@
                 })}
               </div>
 
-              {selectedDates.length > 0 && (
-                <div style={{marginTop:14,display:"flex",flexWrap:"wrap",gap:6}}>
-                  {selectedDates.sort().map(d => (
-                    <span key={d} style={{background:theme.primaryGlow,color:theme.accent,padding:"4px 10px",borderRadius:8,fontSize:12,display:"flex",alignItems:"center",gap:6}}>
-                      {d}
-                      <button onClick={() => setSelectedDates(prev => prev.filter(x => x !== d))}
-                        style={{background:"none",border:"none",color:theme.accent,cursor:"pointer",fontSize:14,lineHeight:1,padding:0}}>×</button>
-                    </span>
-                  ))}
-                </div>
-              )}
-
+              {/* Quick actions */}
               <div style={{display:"flex",gap:10,marginTop:16}}>
                 <button onClick={selectToday}
-                  style={{flex:1,background:theme.inputBg,border:`1px solid ${theme.cardBorder}`,borderRadius:10,padding:"12px",fontSize:14,color:theme.textMuted,cursor:"pointer"}}>
+                  style={{flex:1,background:theme.primary,border:"none",borderRadius:10,padding:"12px",fontSize:14,color:"#fff",cursor:"pointer",fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
                   📅 Today
                 </button>
-                <button onClick={confirmSelection}
-                  style={{flex:1,background:theme.primary,border:"none",borderRadius:10,padding:"12px",fontSize:14,color:"#fff",cursor:"pointer",fontWeight:600}}>
-                  ✓ Done {selectedDates.length > 0 ? `(${selectedDates.length})` : ""}
+                <button onClick={() => setIsOpen(false)}
+                  style={{flex:1,background:theme.inputBg,border:`1px solid ${theme.cardBorder}`,borderRadius:10,padding:"12px",fontSize:14,color:theme.textMuted,cursor:"pointer"}}>
+                  Cancel
                 </button>
               </div>
             </div>
@@ -452,12 +425,13 @@
     }
 
     // ═══════════════════════════════════════════
-    //  ENTRY ROW COMPONENT
+    //  ENTRY ROW COMPONENT (Chip-based selection)
     // ═══════════════════════════════════════════
     function EntryRow({ entry, index, updateEntry, removeEntry, canRemove }) {
       const { theme, inputStyle, categories, getCatIcon, getCatColor, supabase, fetchData, shops } = useTheme();
       const [customShop, setCustomShop] = useState("");
 
+      // Get shops for selected category
       const categoryShops = useMemo(() => {
         if (!entry.category) return [];
         return shops
@@ -469,7 +443,7 @@
           });
       }, [shops, entry.category]);
 
-      const handleCategoryChange = (catName) => {
+      const selectCategory = (catName) => {
         updateEntry(index, { ...entry, category: catName, shop: "" });
         setCustomShop("");
       };
@@ -485,37 +459,55 @@
         }
       };
 
+      const toggleFavorite = async (e, shopItem) => {
+        e.stopPropagation();
+        await supabase.from("cost_management_shops").update({ is_favorite: !shopItem.is_favorite }).eq("id", shopItem.id);
+        fetchData();
+      };
+
       return (
         <div style={{background:theme.inputBg,borderRadius:14,padding:20,border:`1px solid ${theme.cardBorder}`,marginBottom:16}}>
+          {/* Header */}
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
             <span style={{fontSize:13,color:theme.textMuted,fontWeight:600}}>Entry {index + 1}</span>
             {canRemove && (
               <button onClick={() => removeEntry(index)}
-                style={{background:`${theme.danger}20`,border:"none",borderRadius:8,cursor:"pointer",fontSize:14,color:theme.danger,padding:"6px 12px",fontWeight:500}}>
+                style={{background:`${theme.danger}20`,border:"none",borderRadius:8,cursor:"pointer",fontSize:14,color:theme.danger,padding:"6px 12px",fontWeight:500}}
+                onMouseEnter={e => e.currentTarget.style.background=`${theme.danger}30`}
+                onMouseLeave={e => e.currentTarget.style.background=`${theme.danger}20`}>
                 ✕ Remove
               </button>
             )}
           </div>
 
-          {/* Category Dropdown */}
-          <div style={{marginBottom:16}}>
-            <label style={{fontSize:12,fontWeight:500,color:theme.textMuted,textTransform:"uppercase",letterSpacing:0.8,marginBottom:8,display:"block"}}>
+          {/* 1. CATEGORY - Chip Selection */}
+          <div style={{marginBottom:20}}>
+            <label style={{fontSize:12,fontWeight:500,color:theme.textMuted,textTransform:"uppercase",letterSpacing:0.8,marginBottom:10,display:"block"}}>
               Category
             </label>
-            <select 
-              value={entry.category} 
-              onChange={e => handleCategoryChange(e.target.value)}
-              style={{...inputStyle,padding:"12px 14px",cursor:"pointer",fontSize:14}}>
-              <option value="">Select category...</option>
-              {categories.map(c => (
-                <option key={c.name} value={c.name}>{c.icon} {c.name}</option>
-              ))}
-            </select>
+            <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+              {categories.map(cat => {
+                const isSelected = entry.category === cat.name;
+                return (
+                  <button key={cat.name} onClick={() => selectCategory(cat.name)}
+                    style={{
+                      padding:"10px 16px",borderRadius:10,border:"none",cursor:"pointer",fontSize:13,fontWeight:500,
+                      transition:"all 0.2s",display:"flex",alignItems:"center",gap:8,
+                      background: isSelected ? `${cat.color}30` : theme.cardBg,
+                      color: isSelected ? cat.color : theme.textMuted,
+                      outline: isSelected ? `2px solid ${cat.color}` : `1px solid ${theme.cardBorder}`,
+                    }}>
+                    <span style={{fontSize:16}}>{cat.icon}</span>
+                    {cat.name}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
-          {/* Shop Chips */}
+          {/* 2. SHOP - Chip Selection (only shown after category selected) */}
           {entry.category && (
-            <div style={{marginBottom:16}}>
+            <div style={{marginBottom:20}}>
               <label style={{fontSize:12,fontWeight:500,color:theme.textMuted,textTransform:"uppercase",letterSpacing:0.8,marginBottom:10,display:"block"}}>
                 Shop
               </label>
@@ -539,6 +531,7 @@
                     );
                   })}
                   
+                  {/* Other option */}
                   <button onClick={() => selectShop("Other")}
                     style={{
                       padding:"10px 14px",borderRadius:10,border:"none",cursor:"pointer",fontSize:13,
@@ -551,11 +544,12 @@
                   </button>
                 </div>
               ) : (
-                <div style={{color:theme.textDim,fontSize:13,marginBottom:12,padding:"14px",background:theme.cardBg,borderRadius:10,textAlign:"center"}}>
-                  No shops for this category yet. Type a new one below.
+                <div style={{color:theme.textDim,fontSize:13,marginBottom:12,padding:"12px",background:theme.cardBg,borderRadius:8,textAlign:"center"}}>
+                  No shops for this category yet
                 </div>
               )}
 
+              {/* Custom shop input */}
               <div style={{display:"flex",gap:8}}>
                 <input 
                   type="text" 
@@ -575,7 +569,7 @@
             </div>
           )}
 
-          {/* Amount */}
+          {/* 3. AMOUNT */}
           {entry.category && entry.shop && (
             <div style={{marginBottom:16}}>
               <label style={{fontSize:12,fontWeight:500,color:theme.textMuted,textTransform:"uppercase",letterSpacing:0.8,marginBottom:10,display:"block"}}>
@@ -587,7 +581,7 @@
             </div>
           )}
 
-          {/* Notes */}
+          {/* 4. NOTES */}
           {entry.category && entry.shop && (
             <div>
               <label style={{fontSize:12,fontWeight:500,color:theme.textMuted,textTransform:"uppercase",letterSpacing:0.8,marginBottom:10,display:"block"}}>
@@ -620,11 +614,12 @@
     //  ADD ENTRY VIEW
     // ═══════════════════════════════════════════
     function AddEntryView({ allExpenses, recentEntries }) {
-      const { theme, inputStyle, supabase, fetchData, getCatIcon } = useTheme();
-      const [selectedDates, setSelectedDates] = useState([todayStr()]);
+      const { theme, inputStyle, labelStyle, supabase, fetchData, categories, getCatIcon, getCatColor } = useTheme();
+      const [selectedDate, setSelectedDate] = useState(todayStr());
       const [entries, setEntries] = useState([{ category: "", shop: "", amount: "", notes: "" }]);
       const [saving, setSaving] = useState(false);
       const [toast, setToast] = useState(null);
+      const [showCategoryManager, setShowCategoryManager] = useState(false);
 
       const addEntry = () => {
         setEntries([...entries, { category: "", shop: "", amount: "", notes: "" }]);
@@ -642,10 +637,10 @@
 
       const totalAmount = entries.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
       const validEntries = entries.filter(e => e.amount && Number(e.amount) > 0 && e.shop && e.category);
-      const datesToUse = selectedDates.length > 0 ? selectedDates : [todayStr()];
-      const totalRecords = validEntries.length * datesToUse.length;
 
       const handleSubmit = async () => {
+        const dateToUse = selectedDate || todayStr();
+        
         if (validEntries.length === 0) {
           setToast({ type: "error", msg: "Complete at least one entry" });
           setTimeout(() => setToast(null), 3000);
@@ -653,18 +648,13 @@
         }
 
         setSaving(true);
-        const records = [];
-        datesToUse.forEach(date => {
-          validEntries.forEach(e => {
-            records.push({
-              date,
-              category: e.category,
-              shop: e.shop,
-              amount: Number(e.amount),
-              notes: e.notes?.trim() || "",
-            });
-          });
-        });
+        const records = validEntries.map(e => ({
+          date: dateToUse,
+          category: e.category,
+          shop: e.shop,
+          amount: Number(e.amount),
+          notes: e.notes?.trim() || "",
+        }));
 
         const { error } = await supabase.from("cost_management_expenses").insert(records);
         setSaving(false);
@@ -672,9 +662,8 @@
         if (error) {
           setToast({ type: "error", msg: error.message });
         } else {
-          const totalSaved = totalAmount * datesToUse.length;
-          setToast({ type: "success", msg: `Saved ${totalRecords} record(s) = ${fmt(totalSaved)}` });
-          setSelectedDates([todayStr()]);
+          setToast({ type: "success", msg: `Saved ${validEntries.length} entry(s) = ${fmt(totalAmount)}` });
+          setSelectedDate(todayStr());
           setEntries([{ category: "", shop: "", amount: "", notes: "" }]);
           fetchData();
         }
@@ -691,13 +680,22 @@
           <style>{`@keyframes slideDown { from { opacity:0; transform:translateX(-50%) translateY(-20px); } to { opacity:1; transform:translateX(-50%) translateY(0); } }`}</style>
 
           <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:20,padding:"28px",marginTop:8}}>
-            <h3 style={{fontSize:18,fontWeight:700,color:"#fff",margin:"0 0 24px 0",display:"flex",alignItems:"center",gap:12}}>
-              <span style={{background:theme.primaryGlow,width:44,height:44,borderRadius:12,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>💰</span>
-              New Expense
-            </h3>
+            {/* Header */}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
+              <h3 style={{fontSize:18,fontWeight:700,color:"#fff",margin:0,display:"flex",alignItems:"center",gap:12}}>
+                <span style={{background:theme.primaryGlow,width:44,height:44,borderRadius:12,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>💰</span>
+                New Expense
+              </h3>
+              <button onClick={() => setShowCategoryManager(true)}
+                style={{background:theme.inputBg,border:`1px solid ${theme.cardBorder}`,borderRadius:10,padding:"8px 14px",fontSize:13,color:theme.textMuted,cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
+                ⚙️ Categories
+              </button>
+            </div>
 
-            <MultiDateCalendar selectedDates={selectedDates} setSelectedDates={setSelectedDates} />
+            {/* Collapsible Date Picker */}
+            <CollapsibleDatePicker selectedDate={selectedDate} setSelectedDate={setSelectedDate} />
 
+            {/* Entry Rows */}
             {entries.map((entry, index) => (
               <EntryRow 
                 key={index}
@@ -709,6 +707,7 @@
               />
             ))}
 
+            {/* Add More Button */}
             <button onClick={addEntry}
               style={{
                 width:"100%",padding:"14px",borderRadius:12,border:`2px dashed ${theme.cardBorder}`,
@@ -721,19 +720,13 @@
               <span style={{fontSize:22,fontWeight:300}}>+</span> Add another entry
             </button>
 
+            {/* Summary & Submit */}
             {validEntries.length > 0 && (
-              <div style={{background:theme.inputBg,borderRadius:12,padding:"14px 18px",marginBottom:20}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom: datesToUse.length > 1 ? 8 : 0}}>
-                  <span style={{fontSize:14,color:theme.textMuted}}>
-                    {validEntries.length} entry(s) × {datesToUse.length} date(s)
-                  </span>
-                  <span style={{fontSize:22,fontWeight:700,color:"#fff"}}>{fmt(totalAmount * datesToUse.length)}</span>
-                </div>
-                {datesToUse.length > 1 && (
-                  <div style={{fontSize:12,color:theme.textDim}}>
-                    = {totalRecords} total records
-                  </div>
-                )}
+              <div style={{background:theme.inputBg,borderRadius:12,padding:"14px 18px",marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <span style={{fontSize:14,color:theme.textMuted}}>
+                  {validEntries.length} entry(s) for {formatDateDisplay(selectedDate || todayStr())}
+                </span>
+                <span style={{fontSize:22,fontWeight:700,color:"#fff"}}>{fmt(totalAmount)}</span>
               </div>
             )}
 
@@ -745,10 +738,11 @@
                 background: (saving || validEntries.length === 0) ? theme.textDim : `linear-gradient(135deg,${theme.primary},${theme.accent})`,
                 transition:"all 0.2s",opacity: (saving || validEntries.length === 0) ? 0.5 : 1,
               }}>
-              {saving ? "Saving…" : `💾 Save ${totalRecords > 0 ? `${totalRecords} ` : ""}Record${totalRecords !== 1 ? "s" : ""}`}
+              {saving ? "Saving…" : `💾 Save ${validEntries.length > 0 ? `${validEntries.length} ` : ""}Entry${validEntries.length !== 1 ? "s" : ""}`}
             </button>
           </div>
 
+          {/* Recent Entries */}
           {recentEntries.length > 0 && (
             <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:20,padding:"24px",marginTop:20}}>
               <h4 style={{fontSize:14,fontWeight:600,color:theme.textMuted,marginTop:0,marginBottom:14,textTransform:"uppercase",letterSpacing:1}}>
@@ -770,15 +764,20 @@
               </div>
             </div>
           )}
+
+          {/* Category Manager Modal */}
+          {showCategoryManager && (
+            <CategoryManager onClose={() => setShowCategoryManager(false)} allExpenses={allExpenses} />
+          )}
         </div>
       );
     }
 
     // ═══════════════════════════════════════════
-    //  SETTINGS VIEW (Category Management + Theme)
+    //  CATEGORY MANAGER
     // ═══════════════════════════════════════════
-    function SettingsView({ allExpenses }) {
-      const { theme, themeName, inputStyle, labelStyle, supabase, fetchData, categories, changeTheme } = useTheme();
+    function CategoryManager({ onClose, allExpenses }) {
+      const { theme, inputStyle, labelStyle, supabase, fetchData, categories } = useTheme();
       const [editingCat, setEditingCat] = useState(null);
       const [newCat, setNewCat] = useState({ name: "", icon: "📦", color: "#8b5cf6" });
       const [showAddNew, setShowAddNew] = useState(false);
@@ -859,21 +858,21 @@
       };
 
       return (
-        <div style={{maxWidth:640,margin:"0 auto"}}>
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:20}}>
           {toast && (
-            <div style={{position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",zIndex:999,padding:"14px 28px",borderRadius:14,fontSize:15,fontWeight:500,background:toast.type==="success"?theme.success:theme.danger,color:"#fff",boxShadow:"0 8px 32px rgba(0,0,0,0.4)"}}>
+            <div style={{position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",zIndex:999,padding:"12px 24px",borderRadius:12,fontSize:14,fontWeight:500,background:toast.type==="success"?theme.success:theme.danger,color:"#fff"}}>
               {toast.type==="success"?"✅":"❌"} {toast.msg}
             </div>
           )}
 
-          {/* Category Management */}
-          <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:20,padding:"28px",marginTop:8}}>
-            <h3 style={{fontSize:18,fontWeight:700,color:"#fff",margin:"0 0 20px 0",display:"flex",alignItems:"center",gap:12}}>
-              <span style={{fontSize:24}}>📂</span>
-              Categories
-            </h3>
+          <div style={{background:"#1a1a2e",border:`1px solid ${theme.cardBorder}`,borderRadius:20,padding:28,width:"100%",maxWidth:520,maxHeight:"85vh",overflowY:"auto"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
+              <h4 style={{color:"#fff",fontSize:20,margin:0}}>⚙️ Manage Categories</h4>
+              <button onClick={onClose} style={{background:theme.inputBg,border:"none",color:theme.textMuted,fontSize:18,cursor:"pointer",width:36,height:36,borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+            </div>
 
-            <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:20}}>
+            {/* Category List */}
+            <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:24}}>
               {categories.map(cat => {
                 const usage = getCategoryUsage(cat.name);
                 return (
@@ -888,10 +887,10 @@
                     </div>
                     <div style={{display:"flex",gap:8}}>
                       <button onClick={() => setEditingCat({ ...cat, originalName: cat.name })}
-                        style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:8,cursor:"pointer",fontSize:14,padding:"8px 12px"}}>✏️ Edit</button>
+                        style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:8,cursor:"pointer",fontSize:14,padding:"6px 10px"}}>✏️</button>
                       {usage > 0 && (
                         <button onClick={() => { setShowMoveExpenses(cat); setMoveToCategory(""); }}
-                          style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:8,cursor:"pointer",fontSize:14,padding:"8px 12px"}}>📤 Move</button>
+                          style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:8,cursor:"pointer",fontSize:14,padding:"6px 10px"}}>📤</button>
                       )}
                     </div>
                   </div>
@@ -899,6 +898,7 @@
               })}
             </div>
 
+            {/* Add New Button */}
             {!showAddNew && (
               <button onClick={() => setShowAddNew(true)}
                 style={{width:"100%",padding:"14px",borderRadius:12,border:`2px dashed ${theme.success}50`,background:"transparent",color:theme.success,cursor:"pointer",fontSize:15,fontWeight:500}}>
@@ -906,8 +906,9 @@
               </button>
             )}
 
+            {/* Add New Form */}
             {showAddNew && (
-              <div style={{background:theme.inputBg,borderRadius:14,padding:20,border:`1px solid ${theme.success}40`}}>
+              <div style={{background:theme.cardBg,borderRadius:14,padding:20,border:`1px solid ${theme.success}40`}}>
                 <h5 style={{color:theme.success,margin:"0 0 16px 0",fontSize:15}}>New Category</h5>
                 <div style={{marginBottom:14}}>
                   <label style={labelStyle}>Name</label>
@@ -946,9 +947,9 @@
 
           {/* Edit Category Modal */}
           {editingCat && (
-            <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:20}}>
+            <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:110,padding:20}}>
               <div style={{background:"#1a1a2e",borderRadius:16,padding:24,width:"100%",maxWidth:420}}>
-                <h5 style={{color:"#fff",margin:"0 0 20px 0",fontSize:16}}>✏️ Edit Category</h5>
+                <h5 style={{color:"#fff",margin:"0 0 20px 0",fontSize:16}}>Edit Category</h5>
                 <div style={{marginBottom:14}}>
                   <label style={labelStyle}>Name</label>
                   <input type="text" value={editingCat.name} onChange={e => setEditingCat({...editingCat, name: e.target.value})} style={inputStyle}/>
@@ -985,7 +986,7 @@
 
           {/* Move Expenses Modal */}
           {showMoveExpenses && (
-            <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:20}}>
+            <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:110,padding:20}}>
               <div style={{background:"#1a1a2e",borderRadius:16,padding:24,width:"100%",maxWidth:420}}>
                 <h5 style={{color:"#fff",margin:"0 0 10px 0"}}>📤 Move Expenses</h5>
                 <p style={{color:theme.textMuted,fontSize:14,marginBottom:18}}>
@@ -1073,8 +1074,8 @@
                     <td style={{padding:"12px 14px",color:"#fff",fontWeight:600}}>{fmt(tx.amount)}</td>
                     <td style={{padding:"12px 14px",color:theme.textDim,fontSize:12,maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{tx.notes || "—"}</td>
                     <td style={{padding:"12px 14px",whiteSpace:"nowrap"}}>
-                      <button onClick={() => openEdit(tx)} style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:8,cursor:"pointer",fontSize:13,padding:"6px 10px",marginRight:6}}>✏️</button>
-                      <button onClick={() => setDeletingTx(tx)} style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:8,cursor:"pointer",fontSize:13,padding:"6px 10px"}}>🗑️</button>
+                      <button onClick={() => openEdit(tx)} style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:8,cursor:"pointer",fontSize:13,padding:"6px 10px",marginRight:6}} onMouseEnter={e=>e.currentTarget.style.background=theme.inputBg} onMouseLeave={e=>e.currentTarget.style.background=theme.cardBg}>✏️</button>
+                      <button onClick={() => setDeletingTx(tx)} style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:8,cursor:"pointer",fontSize:13,padding:"6px 10px"}} onMouseEnter={e=>e.currentTarget.style.background=`${theme.danger}20`} onMouseLeave={e=>e.currentTarget.style.background=theme.cardBg}>🗑️</button>
                     </td>
                   </tr>
                 ))}
@@ -1089,6 +1090,7 @@
               style={{padding:"8px 16px",borderRadius:10,border:"none",cursor:txPage>=txPages-1?"default":"pointer",background:txPage>=txPages-1?theme.cardBg:theme.inputBg,color:txPage>=txPages-1?theme.textDim:theme.textMuted,fontSize:13}}>Next →</button>
           </div>
 
+          {/* Edit Modal */}
           {editingTx && (
             <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:20}}>
               <div style={{background:"#1a1a2e",border:`1px solid ${theme.cardBorder}`,borderRadius:16,padding:24,width:"100%",maxWidth:440}}>
@@ -1108,6 +1110,7 @@
             </div>
           )}
 
+          {/* Delete Modal */}
           {deletingTx && (
             <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:20}}>
               <div style={{background:"#1a1a2e",border:`1px solid ${theme.danger}40`,borderRadius:16,padding:24,width:"100%",maxWidth:400}}>
