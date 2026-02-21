@@ -44,15 +44,17 @@ show me the prototype.
 
 
 
-
 XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
                 9
 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
+Perfect. I want the category setting to be visible in some new page instead of on home page. Can you generate new page for it?
 
 XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
                 10
 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+The themse selection should be from the dropdown of right top corner of the app. Giving it space in settings is not worth it.
 
 
 XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX

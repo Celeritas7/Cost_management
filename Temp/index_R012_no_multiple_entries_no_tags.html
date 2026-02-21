@@ -1,0 +1,1232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Cost Management Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-is@18/umd/react-is.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prop-types@15/prop-types.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/recharts@2.15.3/umd/Recharts.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.23.9/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+  <style>
+    html, body, #root { margin: 0; padding: 0; min-height: 100vh; }
+    *, *::before, *::after { box-sizing: border-box; }
+    body { font-family: 'Noto Sans JP', system-ui, sans-serif; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+    input:focus, select:focus { outline: none; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    // ─────────────────────────────────────────────
+    // ⚙️  SUPABASE CONFIG
+    // ─────────────────────────────────────────────
+    const SUPABASE_URL = "https://wylxvmkcrexwfpjpbhyy.supabase.co";
+    const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind5bHh2bWtjcmV4d2ZwanBiaHl5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg2MzkxMDYsImV4cCI6MjA4NDIxNTEwNn0.6Bxo42hx4jwlJGWnfjiTpiDUsYfc1QLTN3YtrU1efak";
+
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    // ─────────────────────────────────────────────
+    // 🎨 THEMES
+    // ─────────────────────────────────────────────
+    const THEMES = {
+      midnight: { name: "Midnight", icon: "🌙", bg: "linear-gradient(145deg, #0d0d1a 0%, #1a1a2e 50%, #16213e 100%)", headerBg: "rgba(255,255,255,0.03)", cardBg: "rgba(255,255,255,0.04)", cardBorder: "rgba(255,255,255,0.06)", inputBg: "rgba(255,255,255,0.06)", inputBorder: "rgba(255,255,255,0.12)", primary: "#2563eb", primaryGlow: "rgba(37,99,235,0.3)", accent: "#7c3aed", text: "#e0e0e0", textMuted: "#888", textDim: "#666", success: "#10b981", warning: "#f59e0b", danger: "#ef4444" },
+      sakura: { name: "Sakura", icon: "🌸", bg: "linear-gradient(145deg, #1a0a10 0%, #2d1520 50%, #3d1a2a 100%)", headerBg: "rgba(255,182,193,0.05)", cardBg: "rgba(255,182,193,0.04)", cardBorder: "rgba(255,182,193,0.08)", inputBg: "rgba(255,182,193,0.06)", inputBorder: "rgba(255,182,193,0.15)", primary: "#ec4899", primaryGlow: "rgba(236,72,153,0.3)", accent: "#f472b6", text: "#fce7f3", textMuted: "#f9a8d4", textDim: "#9d174d", success: "#34d399", warning: "#fbbf24", danger: "#f87171" },
+      ocean: { name: "Ocean", icon: "🌊", bg: "linear-gradient(145deg, #0a1628 0%, #0c2340 50%, #0f3052 100%)", headerBg: "rgba(56,189,248,0.05)", cardBg: "rgba(56,189,248,0.04)", cardBorder: "rgba(56,189,248,0.08)", inputBg: "rgba(56,189,248,0.06)", inputBorder: "rgba(56,189,248,0.15)", primary: "#0ea5e9", primaryGlow: "rgba(14,165,233,0.3)", accent: "#38bdf8", text: "#e0f2fe", textMuted: "#7dd3fc", textDim: "#0369a1", success: "#22d3ee", warning: "#fbbf24", danger: "#fb7185" },
+      forest: { name: "Forest", icon: "🌲", bg: "linear-gradient(145deg, #0a1a0f 0%, #132a1a 50%, #1a3a22 100%)", headerBg: "rgba(34,197,94,0.05)", cardBg: "rgba(34,197,94,0.04)", cardBorder: "rgba(34,197,94,0.08)", inputBg: "rgba(34,197,94,0.06)", inputBorder: "rgba(34,197,94,0.15)", primary: "#22c55e", primaryGlow: "rgba(34,197,94,0.3)", accent: "#4ade80", text: "#dcfce7", textMuted: "#86efac", textDim: "#166534", success: "#34d399", warning: "#facc15", danger: "#f87171" },
+      sunset: { name: "Sunset", icon: "🌅", bg: "linear-gradient(145deg, #1a0f0a 0%, #2d1810 50%, #3d2018 100%)", headerBg: "rgba(251,146,60,0.05)", cardBg: "rgba(251,146,60,0.04)", cardBorder: "rgba(251,146,60,0.08)", inputBg: "rgba(251,146,60,0.06)", inputBorder: "rgba(251,146,60,0.15)", primary: "#f97316", primaryGlow: "rgba(249,115,22,0.3)", accent: "#fb923c", text: "#ffedd5", textMuted: "#fdba74", textDim: "#9a3412", success: "#4ade80", warning: "#fbbf24", danger: "#ef4444" },
+      lavender: { name: "Lavender", icon: "💜", bg: "linear-gradient(145deg, #110f1a 0%, #1e1a2e 50%, #2a2440 100%)", headerBg: "rgba(167,139,250,0.05)", cardBg: "rgba(167,139,250,0.04)", cardBorder: "rgba(167,139,250,0.08)", inputBg: "rgba(167,139,250,0.06)", inputBorder: "rgba(167,139,250,0.15)", primary: "#8b5cf6", primaryGlow: "rgba(139,92,246,0.3)", accent: "#a78bfa", text: "#ede9fe", textMuted: "#c4b5fd", textDim: "#5b21b6", success: "#34d399", warning: "#fbbf24", danger: "#f87171" },
+      mono: { name: "Mono", icon: "⚪", bg: "linear-gradient(145deg, #0a0a0a 0%, #171717 50%, #1f1f1f 100%)", headerBg: "rgba(255,255,255,0.03)", cardBg: "rgba(255,255,255,0.03)", cardBorder: "rgba(255,255,255,0.06)", inputBg: "rgba(255,255,255,0.05)", inputBorder: "rgba(255,255,255,0.1)", primary: "#a3a3a3", primaryGlow: "rgba(163,163,163,0.3)", accent: "#d4d4d4", text: "#e5e5e5", textMuted: "#a3a3a3", textDim: "#525252", success: "#86efac", warning: "#fde047", danger: "#fca5a5" },
+    };
+
+    const THEME_KEYS = Object.keys(THEMES);
+    const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+    function getStoredTheme() {
+      try {
+        const stored = localStorage.getItem("cost_mgmt_theme");
+        if (stored) {
+          const { theme, timestamp } = JSON.parse(stored);
+          if (Date.now() - timestamp > ONE_WEEK_MS) {
+            const newTheme = THEME_KEYS[Math.floor(Math.random() * THEME_KEYS.length)];
+            localStorage.setItem("cost_mgmt_theme", JSON.stringify({ theme: newTheme, timestamp: Date.now() }));
+            return newTheme;
+          }
+          return theme;
+        }
+      } catch (e) {}
+      localStorage.setItem("cost_mgmt_theme", JSON.stringify({ theme: "midnight", timestamp: Date.now() }));
+      return "midnight";
+    }
+
+    function setStoredTheme(theme) {
+      localStorage.setItem("cost_mgmt_theme", JSON.stringify({ theme, timestamp: Date.now() }));
+    }
+
+    // ─────────────────────────────────────────────
+    const { useState, useMemo, useEffect, useCallback, createContext, useContext } = React;
+    const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area, CartesianGrid } = Recharts;
+
+    const ThemeContext = createContext();
+    const useTheme = () => useContext(ThemeContext);
+
+    const MONTHS_SHORT = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const MONTHS_FULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+    
+    const DEFAULT_CATEGORIES = [
+      { id: 1, name: "Supermarket", icon: "🛒", color: "#2563eb" },
+      { id: 2, name: "Convenience", icon: "🏪", color: "#f59e0b" },
+      { id: 3, name: "Asian shop", icon: "🌏", color: "#10b981" },
+      { id: 4, name: "Restaurant", icon: "🍜", color: "#ef4444" },
+      { id: 5, name: "Daily need stuffs", icon: "🧹", color: "#ec4899" },
+      { id: 99, name: "Other", icon: "📦", color: "#8b5cf6" },
+    ];
+
+    const fmt = (n) => `¥${n.toLocaleString()}`;
+    const todayStr = () => new Date().toISOString().slice(0, 10);
+
+    function formatDateDisplay(dateStr) {
+      if (!dateStr) return "Select date";
+      const d = new Date(dateStr);
+      const today = new Date();
+      today.setHours(0,0,0,0);
+      const date = new Date(dateStr);
+      date.setHours(0,0,0,0);
+      
+      if (date.getTime() === today.getTime()) return "Today";
+      const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
+      if (date.getTime() === yesterday.getTime()) return "Yesterday";
+      
+      return `${MONTHS_SHORT[d.getMonth()+1]} ${d.getDate()}, ${d.getFullYear()}`;
+    }
+
+    function enrichRow(r) {
+      const d = new Date(r.date);
+      return { ...r, year: d.getFullYear(), month: d.getMonth() + 1, monthLabel: `${MONTHS_SHORT[d.getMonth()+1]} ${d.getFullYear()}` };
+    }
+
+    // ═══════════════════════════════════════════
+    //  MAIN APP
+    // ═══════════════════════════════════════════
+    function App() {
+      const [themeName, setThemeName] = useState(getStoredTheme);
+      const theme = THEMES[themeName] || THEMES.midnight;
+
+      const [data, setData] = useState([]);
+      const [shops, setShops] = useState([]);
+      const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
+      const [loading, setLoading] = useState(true);
+      const [yearFilter, setYearFilter] = useState("All");
+      const [catFilter, setCatFilter] = useState("All");
+      const [view, setView] = useState("add");
+      const [txPage, setTxPage] = useState(0);
+      const [showThemePicker, setShowThemePicker] = useState(false);
+
+      const changeTheme = (newTheme) => { setThemeName(newTheme); setStoredTheme(newTheme); setShowThemePicker(false); };
+
+      const fetchData = useCallback(async () => {
+        setLoading(true);
+        const [expRes, shopRes, catRes] = await Promise.all([
+          supabase.from("cost_management_expenses").select("*").order("date", { ascending: true }),
+          supabase.from("cost_management_shops").select("*").order("is_favorite", { ascending: false }).order("name"),
+          supabase.from("cost_management_categories").select("*").order("sort_order"),
+        ]);
+        if (!expRes.error && expRes.data) {
+          setData(expRes.data.map(r => enrichRow({ id: r.id, amount: r.amount, date: r.date, category: r.category, shop: r.shop, notes: r.notes || "" })));
+          const years = [...new Set(expRes.data.map(r => new Date(r.date).getFullYear()))];
+          if (years.length) setYearFilter(String(Math.max(...years)));
+        }
+        if (!shopRes.error && shopRes.data) setShops(shopRes.data);
+        if (!catRes.error && catRes.data && catRes.data.length > 0) setCategories(catRes.data);
+        setLoading(false);
+      }, []);
+
+      useEffect(() => { fetchData(); }, [fetchData]);
+
+      const RAW = data;
+      const catList = useMemo(() => [...new Set(RAW.map(r => r.category))].sort(), [RAW]);
+      const years = useMemo(() => [...new Set(RAW.map(r => String(r.year)))].sort(), [RAW]);
+
+      const filtered = useMemo(() => RAW.filter(r => {
+        if (yearFilter !== "All" && String(r.year) !== yearFilter) return false;
+        if (catFilter !== "All" && r.category !== catFilter) return false;
+        return true;
+      }), [RAW, yearFilter, catFilter]);
+
+      const totalSpend = useMemo(() => filtered.reduce((s,r) => s+r.amount, 0), [filtered]);
+      const txCount = filtered.length;
+
+      const monthlyData = useMemo(() => {
+        const map = {};
+        filtered.forEach(r => {
+          const key = `${r.year}-${String(r.month).padStart(2,"0")}`;
+          const label = `${MONTHS_SHORT[r.month]} ${String(r.year).slice(2)}`;
+          if (!map[key]) map[key] = { key, label, total: 0 };
+          map[key].total += r.amount;
+        });
+        return Object.values(map).sort((a,b) => a.key.localeCompare(b.key));
+      }, [filtered]);
+
+      const monthlyAvg = useMemo(() => monthlyData.length ? Math.round(totalSpend / monthlyData.length) : 0, [totalSpend, monthlyData]);
+      const dailyAvg = useMemo(() => {
+        if (!filtered.length) return 0;
+        return Math.round(totalSpend / new Set(filtered.map(r => r.date)).size);
+      }, [filtered, totalSpend]);
+
+      const catData = useMemo(() => {
+        const map = {};
+        filtered.forEach(r => { map[r.category] = (map[r.category]||0) + r.amount; });
+        return Object.entries(map).map(([name,value]) => ({name,value})).sort((a,b) => b.value-a.value);
+      }, [filtered]);
+
+      const topShops = useMemo(() => {
+        const map = {};
+        filtered.forEach(r => {
+          const name = r.shop === "Other" && r.notes ? r.notes : r.shop;
+          map[name] = (map[name]||0) + r.amount;
+        });
+        return Object.entries(map).map(([name,value]) => ({name,value})).sort((a,b) => b.value-a.value).slice(0,8);
+      }, [filtered]);
+
+      const sortedTx = useMemo(() => [...filtered].sort((a,b) => b.date.localeCompare(a.date) || b.id - a.id), [filtered]);
+      const txPerPage = 15;
+      const txPages = Math.ceil(sortedTx.length / txPerPage);
+      const pageTx = sortedTx.slice(txPage * txPerPage, (txPage+1) * txPerPage);
+
+      const recentEntries = useMemo(() => [...RAW].sort((a,b) => b.id - a.id).slice(0, 5), [RAW]);
+
+      const getCatIcon = (catName) => categories.find(c => c.name === catName)?.icon || "📦";
+      const getCatColor = (catName) => categories.find(c => c.name === catName)?.color || "#8b5cf6";
+
+      const pillStyle = (active) => ({
+        padding:"7px 16px",fontSize:13,borderRadius:20,border:"none",cursor:"pointer",fontWeight:500,
+        background: active ? theme.primaryGlow : theme.cardBg,
+        color: active ? "#fff" : theme.textMuted,
+        transition:"all 0.2s",
+        border: active ? `1px solid ${theme.primary}` : `1px solid ${theme.cardBorder}`,
+      });
+
+      const inputStyle = {
+        width:"100%",padding:"10px 14px",borderRadius:10,border:`1px solid ${theme.inputBorder}`,
+        background:theme.inputBg,color:theme.text,fontSize:14,outline:"none",
+        fontFamily:"inherit",transition:"border-color 0.2s",
+      };
+
+      const labelStyle = { fontSize:12,fontWeight:500,color:theme.textMuted,textTransform:"uppercase",letterSpacing:0.8,marginBottom:8,display:"block" };
+
+      // Navigation tabs
+      const navTabs = [
+        { id: "add", label: "➕ Add Entry" },
+        { id: "overview", label: "📊 Overview" },
+        { id: "transactions", label: "📋 Transactions" },
+        { id: "settings", label: "⚙️ Settings" },
+      ];
+
+      return (
+        <ThemeContext.Provider value={{ theme, themeName, inputStyle, labelStyle, pillStyle, supabase, fetchData, categories, getCatIcon, getCatColor, shops, changeTheme }}>
+          <div style={{minHeight:"100vh",background:theme.bg,color:theme.text,fontFamily:"'Noto Sans JP', system-ui, sans-serif",transition:"background 0.5s"}}>
+            {/* Header */}
+            <div style={{background:theme.headerBg,borderBottom:`1px solid ${theme.cardBorder}`,padding:"20px 24px",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
+              <div>
+                <div style={{fontSize:11,letterSpacing:3,textTransform:"uppercase",color:theme.textDim,marginBottom:4}}>家計簿</div>
+                <h1 style={{fontSize:22,fontWeight:700,color:"#fff",letterSpacing:-0.5,margin:0}}>Cost Management</h1>
+              </div>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                {navTabs.map(tab => (
+                  <button key={tab.id} onClick={() => { setView(tab.id); setTxPage(0); }} style={pillStyle(view===tab.id)}>
+                    {tab.label}
+                  </button>
+                ))}
+                {/* Theme Picker */}
+                <div style={{position:"relative"}}>
+                  <button onClick={() => setShowThemePicker(!showThemePicker)} style={{...pillStyle(false),padding:"7px 12px",fontSize:18,lineHeight:1}}>{theme.icon}</button>
+                  {showThemePicker && (
+                    <>
+                      <div style={{position:"fixed",inset:0,zIndex:90}} onClick={() => setShowThemePicker(false)}/>
+                      <div style={{position:"absolute",top:"100%",right:0,marginTop:8,background:"#1a1a2e",border:`1px solid ${theme.cardBorder}`,borderRadius:12,padding:8,zIndex:100,minWidth:160,boxShadow:"0 8px 32px rgba(0,0,0,0.5)"}}>
+                        {THEME_KEYS.map(key => (
+                          <button key={key} onClick={() => changeTheme(key)}
+                            style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"8px 12px",background: themeName === key ? `${THEMES[key].primary}20` : "transparent",border:"none",borderRadius:8,cursor:"pointer",textAlign:"left"}}
+                            onMouseEnter={e => e.currentTarget.style.background = `${THEMES[key].primary}15`}
+                            onMouseLeave={e => e.currentTarget.style.background = themeName === key ? `${THEMES[key].primary}20` : "transparent"}>
+                            <span style={{fontSize:16}}>{THEMES[key].icon}</span>
+                            <span style={{color: themeName === key ? THEMES[key].primary : "#ccc",fontWeight: themeName === key ? 600 : 400,fontSize:13}}>{THEMES[key].name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Filters - only show on overview and transactions */}
+            {(view === "overview" || view === "transactions") && (
+              <div style={{padding:"16px 24px",display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
+                <span style={{fontSize:12,color:theme.textDim,marginRight:4}}>Filter:</span>
+                <select value={yearFilter} onChange={e => setYearFilter(e.target.value)} style={{background:theme.inputBg,border:`1px solid ${theme.inputBorder}`,color:theme.text,padding:"6px 12px",borderRadius:8,fontSize:13}}>
+                  <option value="All">All Years</option>
+                  {years.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+                <select value={catFilter} onChange={e => setCatFilter(e.target.value)} style={{background:theme.inputBg,border:`1px solid ${theme.inputBorder}`,color:theme.text,padding:"6px 12px",borderRadius:8,fontSize:13}}>
+                  <option value="All">All Categories</option>
+                  {catList.map(c => <option key={c} value={c}>{getCatIcon(c)} {c}</option>)}
+                </select>
+              </div>
+            )}
+
+            <div style={{padding:"0 24px 32px"}}>
+              {loading ? (
+                <div style={{textAlign:"center",padding:80,color:theme.textMuted}}>
+                  <div style={{fontSize:32,marginBottom:12}}>⏳</div>
+                  <div>Loading…</div>
+                </div>
+              ) : view === "add" ? (
+                <AddEntryView allExpenses={RAW} recentEntries={recentEntries} />
+              ) : view === "overview" ? (
+                <OverviewView {...{filtered,totalSpend,monthlyAvg,dailyAvg,txCount,monthlyData,catData,topShops}} />
+              ) : view === "transactions" ? (
+                <TransactionsView pageTx={pageTx} txPage={txPage} setTxPage={setTxPage} txPages={txPages} />
+              ) : view === "settings" ? (
+                <SettingsView allExpenses={RAW} />
+              ) : null}
+            </div>
+          </div>
+        </ThemeContext.Provider>
+      );
+    }
+
+    // ═══════════════════════════════════════════
+    //  MULTI-DATE CALENDAR
+    // ═══════════════════════════════════════════
+    function MultiDateCalendar({ selectedDates, setSelectedDates }) {
+      const { theme } = useTheme();
+      const [isOpen, setIsOpen] = useState(false);
+      const [viewDate, setViewDate] = useState(() => {
+        const d = new Date();
+        return { year: d.getFullYear(), month: d.getMonth() };
+      });
+
+      const openCalendar = () => {
+        setIsOpen(true);
+        setSelectedDates([]);
+        const d = new Date();
+        setViewDate({ year: d.getFullYear(), month: d.getMonth() });
+      };
+
+      const daysInMonth = new Date(viewDate.year, viewDate.month + 1, 0).getDate();
+      const firstDayJS = new Date(viewDate.year, viewDate.month, 1).getDay();
+      const firstDayOfWeek = firstDayJS === 0 ? 6 : firstDayJS - 1;
+
+      const prevMonth = () => setViewDate(v => v.month === 0 ? { year: v.year - 1, month: 11 } : { ...v, month: v.month - 1 });
+      const nextMonth = () => setViewDate(v => v.month === 11 ? { year: v.year + 1, month: 0 } : { ...v, month: v.month + 1 });
+
+      const toggleDate = (day) => {
+        const dateStr = `${viewDate.year}-${String(viewDate.month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+        setSelectedDates(prev => prev.includes(dateStr) ? prev.filter(d => d !== dateStr) : [...prev, dateStr]);
+      };
+
+      const isSelected = (day) => {
+        const dateStr = `${viewDate.year}-${String(viewDate.month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+        return selectedDates.includes(dateStr);
+      };
+
+      const isToday = (day) => {
+        const today = new Date();
+        return viewDate.year === today.getFullYear() && viewDate.month === today.getMonth() && day === today.getDate();
+      };
+
+      const selectToday = () => {
+        setSelectedDates([todayStr()]);
+        setIsOpen(false);
+      };
+
+      const confirmSelection = () => {
+        if (selectedDates.length === 0) {
+          setSelectedDates([todayStr()]);
+        }
+        setIsOpen(false);
+      };
+
+      const getDisplayText = () => {
+        if (selectedDates.length === 0) return { main: "Today", sub: todayStr() };
+        if (selectedDates.length === 1) return { main: formatDateDisplay(selectedDates[0]), sub: selectedDates[0] };
+        return { main: `${selectedDates.length} dates selected`, sub: selectedDates.sort().join(", ").substring(0, 30) + "..." };
+      };
+
+      const display = getDisplayText();
+
+      return (
+        <div style={{marginBottom:20}}>
+          {!isOpen && (
+            <button onClick={openCalendar}
+              style={{
+                display:"flex",alignItems:"center",gap:12,padding:"14px 18px",
+                background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,
+                borderRadius:12,cursor:"pointer",width:"100%",justifyContent:"space-between",
+                transition:"all 0.2s",
+              }}
+              onMouseEnter={e => e.currentTarget.style.borderColor = theme.primary}
+              onMouseLeave={e => e.currentTarget.style.borderColor = theme.cardBorder}>
+              <div style={{display:"flex",alignItems:"center",gap:12}}>
+                <span style={{fontSize:24}}>📅</span>
+                <div style={{textAlign:"left"}}>
+                  <div style={{fontSize:16,fontWeight:600,color:"#fff"}}>{display.main}</div>
+                  <div style={{fontSize:12,color:theme.textDim,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{display.sub}</div>
+                </div>
+              </div>
+              <span style={{color:theme.textMuted,fontSize:13}}>Change ▼</span>
+            </button>
+          )}
+
+          {isOpen && (
+            <div style={{background:theme.cardBg,borderRadius:14,padding:20,border:`1px solid ${theme.cardBorder}`}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+                <button onClick={prevMonth} style={{background:theme.inputBg,border:"none",borderRadius:8,width:36,height:36,cursor:"pointer",color:theme.textMuted,fontSize:16}}>◀</button>
+                <div style={{fontSize:16,fontWeight:600,color:"#fff"}}>{MONTHS_FULL[viewDate.month]} {viewDate.year}</div>
+                <button onClick={nextMonth} style={{background:theme.inputBg,border:"none",borderRadius:8,width:36,height:36,cursor:"pointer",color:theme.textMuted,fontSize:16}}>▶</button>
+              </div>
+
+              <div style={{display:"grid",gridTemplateColumns:"repeat(7, 1fr)",gap:6,marginBottom:10}}>
+                {["Mo","Tu","We","Th","Fr","Sa","Su"].map(d => (
+                  <div key={d} style={{textAlign:"center",fontSize:11,color:theme.textDim,fontWeight:600,padding:6}}>{d}</div>
+                ))}
+              </div>
+
+              <div style={{display:"grid",gridTemplateColumns:"repeat(7, 1fr)",gap:6}}>
+                {Array.from({ length: firstDayOfWeek }).map((_, i) => <div key={`e-${i}`} />)}
+                {Array.from({ length: daysInMonth }).map((_, i) => {
+                  const day = i + 1;
+                  const selected = isSelected(day);
+                  const today = isToday(day);
+                  return (
+                    <button key={day} onClick={() => toggleDate(day)}
+                      style={{
+                        aspectRatio:"1",borderRadius:10,border:"none",cursor:"pointer",fontSize:14,fontWeight:selected?600:today?500:400,transition:"all 0.15s",
+                        background: selected ? theme.primary : "transparent",
+                        color: selected ? "#fff" : today ? theme.primary : theme.text,
+                        border: today && !selected ? `2px solid ${theme.primary}50` : `2px solid transparent`,
+                      }}
+                      onMouseEnter={e => { if (!selected) e.currentTarget.style.background = theme.inputBg; }}
+                      onMouseLeave={e => { if (!selected) e.currentTarget.style.background = "transparent"; }}>
+                      {day}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {selectedDates.length > 0 && (
+                <div style={{marginTop:14,display:"flex",flexWrap:"wrap",gap:6}}>
+                  {selectedDates.sort().map(d => (
+                    <span key={d} style={{background:theme.primaryGlow,color:theme.accent,padding:"4px 10px",borderRadius:8,fontSize:12,display:"flex",alignItems:"center",gap:6}}>
+                      {d}
+                      <button onClick={() => setSelectedDates(prev => prev.filter(x => x !== d))}
+                        style={{background:"none",border:"none",color:theme.accent,cursor:"pointer",fontSize:14,lineHeight:1,padding:0}}>×</button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              <div style={{display:"flex",gap:10,marginTop:16}}>
+                <button onClick={selectToday}
+                  style={{flex:1,background:theme.inputBg,border:`1px solid ${theme.cardBorder}`,borderRadius:10,padding:"12px",fontSize:14,color:theme.textMuted,cursor:"pointer"}}>
+                  📅 Today
+                </button>
+                <button onClick={confirmSelection}
+                  style={{flex:1,background:theme.primary,border:"none",borderRadius:10,padding:"12px",fontSize:14,color:"#fff",cursor:"pointer",fontWeight:600}}>
+                  ✓ Done {selectedDates.length > 0 ? `(${selectedDates.length})` : ""}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════
+    //  ENTRY ROW COMPONENT
+    // ═══════════════════════════════════════════
+    function EntryRow({ entry, index, updateEntry, removeEntry, canRemove }) {
+      const { theme, inputStyle, categories, getCatIcon, getCatColor, supabase, fetchData, shops } = useTheme();
+      const [customShop, setCustomShop] = useState("");
+
+      const categoryShops = useMemo(() => {
+        if (!entry.category) return [];
+        return shops
+          .filter(s => s.category === entry.category)
+          .sort((a, b) => {
+            if (a.is_favorite && !b.is_favorite) return -1;
+            if (!a.is_favorite && b.is_favorite) return 1;
+            return a.name.localeCompare(b.name);
+          });
+      }, [shops, entry.category]);
+
+      const handleCategoryChange = (catName) => {
+        updateEntry(index, { ...entry, category: catName, shop: "" });
+        setCustomShop("");
+      };
+
+      const selectShop = (shopName) => {
+        updateEntry(index, { ...entry, shop: shopName });
+        setCustomShop("");
+      };
+
+      const handleCustomShop = () => {
+        if (customShop.trim()) {
+          updateEntry(index, { ...entry, shop: customShop.trim() });
+        }
+      };
+
+      return (
+        <div style={{background:theme.inputBg,borderRadius:14,padding:20,border:`1px solid ${theme.cardBorder}`,marginBottom:16}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+            <span style={{fontSize:13,color:theme.textMuted,fontWeight:600}}>Entry {index + 1}</span>
+            {canRemove && (
+              <button onClick={() => removeEntry(index)}
+                style={{background:`${theme.danger}20`,border:"none",borderRadius:8,cursor:"pointer",fontSize:14,color:theme.danger,padding:"6px 12px",fontWeight:500}}>
+                ✕ Remove
+              </button>
+            )}
+          </div>
+
+          {/* Category Dropdown */}
+          <div style={{marginBottom:16}}>
+            <label style={{fontSize:12,fontWeight:500,color:theme.textMuted,textTransform:"uppercase",letterSpacing:0.8,marginBottom:8,display:"block"}}>
+              Category
+            </label>
+            <select 
+              value={entry.category} 
+              onChange={e => handleCategoryChange(e.target.value)}
+              style={{...inputStyle,padding:"12px 14px",cursor:"pointer",fontSize:14}}>
+              <option value="">Select category...</option>
+              {categories.map(c => (
+                <option key={c.name} value={c.name}>{c.icon} {c.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Shop Chips */}
+          {entry.category && (
+            <div style={{marginBottom:16}}>
+              <label style={{fontSize:12,fontWeight:500,color:theme.textMuted,textTransform:"uppercase",letterSpacing:0.8,marginBottom:10,display:"block"}}>
+                Shop
+              </label>
+              
+              {categoryShops.length > 0 ? (
+                <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:12}}>
+                  {categoryShops.map(shop => {
+                    const isSelected = entry.shop === shop.name;
+                    return (
+                      <button key={shop.id} onClick={() => selectShop(shop.name)}
+                        style={{
+                          padding:"10px 14px",borderRadius:10,border:"none",cursor:"pointer",fontSize:13,fontWeight:isSelected?600:400,
+                          transition:"all 0.2s",display:"flex",alignItems:"center",gap:6,
+                          background: isSelected ? theme.primaryGlow : theme.cardBg,
+                          color: isSelected ? "#fff" : theme.text,
+                          outline: isSelected ? `2px solid ${theme.primary}` : `1px solid ${theme.cardBorder}`,
+                        }}>
+                        {shop.is_favorite && <span style={{fontSize:12}}>⭐</span>}
+                        {shop.name}
+                      </button>
+                    );
+                  })}
+                  
+                  <button onClick={() => selectShop("Other")}
+                    style={{
+                      padding:"10px 14px",borderRadius:10,border:"none",cursor:"pointer",fontSize:13,
+                      transition:"all 0.2s",display:"flex",alignItems:"center",gap:6,
+                      background: entry.shop === "Other" ? `${getCatColor("Other")}30` : theme.cardBg,
+                      color: entry.shop === "Other" ? getCatColor("Other") : theme.textMuted,
+                      outline: entry.shop === "Other" ? `2px solid ${getCatColor("Other")}` : `1px solid ${theme.cardBorder}`,
+                    }}>
+                    📦 Other
+                  </button>
+                </div>
+              ) : (
+                <div style={{color:theme.textDim,fontSize:13,marginBottom:12,padding:"14px",background:theme.cardBg,borderRadius:10,textAlign:"center"}}>
+                  No shops for this category yet. Type a new one below.
+                </div>
+              )}
+
+              <div style={{display:"flex",gap:8}}>
+                <input 
+                  type="text" 
+                  placeholder="Or type a new shop name…" 
+                  value={customShop}
+                  onChange={e => setCustomShop(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") handleCustomShop(); }}
+                  style={{...inputStyle,padding:"10px 14px",fontSize:13,flex:1}}
+                />
+                {customShop.trim() && (
+                  <button onClick={handleCustomShop}
+                    style={{background:theme.primary,border:"none",borderRadius:10,padding:"10px 16px",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:500,whiteSpace:"nowrap"}}>
+                    Use this
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Amount */}
+          {entry.category && entry.shop && (
+            <div style={{marginBottom:16}}>
+              <label style={{fontSize:12,fontWeight:500,color:theme.textMuted,textTransform:"uppercase",letterSpacing:0.8,marginBottom:10,display:"block"}}>
+                Amount (¥)
+              </label>
+              <input type="number" inputMode="numeric" placeholder="0" value={entry.amount}
+                onChange={e => updateEntry(index, { ...entry, amount: e.target.value })}
+                style={{...inputStyle,fontSize:28,fontWeight:700,textAlign:"center",padding:"16px",letterSpacing:-1}}/>
+            </div>
+          )}
+
+          {/* Notes */}
+          {entry.category && entry.shop && (
+            <div>
+              <label style={{fontSize:12,fontWeight:500,color:theme.textMuted,textTransform:"uppercase",letterSpacing:0.8,marginBottom:10,display:"block"}}>
+                Notes (optional)
+              </label>
+              <input type="text" placeholder="ramen, haircut, etc." value={entry.notes || ""}
+                onChange={e => updateEntry(index, { ...entry, notes: e.target.value })}
+                style={{...inputStyle,padding:"10px 14px",fontSize:13}}/>
+            </div>
+          )}
+
+          {/* Entry Summary */}
+          {entry.category && entry.shop && entry.amount && (
+            <div style={{marginTop:16,padding:"12px 16px",background:theme.cardBg,borderRadius:10,display:"flex",justifyContent:"space-between",alignItems:"center",border:`1px solid ${theme.cardBorder}`}}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <span style={{fontSize:20}}>{getCatIcon(entry.category)}</span>
+                <div>
+                  <div style={{fontSize:14,color:theme.text,fontWeight:500}}>{entry.shop}</div>
+                  {entry.notes && <div style={{fontSize:11,color:theme.textDim}}>{entry.notes}</div>}
+                </div>
+              </div>
+              <div style={{fontSize:18,fontWeight:700,color:"#fff"}}>{fmt(Number(entry.amount) || 0)}</div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════
+    //  ADD ENTRY VIEW
+    // ═══════════════════════════════════════════
+    function AddEntryView({ allExpenses, recentEntries }) {
+      const { theme, inputStyle, supabase, fetchData, getCatIcon } = useTheme();
+      const [selectedDates, setSelectedDates] = useState([todayStr()]);
+      const [entries, setEntries] = useState([{ category: "", shop: "", amount: "", notes: "" }]);
+      const [saving, setSaving] = useState(false);
+      const [toast, setToast] = useState(null);
+
+      const addEntry = () => {
+        setEntries([...entries, { category: "", shop: "", amount: "", notes: "" }]);
+      };
+
+      const updateEntry = (index, newEntry) => {
+        const updated = [...entries];
+        updated[index] = newEntry;
+        setEntries(updated);
+      };
+
+      const removeEntry = (index) => {
+        setEntries(entries.filter((_, i) => i !== index));
+      };
+
+      const totalAmount = entries.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+      const validEntries = entries.filter(e => e.amount && Number(e.amount) > 0 && e.shop && e.category);
+      const datesToUse = selectedDates.length > 0 ? selectedDates : [todayStr()];
+      const totalRecords = validEntries.length * datesToUse.length;
+
+      const handleSubmit = async () => {
+        if (validEntries.length === 0) {
+          setToast({ type: "error", msg: "Complete at least one entry" });
+          setTimeout(() => setToast(null), 3000);
+          return;
+        }
+
+        setSaving(true);
+        const records = [];
+        datesToUse.forEach(date => {
+          validEntries.forEach(e => {
+            records.push({
+              date,
+              category: e.category,
+              shop: e.shop,
+              amount: Number(e.amount),
+              notes: e.notes?.trim() || "",
+            });
+          });
+        });
+
+        const { error } = await supabase.from("cost_management_expenses").insert(records);
+        setSaving(false);
+
+        if (error) {
+          setToast({ type: "error", msg: error.message });
+        } else {
+          const totalSaved = totalAmount * datesToUse.length;
+          setToast({ type: "success", msg: `Saved ${totalRecords} record(s) = ${fmt(totalSaved)}` });
+          setSelectedDates([todayStr()]);
+          setEntries([{ category: "", shop: "", amount: "", notes: "" }]);
+          fetchData();
+        }
+        setTimeout(() => setToast(null), 3500);
+      };
+
+      return (
+        <div style={{maxWidth:640,margin:"0 auto"}}>
+          {toast && (
+            <div style={{position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",zIndex:999,padding:"14px 28px",borderRadius:14,fontSize:15,fontWeight:500,background:toast.type==="success"?theme.success:theme.danger,color:"#fff",boxShadow:"0 8px 32px rgba(0,0,0,0.4)",animation:"slideDown 0.3s ease"}}>
+              {toast.type==="success"?"✅":"❌"} {toast.msg}
+            </div>
+          )}
+          <style>{`@keyframes slideDown { from { opacity:0; transform:translateX(-50%) translateY(-20px); } to { opacity:1; transform:translateX(-50%) translateY(0); } }`}</style>
+
+          <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:20,padding:"28px",marginTop:8}}>
+            <h3 style={{fontSize:18,fontWeight:700,color:"#fff",margin:"0 0 24px 0",display:"flex",alignItems:"center",gap:12}}>
+              <span style={{background:theme.primaryGlow,width:44,height:44,borderRadius:12,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>💰</span>
+              New Expense
+            </h3>
+
+            <MultiDateCalendar selectedDates={selectedDates} setSelectedDates={setSelectedDates} />
+
+            {entries.map((entry, index) => (
+              <EntryRow 
+                key={index}
+                entry={entry}
+                index={index}
+                updateEntry={updateEntry}
+                removeEntry={removeEntry}
+                canRemove={entries.length > 1}
+              />
+            ))}
+
+            <button onClick={addEntry}
+              style={{
+                width:"100%",padding:"14px",borderRadius:12,border:`2px dashed ${theme.cardBorder}`,
+                background:"transparent",color:theme.textMuted,cursor:"pointer",fontSize:15,
+                display:"flex",alignItems:"center",justifyContent:"center",gap:10,
+                transition:"all 0.2s",marginBottom:20,
+              }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = theme.primary; e.currentTarget.style.color = theme.primary; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = theme.cardBorder; e.currentTarget.style.color = theme.textMuted; }}>
+              <span style={{fontSize:22,fontWeight:300}}>+</span> Add another entry
+            </button>
+
+            {validEntries.length > 0 && (
+              <div style={{background:theme.inputBg,borderRadius:12,padding:"14px 18px",marginBottom:20}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom: datesToUse.length > 1 ? 8 : 0}}>
+                  <span style={{fontSize:14,color:theme.textMuted}}>
+                    {validEntries.length} entry(s) × {datesToUse.length} date(s)
+                  </span>
+                  <span style={{fontSize:22,fontWeight:700,color:"#fff"}}>{fmt(totalAmount * datesToUse.length)}</span>
+                </div>
+                {datesToUse.length > 1 && (
+                  <div style={{fontSize:12,color:theme.textDim}}>
+                    = {totalRecords} total records
+                  </div>
+                )}
+              </div>
+            )}
+
+            <button onClick={handleSubmit} disabled={saving || validEntries.length === 0}
+              style={{
+                width:"100%",padding:"16px",borderRadius:14,border:"none",
+                cursor: (saving || validEntries.length === 0) ? "not-allowed" : "pointer",
+                fontSize:16,fontWeight:600,color:"#fff",
+                background: (saving || validEntries.length === 0) ? theme.textDim : `linear-gradient(135deg,${theme.primary},${theme.accent})`,
+                transition:"all 0.2s",opacity: (saving || validEntries.length === 0) ? 0.5 : 1,
+              }}>
+              {saving ? "Saving…" : `💾 Save ${totalRecords > 0 ? `${totalRecords} ` : ""}Record${totalRecords !== 1 ? "s" : ""}`}
+            </button>
+          </div>
+
+          {recentEntries.length > 0 && (
+            <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:20,padding:"24px",marginTop:20}}>
+              <h4 style={{fontSize:14,fontWeight:600,color:theme.textMuted,marginTop:0,marginBottom:14,textTransform:"uppercase",letterSpacing:1}}>
+                📋 Recently Added
+              </h4>
+              <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                {recentEntries.map(e => (
+                  <div key={e.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 14px",background:theme.inputBg,borderRadius:10}}>
+                    <div style={{display:"flex",alignItems:"center",gap:12}}>
+                      <span style={{fontSize:18}}>{getCatIcon(e.category)}</span>
+                      <div>
+                        <div style={{fontSize:14,color:theme.text,fontWeight:500}}>{e.shop}</div>
+                        <div style={{fontSize:11,color:theme.textDim}}>{e.date}</div>
+                      </div>
+                    </div>
+                    <div style={{fontSize:15,fontWeight:600,color:"#fff"}}>{fmt(e.amount)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════
+    //  SETTINGS VIEW (Category Management + Theme)
+    // ═══════════════════════════════════════════
+    function SettingsView({ allExpenses }) {
+      const { theme, themeName, inputStyle, labelStyle, supabase, fetchData, categories, changeTheme } = useTheme();
+      const [editingCat, setEditingCat] = useState(null);
+      const [newCat, setNewCat] = useState({ name: "", icon: "📦", color: "#8b5cf6" });
+      const [showAddNew, setShowAddNew] = useState(false);
+      const [showMoveExpenses, setShowMoveExpenses] = useState(null);
+      const [moveToCategory, setMoveToCategory] = useState("");
+      const [toast, setToast] = useState(null);
+
+      const EMOJI_OPTIONS = ["🛒","🏪","🌏","🍜","📦","🧹","🍕","☕","🚗","💊","🎮","📚","👕","🏠","💡","🎬","✈️","🎁","💰","🏥"];
+      const COLOR_OPTIONS = ["#2563eb","#f59e0b","#10b981","#ef4444","#8b5cf6","#ec4899","#06b6d4","#84cc16","#f97316","#6366f1"];
+
+      const getCategoryUsage = (catName) => allExpenses.filter(e => e.category === catName).length;
+
+      const handleAddCategory = async () => {
+        if (!newCat.name.trim()) {
+          setToast({ type: "error", msg: "Enter category name" });
+          setTimeout(() => setToast(null), 3000);
+          return;
+        }
+        const { error } = await supabase.from("cost_management_categories").insert({
+          name: newCat.name.trim(),
+          icon: newCat.icon,
+          color: newCat.color,
+          sort_order: categories.length + 1,
+        });
+        if (error) {
+          setToast({ type: "error", msg: error.message.includes("duplicate") ? "Category exists" : error.message });
+        } else {
+          setToast({ type: "success", msg: `Added "${newCat.name}"` });
+          setNewCat({ name: "", icon: "📦", color: "#8b5cf6" });
+          setShowAddNew(false);
+          fetchData();
+        }
+        setTimeout(() => setToast(null), 3000);
+      };
+
+      const handleUpdateCategory = async () => {
+        if (!editingCat.name.trim()) return;
+        
+        const { error: catError } = await supabase
+          .from("cost_management_categories")
+          .update({ name: editingCat.name, icon: editingCat.icon, color: editingCat.color })
+          .eq("id", editingCat.id);
+
+        if (!catError && editingCat.originalName !== editingCat.name) {
+          await supabase
+            .from("cost_management_expenses")
+            .update({ category: editingCat.name })
+            .eq("category", editingCat.originalName);
+        }
+
+        if (catError) {
+          setToast({ type: "error", msg: catError.message });
+        } else {
+          setToast({ type: "success", msg: "Category updated" });
+          setEditingCat(null);
+          fetchData();
+        }
+        setTimeout(() => setToast(null), 3000);
+      };
+
+      const handleMoveExpenses = async () => {
+        if (!moveToCategory) return;
+        
+        const { error } = await supabase
+          .from("cost_management_expenses")
+          .update({ category: moveToCategory })
+          .eq("category", showMoveExpenses.name);
+
+        if (error) {
+          setToast({ type: "error", msg: error.message });
+        } else {
+          setToast({ type: "success", msg: `Moved expenses to ${moveToCategory}` });
+          setShowMoveExpenses(null);
+          setMoveToCategory("");
+          fetchData();
+        }
+        setTimeout(() => setToast(null), 3000);
+      };
+
+      return (
+        <div style={{maxWidth:640,margin:"0 auto"}}>
+          {toast && (
+            <div style={{position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",zIndex:999,padding:"14px 28px",borderRadius:14,fontSize:15,fontWeight:500,background:toast.type==="success"?theme.success:theme.danger,color:"#fff",boxShadow:"0 8px 32px rgba(0,0,0,0.4)"}}>
+              {toast.type==="success"?"✅":"❌"} {toast.msg}
+            </div>
+          )}
+
+          {/* Category Management */}
+          <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:20,padding:"28px",marginTop:8}}>
+            <h3 style={{fontSize:18,fontWeight:700,color:"#fff",margin:"0 0 20px 0",display:"flex",alignItems:"center",gap:12}}>
+              <span style={{fontSize:24}}>📂</span>
+              Categories
+            </h3>
+
+            <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:20}}>
+              {categories.map(cat => {
+                const usage = getCategoryUsage(cat.name);
+                return (
+                  <div key={cat.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 18px",background:theme.inputBg,borderRadius:12,border:`1px solid ${theme.cardBorder}`}}>
+                    <div style={{display:"flex",alignItems:"center",gap:14}}>
+                      <span style={{fontSize:28}}>{cat.icon}</span>
+                      <div>
+                        <div style={{color:theme.text,fontSize:15,fontWeight:500}}>{cat.name}</div>
+                        <div style={{color:theme.textDim,fontSize:12}}>{usage} expense{usage !== 1 ? "s" : ""}</div>
+                      </div>
+                      <div style={{width:14,height:14,borderRadius:4,background:cat.color,marginLeft:8}}/>
+                    </div>
+                    <div style={{display:"flex",gap:8}}>
+                      <button onClick={() => setEditingCat({ ...cat, originalName: cat.name })}
+                        style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:8,cursor:"pointer",fontSize:14,padding:"8px 12px"}}>✏️ Edit</button>
+                      {usage > 0 && (
+                        <button onClick={() => { setShowMoveExpenses(cat); setMoveToCategory(""); }}
+                          style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:8,cursor:"pointer",fontSize:14,padding:"8px 12px"}}>📤 Move</button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {!showAddNew && (
+              <button onClick={() => setShowAddNew(true)}
+                style={{width:"100%",padding:"14px",borderRadius:12,border:`2px dashed ${theme.success}50`,background:"transparent",color:theme.success,cursor:"pointer",fontSize:15,fontWeight:500}}>
+                + Add New Category
+              </button>
+            )}
+
+            {showAddNew && (
+              <div style={{background:theme.inputBg,borderRadius:14,padding:20,border:`1px solid ${theme.success}40`}}>
+                <h5 style={{color:theme.success,margin:"0 0 16px 0",fontSize:15}}>New Category</h5>
+                <div style={{marginBottom:14}}>
+                  <label style={labelStyle}>Name</label>
+                  <input type="text" value={newCat.name} onChange={e => setNewCat({...newCat, name: e.target.value})}
+                    placeholder="Category name" style={inputStyle}/>
+                </div>
+                <div style={{marginBottom:14}}>
+                  <label style={labelStyle}>Icon</label>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                    {EMOJI_OPTIONS.map(emoji => (
+                      <button key={emoji} onClick={() => setNewCat({...newCat, icon: emoji})}
+                        style={{width:40,height:40,borderRadius:10,border: newCat.icon === emoji ? `2px solid ${theme.primary}` : `1px solid ${theme.cardBorder}`,background: newCat.icon === emoji ? theme.primaryGlow : "transparent",cursor:"pointer",fontSize:20}}>
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div style={{marginBottom:18}}>
+                  <label style={labelStyle}>Color</label>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                    {COLOR_OPTIONS.map(color => (
+                      <button key={color} onClick={() => setNewCat({...newCat, color})}
+                        style={{width:36,height:36,borderRadius:10,border: newCat.color === color ? `3px solid #fff` : `2px solid transparent`,background:color,cursor:"pointer"}}/>
+                    ))}
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:12}}>
+                  <button onClick={() => setShowAddNew(false)}
+                    style={{flex:1,padding:"12px",borderRadius:10,border:`1px solid ${theme.cardBorder}`,background:"transparent",color:theme.textMuted,cursor:"pointer",fontSize:14}}>Cancel</button>
+                  <button onClick={handleAddCategory}
+                    style={{flex:1,padding:"12px",borderRadius:10,border:"none",background:theme.success,color:"#fff",cursor:"pointer",fontWeight:600,fontSize:14}}>Add Category</button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Edit Category Modal */}
+          {editingCat && (
+            <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:20}}>
+              <div style={{background:"#1a1a2e",borderRadius:16,padding:24,width:"100%",maxWidth:420}}>
+                <h5 style={{color:"#fff",margin:"0 0 20px 0",fontSize:16}}>✏️ Edit Category</h5>
+                <div style={{marginBottom:14}}>
+                  <label style={labelStyle}>Name</label>
+                  <input type="text" value={editingCat.name} onChange={e => setEditingCat({...editingCat, name: e.target.value})} style={inputStyle}/>
+                </div>
+                <div style={{marginBottom:14}}>
+                  <label style={labelStyle}>Icon</label>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                    {EMOJI_OPTIONS.map(emoji => (
+                      <button key={emoji} onClick={() => setEditingCat({...editingCat, icon: emoji})}
+                        style={{width:40,height:40,borderRadius:10,border: editingCat.icon === emoji ? `2px solid ${theme.primary}` : `1px solid ${theme.cardBorder}`,background: editingCat.icon === emoji ? theme.primaryGlow : "transparent",cursor:"pointer",fontSize:20}}>
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div style={{marginBottom:18}}>
+                  <label style={labelStyle}>Color</label>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                    {COLOR_OPTIONS.map(color => (
+                      <button key={color} onClick={() => setEditingCat({...editingCat, color})}
+                        style={{width:36,height:36,borderRadius:10,border: editingCat.color === color ? `3px solid #fff` : `2px solid transparent`,background:color,cursor:"pointer"}}/>
+                    ))}
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:12}}>
+                  <button onClick={() => setEditingCat(null)}
+                    style={{flex:1,padding:"12px",borderRadius:10,border:`1px solid ${theme.cardBorder}`,background:"transparent",color:theme.textMuted,cursor:"pointer"}}>Cancel</button>
+                  <button onClick={handleUpdateCategory}
+                    style={{flex:1,padding:"12px",borderRadius:10,border:"none",background:theme.primary,color:"#fff",cursor:"pointer",fontWeight:600}}>Save</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Move Expenses Modal */}
+          {showMoveExpenses && (
+            <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:20}}>
+              <div style={{background:"#1a1a2e",borderRadius:16,padding:24,width:"100%",maxWidth:420}}>
+                <h5 style={{color:"#fff",margin:"0 0 10px 0"}}>📤 Move Expenses</h5>
+                <p style={{color:theme.textMuted,fontSize:14,marginBottom:18}}>
+                  Move all expenses from <strong style={{color:theme.text}}>{showMoveExpenses.name}</strong> to another category.
+                </p>
+                <div style={{marginBottom:18}}>
+                  <label style={labelStyle}>Move to</label>
+                  <select value={moveToCategory} onChange={e => setMoveToCategory(e.target.value)} style={{...inputStyle,cursor:"pointer"}}>
+                    <option value="">Select category…</option>
+                    {categories.filter(c => c.name !== showMoveExpenses.name).map(c => (
+                      <option key={c.id} value={c.name}>{c.icon} {c.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div style={{display:"flex",gap:12}}>
+                  <button onClick={() => setShowMoveExpenses(null)}
+                    style={{flex:1,padding:"12px",borderRadius:10,border:`1px solid ${theme.cardBorder}`,background:"transparent",color:theme.textMuted,cursor:"pointer"}}>Cancel</button>
+                  <button onClick={handleMoveExpenses} disabled={!moveToCategory}
+                    style={{flex:1,padding:"12px",borderRadius:10,border:"none",background:moveToCategory ? theme.warning : theme.textDim,color:"#000",cursor:moveToCategory?"pointer":"not-allowed",fontWeight:600}}>Move All</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════
+    //  TRANSACTIONS VIEW
+    // ═══════════════════════════════════════════
+    function TransactionsView({ pageTx, txPage, setTxPage, txPages }) {
+      const { theme, inputStyle, labelStyle, supabase, fetchData, categories, getCatIcon, getCatColor } = useTheme();
+      const [editingTx, setEditingTx] = useState(null);
+      const [deletingTx, setDeletingTx] = useState(null);
+      const [editForm, setEditForm] = useState({});
+      const [toast, setToast] = useState(null);
+
+      const openEdit = (tx) => { setEditForm({ ...tx }); setEditingTx(tx); };
+
+      const handleUpdate = async () => {
+        const { error } = await supabase.from("cost_management_expenses")
+          .update({ amount: Number(editForm.amount), date: editForm.date, category: editForm.category, shop: editForm.shop, notes: editForm.notes })
+          .eq("id", editForm.id);
+        if (error) { setToast({ type: "error", msg: error.message }); }
+        else { setToast({ type: "success", msg: "Updated" }); setEditingTx(null); fetchData(); }
+        setTimeout(() => setToast(null), 3000);
+      };
+
+      const handleDelete = async () => {
+        const { error } = await supabase.from("cost_management_expenses").delete().eq("id", deletingTx.id);
+        if (error) { setToast({ type: "error", msg: error.message }); }
+        else { setToast({ type: "success", msg: "Deleted" }); setDeletingTx(null); fetchData(); }
+        setTimeout(() => setToast(null), 3000);
+      };
+
+      return (
+        <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:16,overflow:"hidden"}}>
+          {toast && (
+            <div style={{position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",zIndex:999,padding:"12px 24px",borderRadius:12,fontSize:14,fontWeight:500,background:toast.type==="success"?theme.success:theme.danger,color:"#fff"}}>
+              {toast.type==="success"?"✅":"❌"} {toast.msg}
+            </div>
+          )}
+
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+              <thead>
+                <tr style={{borderBottom:`1px solid ${theme.cardBorder}`}}>
+                  {["Date","Shop","Category","Amount","Notes",""].map(h => (
+                    <th key={h} style={{padding:"16px 14px",textAlign:"left",color:theme.textMuted,fontWeight:600,fontSize:11,textTransform:"uppercase",letterSpacing:1}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {pageTx.map((tx) => (
+                  <tr key={tx.id} style={{borderBottom:`1px solid ${theme.cardBorder}`,transition:"background 0.15s"}}
+                    onMouseEnter={e => e.currentTarget.style.background=theme.inputBg}
+                    onMouseLeave={e => e.currentTarget.style.background="transparent"}>
+                    <td style={{padding:"12px 14px",color:theme.textMuted,whiteSpace:"nowrap"}}>{tx.date}</td>
+                    <td style={{padding:"12px 14px",color:theme.text,fontWeight:500}}>{tx.shop}</td>
+                    <td style={{padding:"12px 14px"}}>
+                      <span style={{display:"inline-block",padding:"4px 12px",borderRadius:20,fontSize:12,fontWeight:500,background:`${getCatColor(tx.category)}20`,color:getCatColor(tx.category)}}>
+                        {getCatIcon(tx.category)} {tx.category}
+                      </span>
+                    </td>
+                    <td style={{padding:"12px 14px",color:"#fff",fontWeight:600}}>{fmt(tx.amount)}</td>
+                    <td style={{padding:"12px 14px",color:theme.textDim,fontSize:12,maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{tx.notes || "—"}</td>
+                    <td style={{padding:"12px 14px",whiteSpace:"nowrap"}}>
+                      <button onClick={() => openEdit(tx)} style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:8,cursor:"pointer",fontSize:13,padding:"6px 10px",marginRight:6}}>✏️</button>
+                      <button onClick={() => setDeletingTx(tx)} style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:8,cursor:"pointer",fontSize:13,padding:"6px 10px"}}>🗑️</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{display:"flex",justifyContent:"center",alignItems:"center",gap:10,padding:"18px"}}>
+            <button onClick={() => setTxPage(p => Math.max(0,p-1))} disabled={txPage===0}
+              style={{padding:"8px 16px",borderRadius:10,border:"none",cursor:txPage===0?"default":"pointer",background:txPage===0?theme.cardBg:theme.inputBg,color:txPage===0?theme.textDim:theme.textMuted,fontSize:13}}>← Prev</button>
+            <span style={{fontSize:13,color:theme.textDim,padding:"0 8px"}}>{txPage+1} / {txPages || 1}</span>
+            <button onClick={() => setTxPage(p => Math.min(txPages-1,p+1))} disabled={txPage>=txPages-1}
+              style={{padding:"8px 16px",borderRadius:10,border:"none",cursor:txPage>=txPages-1?"default":"pointer",background:txPage>=txPages-1?theme.cardBg:theme.inputBg,color:txPage>=txPages-1?theme.textDim:theme.textMuted,fontSize:13}}>Next →</button>
+          </div>
+
+          {editingTx && (
+            <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:20}}>
+              <div style={{background:"#1a1a2e",border:`1px solid ${theme.cardBorder}`,borderRadius:16,padding:24,width:"100%",maxWidth:440}}>
+                <h4 style={{color:"#fff",fontSize:16,marginTop:0,marginBottom:20}}>✏️ Edit Entry</h4>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+                  <div><label style={labelStyle}>Date</label><input type="date" value={editForm.date} onChange={e => setEditForm({...editForm, date: e.target.value})} style={{...inputStyle,colorScheme:"dark"}}/></div>
+                  <div><label style={labelStyle}>Amount</label><input type="number" value={editForm.amount} onChange={e => setEditForm({...editForm, amount: e.target.value})} style={inputStyle}/></div>
+                </div>
+                <div style={{marginBottom:16}}><label style={labelStyle}>Category</label><select value={editForm.category} onChange={e => setEditForm({...editForm, category: e.target.value})} style={{...inputStyle,cursor:"pointer"}}>{categories.map(c => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}</select></div>
+                <div style={{marginBottom:16}}><label style={labelStyle}>Shop</label><input type="text" value={editForm.shop} onChange={e => setEditForm({...editForm, shop: e.target.value})} style={inputStyle}/></div>
+                <div style={{marginBottom:20}}><label style={labelStyle}>Notes</label><input type="text" value={editForm.notes||""} onChange={e => setEditForm({...editForm, notes: e.target.value})} style={inputStyle}/></div>
+                <div style={{display:"flex",gap:12}}>
+                  <button onClick={() => setEditingTx(null)} style={{flex:1,padding:"12px",borderRadius:10,border:`1px solid ${theme.cardBorder}`,background:"transparent",color:theme.textMuted,cursor:"pointer"}}>Cancel</button>
+                  <button onClick={handleUpdate} style={{flex:1,padding:"12px",borderRadius:10,border:"none",background:theme.primary,color:"#fff",cursor:"pointer",fontWeight:600}}>Save</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {deletingTx && (
+            <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:20}}>
+              <div style={{background:"#1a1a2e",border:`1px solid ${theme.danger}40`,borderRadius:16,padding:24,width:"100%",maxWidth:400}}>
+                <h4 style={{color:theme.danger,fontSize:16,marginTop:0,marginBottom:12}}>🗑️ Delete Entry?</h4>
+                <div style={{background:theme.inputBg,borderRadius:10,padding:14,marginBottom:20}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <div><div style={{fontSize:14,color:theme.text}}>{getCatIcon(deletingTx.category)} {deletingTx.shop}</div><div style={{fontSize:12,color:theme.textDim}}>{deletingTx.date}</div></div>
+                    <div style={{fontSize:18,fontWeight:600,color:"#fff"}}>{fmt(deletingTx.amount)}</div>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:12}}>
+                  <button onClick={() => setDeletingTx(null)} style={{flex:1,padding:"12px",borderRadius:10,border:`1px solid ${theme.cardBorder}`,background:"transparent",color:theme.textMuted,cursor:"pointer"}}>Cancel</button>
+                  <button onClick={handleDelete} style={{flex:1,padding:"12px",borderRadius:10,border:"none",background:theme.danger,color:"#fff",cursor:"pointer",fontWeight:600}}>Delete</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════
+    //  OVERVIEW VIEW
+    // ═══════════════════════════════════════════
+    function OverviewView({ filtered, totalSpend, monthlyAvg, dailyAvg, txCount, monthlyData, catData, topShops }) {
+      const { theme, getCatIcon, getCatColor } = useTheme();
+
+      const CustomTooltip = ({ active, payload, label }) => {
+        if (!active || !payload?.length) return null;
+        return (
+          <div style={{background:"#1a1a2e",border:`1px solid ${theme.cardBorder}`,borderRadius:10,padding:"12px 16px",color:theme.text,fontSize:13}}>
+            <div style={{fontWeight:600,marginBottom:6,color:"#fff"}}>{label}</div>
+            {payload.map((p,i) => <div key={i} style={{color:p.color||theme.textMuted}}>{p.name}: {fmt(p.value)}</div>)}
+          </div>
+        );
+      };
+
+      return (
+        <>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(160px, 1fr))",gap:14,marginBottom:28}}>
+            {[{label:"Total Spent",value:fmt(totalSpend),accent:theme.primary},{label:"Monthly Avg",value:fmt(monthlyAvg),accent:theme.success},{label:"Daily Avg",value:fmt(dailyAvg),accent:theme.warning},{label:"Transactions",value:txCount.toLocaleString(),accent:"#ec4899"}].map((card,i) => (
+              <div key={i} style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:14,padding:"20px 18px",borderLeft:`4px solid ${card.accent}`}}>
+                <div style={{fontSize:11,color:theme.textMuted,textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>{card.label}</div>
+                <div style={{fontSize:22,fontWeight:700,color:"#fff"}}>{card.value}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:16,padding:"24px 20px",marginBottom:24}}>
+            <h3 style={{fontSize:15,fontWeight:600,color:theme.textMuted,marginBottom:20,marginTop:0}}>Monthly Spending Trend</h3>
+            <ResponsiveContainer width="100%" height={280}>
+              <AreaChart data={monthlyData}>
+                <defs><linearGradient id="grad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={theme.primary} stopOpacity={0.3}/><stop offset="100%" stopColor={theme.primary} stopOpacity={0.02}/></linearGradient></defs>
+                <CartesianGrid strokeDasharray="3 3" stroke={theme.cardBorder}/>
+                <XAxis dataKey="label" tick={{fontSize:11,fill:theme.textDim}} axisLine={false} tickLine={false}/>
+                <YAxis tick={{fontSize:11,fill:theme.textDim}} axisLine={false} tickLine={false} tickFormatter={v => `¥${(v/1000).toFixed(0)}k`}/>
+                <Tooltip content={<CustomTooltip/>}/>
+                <Area type="monotone" dataKey="total" name="Spending" stroke={theme.primary} fill="url(#grad)" strokeWidth={2}/>
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(300px, 1fr))",gap:20}}>
+            <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:16,padding:"24px 20px"}}>
+              <h3 style={{fontSize:15,fontWeight:600,color:theme.textMuted,marginBottom:16,marginTop:0}}>Category Breakdown</h3>
+              <ResponsiveContainer width="100%" height={220}>
+                <PieChart><Pie data={catData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={55} outerRadius={90} paddingAngle={2}>
+                  {catData.map((entry,i) => <Cell key={i} fill={getCatColor(entry.name)} stroke="none"/>)}
+                </Pie><Tooltip content={<CustomTooltip/>}/></PieChart>
+              </ResponsiveContainer>
+              <div style={{display:"flex",flexWrap:"wrap",gap:10,justifyContent:"center",marginTop:10}}>
+                {catData.map((c,i) => (
+                  <div key={i} style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:theme.textMuted}}>
+                    <div style={{width:10,height:10,borderRadius:3,background:getCatColor(c.name)}}/>{getCatIcon(c.name)} {c.name}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:16,padding:"24px 20px"}}>
+              <h3 style={{fontSize:15,fontWeight:600,color:theme.textMuted,marginBottom:16,marginTop:0}}>Top Shops</h3>
+              <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                {topShops.map((shop,i) => {
+                  const pct = topShops[0]?.value ? (shop.value / topShops[0].value)*100 : 0;
+                  return (
+                    <div key={i} style={{display:"flex",alignItems:"center",gap:12}}>
+                      <div style={{fontSize:12,color:theme.textDim,width:20,textAlign:"right",fontWeight:600}}>{i+1}</div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                          <span style={{fontSize:13,color:theme.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{shop.name}</span>
+                          <span style={{fontSize:13,color:"#fff",fontWeight:600,marginLeft:10}}>{fmt(shop.value)}</span>
+                        </div>
+                        <div style={{height:5,background:theme.inputBg,borderRadius:3,overflow:"hidden"}}>
+                          <div style={{height:"100%",width:`${pct}%`,background:`linear-gradient(90deg,${theme.primary},${theme.accent})`,borderRadius:3}}/>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:16,padding:"24px 20px",marginTop:24}}>
+            <h3 style={{fontSize:15,fontWeight:600,color:theme.textMuted,marginBottom:20,marginTop:0}}>Monthly Comparison</h3>
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={monthlyData}>
+                <CartesianGrid strokeDasharray="3 3" stroke={theme.cardBorder}/>
+                <XAxis dataKey="label" tick={{fontSize:11,fill:theme.textDim}} axisLine={false} tickLine={false}/>
+                <YAxis tick={{fontSize:11,fill:theme.textDim}} axisLine={false} tickLine={false} tickFormatter={v => `¥${(v/1000).toFixed(0)}k`}/>
+                <Tooltip content={<CustomTooltip/>}/>
+                <Bar dataKey="total" name="Spending" fill={theme.primary} radius={[6,6,0,0]} maxBarSize={36}/>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
