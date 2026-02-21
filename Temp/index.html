@@ -704,12 +704,12 @@
             <>
               {categoryShops.length > 0 && (
                 <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:8}}>
-                  {categoryShops.map(s => (
+                  {categoryShops.slice(0,6).map(s => (
                     <button key={s.id} onClick={() => selectShop(s.name)} style={{
                       padding:"6px 10px",borderRadius:6,border:"none",cursor:"pointer",fontSize:11,
                       background:entry.shop===s.name?theme.primaryGlow:theme.cardBg,
                       color:entry.shop===s.name?"#fff":theme.text,
-                    }}>{s.is_favorite?"⭐ ":""}{s.name}</button>
+                    }}>{s.name}</button>
                   ))}
                   <button onClick={() => selectShop("Other")} style={{
                     padding:"6px 10px",borderRadius:6,border:"none",cursor:"pointer",fontSize:11,
