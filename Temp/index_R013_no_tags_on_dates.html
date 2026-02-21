@@ -265,7 +265,7 @@
               {loading ? (
                 <div style={{textAlign:"center",padding:50,color:theme.textMuted}}>⏳ Loading…</div>
               ) : view === "add" ? (
-                <AddEntryView recentEntries={recentEntries} allExpenses={RAW} />
+                <AddEntryView recentEntries={recentEntries} />
               ) : view === "overview" ? (
                 <OverviewView {...{filtered,totalSpend,monthlyAvg,dailyAvg,monthlyData,catData,topShops}} />
               ) : view === "transactions" ? (
@@ -282,7 +282,7 @@
     // ═══════════════════════════════════════════
     //  MULTI-DATE CALENDAR
     // ═══════════════════════════════════════════
-    function MultiDateCalendar({ selectedDates, setSelectedDates, onDone, expenses = [] }) {
+    function MultiDateCalendar({ selectedDates, setSelectedDates, onDone }) {
       const { theme } = useTheme();
       const [isOpen, setIsOpen] = useState(false);
       const [viewDate, setViewDate] = useState(() => {
@@ -306,20 +306,6 @@
       const isToday = (day) => {
         const today = new Date();
         return viewDate.year === today.getFullYear() && viewDate.month === today.getMonth() && day === today.getDate();
-      };
-
-      // Get expense indicators for a date
-      const getDateIndicators = (day) => {
-        const dateStr = `${viewDate.year}-${String(viewDate.month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-        const dateExpenses = expenses.filter(e => e.date === dateStr);
-        if (dateExpenses.length === 0) return null;
-        
-        const types = new Set(dateExpenses.map(e => e.expense_type || "normal"));
-        const indicators = [];
-        if (types.has("fixed")) indicators.push("📌");
-        if (types.has("outlier")) indicators.push("⚡");
-        if (types.has("normal")) indicators.push("●");
-        return indicators;
       };
 
       const confirmDates = () => {
@@ -348,12 +334,6 @@
                 <div style={{fontSize:14,fontWeight:600,color:"#fff"}}>{MONTHS_FULL[viewDate.month]} {viewDate.year}</div>
                 <button onClick={() => setViewDate(v => v.month===11?{year:v.year+1,month:0}:{...v,month:v.month+1})} style={{background:theme.inputBg,border:"none",borderRadius:6,width:30,height:30,cursor:"pointer",color:theme.textMuted}}>▶</button>
               </div>
-              {/* Legend */}
-              <div style={{display:"flex",gap:12,justifyContent:"center",marginBottom:10,fontSize:10,color:theme.textDim}}>
-                <span><span style={{color:"#22c55e"}}>●</span> Normal</span>
-                <span>📌 Fixed</span>
-                <span>⚡ Outlier</span>
-              </div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(7, 1fr)",gap:4,marginBottom:8}}>
                 {["Mo","Tu","We","Th","Fr","Sa","Su"].map(d => <div key={d} style={{textAlign:"center",fontSize:10,color:theme.textDim,fontWeight:600,padding:4}}>{d}</div>)}
               </div>
@@ -363,23 +343,12 @@
                   const day = i+1;
                   const sel = isSelected(day);
                   const tod = isToday(day);
-                  const indicators = getDateIndicators(day);
                   return (
                     <button key={day} onClick={() => toggleDate(day)} style={{
                       aspectRatio:"1",borderRadius:8,border:"none",cursor:"pointer",fontSize:12,fontWeight:sel?600:400,
                       background:sel?theme.primary:tod?theme.inputBg:"transparent",
                       color:sel?"#fff":tod?theme.primary:theme.text,
-                      position:"relative",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
-                    }}>
-                      <span>{day}</span>
-                      {indicators && (
-                        <span style={{fontSize:7,lineHeight:1,marginTop:1,display:"flex",gap:1}}>
-                          {indicators.map((ind, idx) => (
-                            <span key={idx} style={{color: ind === "●" ? "#22c55e" : undefined}}>{ind}</span>
-                          ))}
-                        </span>
-                      )}
-                    </button>
+                    }}>{day}</button>
                   );
                 })}
               </div>
@@ -433,7 +402,7 @@
     // ═══════════════════════════════════════════
     //  ADD ENTRY VIEW
     // ═══════════════════════════════════════════
-    function AddEntryView({ recentEntries, allExpenses }) {
+    function AddEntryView({ recentEntries }) {
       const { theme, inputStyle, supabase, fetchData, categories, shops, tags, getCatIcon, getCatColor, getTagIcon } = useTheme();
       const [selectedDates, setSelectedDates] = useState([todayStr()]);
       const [shopMode, setShopMode] = useState("same"); // "same" or "different"
@@ -517,7 +486,7 @@
             <h3 style={{fontSize:15,fontWeight:700,color:"#fff",margin:"0 0 16px 0"}}>💰 New Expense</h3>
 
             {/* Date Selection */}
-            <MultiDateCalendar selectedDates={selectedDates} setSelectedDates={setSelectedDates} expenses={allExpenses} />
+            <MultiDateCalendar selectedDates={selectedDates} setSelectedDates={setSelectedDates} />
 
             {/* Shop Mode */}
             {selectedDates.length > 0 && (
@@ -748,7 +717,7 @@
     //  SETTINGS VIEW (Categories + Tags + Recurring)
     // ═══════════════════════════════════════════
     function SettingsView({ allExpenses }) {
-      const { theme, inputStyle, labelStyle, supabase, fetchData, categories, tags, shops, getCatIcon } = useTheme();
+      const { theme, inputStyle, labelStyle, supabase, fetchData, categories, tags } = useTheme();
       const [activeTab, setActiveTab] = useState("categories");
       const [toast, setToast] = useState(null);
 
@@ -762,24 +731,11 @@
       const [newTag, setNewTag] = useState({ name: "", icon: "🏷️", color: "#6b7280" });
       const [showAddTag, setShowAddTag] = useState(false);
 
-      // Shop state
-      const [selectedShopCategory, setSelectedShopCategory] = useState("");
-      const [editingShop, setEditingShop] = useState(null);
-      const [newShop, setNewShop] = useState({ name: "", category: "", is_favorite: false });
-      const [showAddShop, setShowAddShop] = useState(false);
-
       const EMOJI_OPTIONS = ["🛒","🏪","🌏","🍜","📦","🧹","🍕","☕","🚗","💊","🎮","📚","👕","🏠","💡","🎬","✈️","🎁","💰","🏥","🍎","🍇","🚃","🏷️","👨‍👩‍👧","📄","🛍️"];
       const COLOR_OPTIONS = ["#2563eb","#f59e0b","#10b981","#ef4444","#8b5cf6","#ec4899","#06b6d4","#84cc16","#f97316","#6366f1","#64748b","#a855f7"];
 
       const getCategoryUsage = (n) => allExpenses.filter(e => e.category === n).length;
       const getTagUsage = (n) => allExpenses.filter(e => (e.tags||"").split(",").includes(n)).length;
-      const getShopUsage = (n) => allExpenses.filter(e => e.shop === n).length;
-
-      // Get shops for selected category
-      const filteredShops = useMemo(() => {
-        if (!selectedShopCategory) return shops;
-        return shops.filter(s => s.category === selectedShopCategory);
-      }, [shops, selectedShopCategory]);
 
       // Category handlers
       const handleAddCategory = async () => {
@@ -793,7 +749,6 @@
         const { error } = await supabase.from("cost_management_categories").update({ name: editingCat.name, icon: editingCat.icon, color: editingCat.color }).eq("id", editingCat.id);
         if (!error && editingCat.originalName !== editingCat.name) {
           await supabase.from("cost_management_expenses").update({ category: editingCat.name }).eq("category", editingCat.originalName);
-          await supabase.from("cost_management_shops").update({ category: editingCat.name }).eq("category", editingCat.originalName);
         }
         if (error) showToast("error", error.message); else { showToast("success","Updated"); setEditingCat(null); fetchData(); }
       };
@@ -808,6 +763,7 @@
       const handleUpdateTag = async () => {
         if (!editingTag?.name.trim()) return;
         const { error } = await supabase.from("cost_management_tags").update({ name: editingTag.name, icon: editingTag.icon, color: editingTag.color }).eq("id", editingTag.id);
+        // Update expenses that have this tag
         if (!error && editingTag.originalName !== editingTag.name) {
           const { data: expenses } = await supabase.from("cost_management_expenses").select("id, tags").like("tags", `%${editingTag.originalName}%`);
           for (const exp of (expenses || [])) {
@@ -822,43 +778,10 @@
         if (error) showToast("error", error.message); else { showToast("success","Deleted"); fetchData(); }
       };
 
-      // Shop handlers
-      const handleAddShop = async () => {
-        if (!newShop.name.trim() || !newShop.category) { showToast("error","Enter name and category"); return; }
-        const { error } = await supabase.from("cost_management_shops").insert({ 
-          name: newShop.name.trim(), 
-          category: newShop.category, 
-          is_favorite: newShop.is_favorite 
-        });
-        if (error) showToast("error", error.message.includes("duplicate") ? "Shop exists" : error.message);
-        else { showToast("success","Added"); setNewShop({ name: "", category: selectedShopCategory || "", is_favorite: false }); setShowAddShop(false); fetchData(); }
-      };
-      const handleUpdateShop = async () => {
-        if (!editingShop?.name.trim()) return;
-        const { error } = await supabase.from("cost_management_shops").update({ 
-          name: editingShop.name, 
-          category: editingShop.category,
-          is_favorite: editingShop.is_favorite 
-        }).eq("id", editingShop.id);
-        // Update expenses if shop name changed
-        if (!error && editingShop.originalName !== editingShop.name) {
-          await supabase.from("cost_management_expenses").update({ shop: editingShop.name }).eq("shop", editingShop.originalName);
-        }
-        if (error) showToast("error", error.message); else { showToast("success","Updated"); setEditingShop(null); fetchData(); }
-      };
-      const handleDeleteShop = async (id) => {
-        const { error } = await supabase.from("cost_management_shops").delete().eq("id", id);
-        if (error) showToast("error", error.message); else { showToast("success","Deleted"); fetchData(); }
-      };
-      const handleToggleFavorite = async (shop) => {
-        await supabase.from("cost_management_shops").update({ is_favorite: !shop.is_favorite }).eq("id", shop.id);
-        fetchData();
-      };
-
       const showToast = (type, msg) => { setToast({ type, msg }); setTimeout(() => setToast(null), 3000); };
 
       const tabStyle = (active) => ({
-        padding:"8px 14px",fontSize:11,fontWeight:active?600:400,cursor:"pointer",
+        padding:"8px 16px",fontSize:12,fontWeight:active?600:400,cursor:"pointer",
         background:active?theme.inputBg:"transparent",color:active?theme.text:theme.textMuted,
         border:"none",borderBottom:active?`2px solid ${theme.primary}`:"2px solid transparent",
       });
@@ -873,7 +796,6 @@
 
           <div style={{display:"flex",borderBottom:`1px solid ${theme.cardBorder}`,marginBottom:16,marginTop:8}}>
             <button onClick={() => setActiveTab("categories")} style={tabStyle(activeTab==="categories")}>📂 Categories</button>
-            <button onClick={() => setActiveTab("shops")} style={tabStyle(activeTab==="shops")}>🏪 Shops</button>
             <button onClick={() => setActiveTab("tags")} style={tabStyle(activeTab==="tags")}>🏷️ Tags</button>
           </div>
 
@@ -897,75 +819,6 @@
                 <button onClick={() => setShowAddCat(true)} style={{width:"100%",padding:"10px",borderRadius:8,border:`2px dashed ${theme.success}50`,background:"transparent",color:theme.success,cursor:"pointer",fontSize:12}}>+ Add Category</button>
               ) : (
                 <ItemForm item={newCat} setItem={setNewCat} onSave={handleAddCategory} onCancel={() => setShowAddCat(false)} emojis={EMOJI_OPTIONS} colors={COLOR_OPTIONS} saveLabel="Add" />
-              )}
-            </div>
-          )}
-
-          {/* SHOPS TAB */}
-          {activeTab === "shops" && (
-            <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:14,padding:"16px"}}>
-              <p style={{fontSize:11,color:theme.textDim,marginTop:0,marginBottom:12}}>Manage shops for each category. Favorite shops appear first when adding expenses.</p>
-              
-              {/* Category Filter */}
-              <div style={{marginBottom:12}}>
-                <select value={selectedShopCategory} onChange={e => setSelectedShopCategory(e.target.value)}
-                  style={{...inputStyle,fontSize:12,cursor:"pointer"}}>
-                  <option value="">All Categories</option>
-                  {categories.map(c => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
-                </select>
-              </div>
-
-              {/* Shop List */}
-              {filteredShops.length > 0 ? (
-                <div style={{maxHeight:300,overflowY:"auto",marginBottom:12}}>
-                  {filteredShops.map(shop => (
-                    <div key={shop.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 12px",background:theme.inputBg,borderRadius:8,marginBottom:6}}>
-                      <div style={{display:"flex",alignItems:"center",gap:10}}>
-                        <button onClick={() => handleToggleFavorite(shop)} style={{background:"none",border:"none",cursor:"pointer",fontSize:14}}>
-                          {shop.is_favorite ? "⭐" : "☆"}
-                        </button>
-                        <div>
-                          <div style={{color:theme.text,fontSize:13,fontWeight:500}}>{shop.name}</div>
-                          <div style={{color:theme.textDim,fontSize:10}}>{getCatIcon(shop.category)} {shop.category} • {getShopUsage(shop.name)} expenses</div>
-                        </div>
-                      </div>
-                      <div style={{display:"flex",gap:6}}>
-                        <button onClick={() => setEditingShop({ ...shop, originalName: shop.name })} style={{background:"none",border:"none",cursor:"pointer",fontSize:12}}>✏️</button>
-                        <button onClick={() => handleDeleteShop(shop.id)} style={{background:"none",border:"none",cursor:"pointer",fontSize:12,color:theme.danger}}>🗑️</button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div style={{color:theme.textDim,textAlign:"center",padding:20,fontSize:12}}>
-                  {selectedShopCategory ? `No shops in ${selectedShopCategory}` : "No shops yet"}
-                </div>
-              )}
-
-              {/* Add Shop */}
-              {!showAddShop ? (
-                <button onClick={() => { setShowAddShop(true); setNewShop({ name: "", category: selectedShopCategory || "", is_favorite: false }); }} 
-                  style={{width:"100%",padding:"10px",borderRadius:8,border:`2px dashed ${theme.primary}50`,background:"transparent",color:theme.primary,cursor:"pointer",fontSize:12}}>
-                  + Add Shop
-                </button>
-              ) : (
-                <div style={{background:theme.inputBg,borderRadius:10,padding:12}}>
-                  <input type="text" value={newShop.name} onChange={e => setNewShop({...newShop, name: e.target.value})} 
-                    placeholder="Shop name" style={{...inputStyle,marginBottom:8,fontSize:12}}/>
-                  <select value={newShop.category} onChange={e => setNewShop({...newShop, category: e.target.value})}
-                    style={{...inputStyle,marginBottom:8,fontSize:12,cursor:"pointer"}}>
-                    <option value="">Select category...</option>
-                    {categories.map(c => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
-                  </select>
-                  <label style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,fontSize:12,color:theme.textMuted,cursor:"pointer"}}>
-                    <input type="checkbox" checked={newShop.is_favorite} onChange={e => setNewShop({...newShop, is_favorite: e.target.checked})} />
-                    ⭐ Mark as favorite
-                  </label>
-                  <div style={{display:"flex",gap:6}}>
-                    <button onClick={() => setShowAddShop(false)} style={{flex:1,padding:"8px",borderRadius:6,border:`1px solid ${theme.cardBorder}`,background:"transparent",color:theme.textMuted,cursor:"pointer",fontSize:11}}>Cancel</button>
-                    <button onClick={handleAddShop} style={{flex:1,padding:"8px",borderRadius:6,border:"none",background:theme.primary,color:"#fff",cursor:"pointer",fontWeight:600,fontSize:11}}>Add</button>
-                  </div>
-                </div>
               )}
             </div>
           )}
@@ -1011,29 +864,6 @@
             <Modal onClose={() => setEditingTag(null)}>
               <h5 style={{color:"#fff",margin:"0 0 12px 0",fontSize:14}}>Edit Tag</h5>
               <ItemForm item={editingTag} setItem={setEditingTag} onSave={handleUpdateTag} onCancel={() => setEditingTag(null)} emojis={EMOJI_OPTIONS} colors={COLOR_OPTIONS} saveLabel="Save" />
-            </Modal>
-          )}
-
-          {/* Edit Shop Modal */}
-          {editingShop && (
-            <Modal onClose={() => setEditingShop(null)}>
-              <h5 style={{color:"#fff",margin:"0 0 12px 0",fontSize:14}}>Edit Shop</h5>
-              <div style={{background:theme.inputBg,borderRadius:10,padding:12}}>
-                <input type="text" value={editingShop.name} onChange={e => setEditingShop({...editingShop, name: e.target.value})} 
-                  placeholder="Shop name" style={{...inputStyle,marginBottom:8,fontSize:12}}/>
-                <select value={editingShop.category} onChange={e => setEditingShop({...editingShop, category: e.target.value})}
-                  style={{...inputStyle,marginBottom:8,fontSize:12,cursor:"pointer"}}>
-                  {categories.map(c => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
-                </select>
-                <label style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,fontSize:12,color:theme.textMuted,cursor:"pointer"}}>
-                  <input type="checkbox" checked={editingShop.is_favorite} onChange={e => setEditingShop({...editingShop, is_favorite: e.target.checked})} />
-                  ⭐ Favorite
-                </label>
-                <div style={{display:"flex",gap:6}}>
-                  <button onClick={() => setEditingShop(null)} style={{flex:1,padding:"8px",borderRadius:6,border:`1px solid ${theme.cardBorder}`,background:"transparent",color:theme.textMuted,cursor:"pointer",fontSize:11}}>Cancel</button>
-                  <button onClick={handleUpdateShop} style={{flex:1,padding:"8px",borderRadius:6,border:"none",background:theme.primary,color:"#fff",cursor:"pointer",fontWeight:600,fontSize:11}}>Save</button>
-                </div>
-              </div>
             </Modal>
           )}
         </div>
