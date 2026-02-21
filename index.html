@@ -267,7 +267,7 @@
               ) : view === "add" ? (
                 <AddEntryView recentEntries={recentEntries} allExpenses={RAW} />
               ) : view === "overview" ? (
-                <OverviewView {...{filtered,totalSpend,monthlyAvg,dailyAvg,monthlyData,catData,topShops}} />
+                <OverviewView {...{filtered,totalSpend,monthlyAvg,dailyAvg,monthlyData,catData,topShops}} allExpenses={RAW} />
               ) : view === "transactions" ? (
                 <TransactionsView pageTx={pageTx} txPage={txPage} setTxPage={setTxPage} txPages={txPages} />
               ) : (
@@ -1199,12 +1199,93 @@
     // ═══════════════════════════════════════════
     //  OVERVIEW VIEW
     // ═══════════════════════════════════════════
-    function OverviewView({ filtered, totalSpend, monthlyAvg, dailyAvg, monthlyData, catData, topShops }) {
+    function OverviewView({ filtered, totalSpend, monthlyAvg, dailyAvg, monthlyData, catData, topShops, allExpenses }) {
       const { theme, getCatIcon, getCatColor } = useTheme();
+      const [timeRange, setTimeRange] = useState("monthly"); // monthly, weekly, daily
+
+      // Calculate data for different time ranges
+      const chartData = useMemo(() => {
+        const now = new Date();
+        
+        if (timeRange === "monthly") {
+          // Last 12 months
+          const months = [];
+          for (let i = 11; i >= 0; i--) {
+            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+            const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+            const label = `${MONTHS_SHORT[d.getMonth() + 1]} ${String(d.getFullYear()).slice(2)}`;
+            months.push({ key, label, total: 0 });
+          }
+          allExpenses.forEach(e => {
+            const d = new Date(e.date);
+            const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+            const month = months.find(m => m.key === key);
+            if (month) month.total += e.amount;
+          });
+          return months;
+        }
+        
+        if (timeRange === "weekly") {
+          // Last 12 weeks
+          const weeks = [];
+          for (let i = 11; i >= 0; i--) {
+            const weekStart = new Date(now);
+            weekStart.setDate(now.getDate() - (i * 7) - now.getDay() + 1); // Monday
+            const weekEnd = new Date(weekStart);
+            weekEnd.setDate(weekStart.getDate() + 6);
+            const key = weekStart.toISOString().slice(0, 10);
+            const label = `${weekStart.getMonth() + 1}/${weekStart.getDate()}`;
+            weeks.push({ key, start: weekStart, end: weekEnd, label, total: 0 });
+          }
+          allExpenses.forEach(e => {
+            const d = new Date(e.date);
+            const week = weeks.find(w => d >= w.start && d <= w.end);
+            if (week) week.total += e.amount;
+          });
+          return weeks.map(w => ({ key: w.key, label: w.label, total: w.total }));
+        }
+        
+        if (timeRange === "daily") {
+          // Last 60 days
+          const days = [];
+          for (let i = 59; i >= 0; i--) {
+            const d = new Date(now);
+            d.setDate(now.getDate() - i);
+            const key = d.toISOString().slice(0, 10);
+            const label = `${d.getMonth() + 1}/${d.getDate()}`;
+            days.push({ key, label, total: 0 });
+          }
+          allExpenses.forEach(e => {
+            const day = days.find(d => d.key === e.date);
+            if (day) day.total += e.amount;
+          });
+          return days;
+        }
+        
+        return [];
+      }, [allExpenses, timeRange]);
+
+      // Calculate stats for the selected time range
+      const rangeStats = useMemo(() => {
+        const nonZeroPeriods = chartData.filter(d => d.total > 0);
+        const total = chartData.reduce((s, d) => s + d.total, 0);
+        const avg = nonZeroPeriods.length > 0 ? Math.round(total / nonZeroPeriods.length) : 0;
+        const max = Math.max(...chartData.map(d => d.total), 0);
+        const maxPeriod = chartData.find(d => d.total === max);
+        return { total, avg, max, maxPeriod };
+      }, [chartData]);
+
       const CustomTooltip = ({ active, payload, label }) => {
         if (!active || !payload?.length) return null;
         return (<div style={{background:"#1a1a2e",border:`1px solid ${theme.cardBorder}`,borderRadius:6,padding:"8px 12px",fontSize:11}}><div style={{fontWeight:600,color:"#fff"}}>{label}</div>{payload.map((p,i) => <div key={i} style={{color:theme.textMuted}}>{fmt(p.value)}</div>)}</div>);
       };
+
+      const rangeLabels = {
+        monthly: { title: "Monthly (Last 12 months)", avgLabel: "Avg/Month" },
+        weekly: { title: "Weekly (Last 12 weeks)", avgLabel: "Avg/Week" },
+        daily: { title: "Daily (Last 60 days)", avgLabel: "Avg/Day" },
+      };
+
       return (
         <>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(120px, 1fr))",gap:10,marginBottom:16}}>
@@ -1215,19 +1296,81 @@
               </div>
             ))}
           </div>
+
+          {/* Time Range Chart */}
           <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:12,padding:"16px 14px",marginBottom:14}}>
-            <h3 style={{fontSize:12,fontWeight:600,color:theme.textMuted,marginBottom:12,marginTop:0}}>Monthly Trend</h3>
-            <ResponsiveContainer width="100%" height={180}>
-              <AreaChart data={monthlyData}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+              <h3 style={{fontSize:12,fontWeight:600,color:theme.textMuted,margin:0}}>Spending Trend</h3>
+              <div style={{display:"flex",gap:4}}>
+                {["monthly", "weekly", "daily"].map(range => (
+                  <button key={range} onClick={() => setTimeRange(range)} style={{
+                    padding:"5px 10px",borderRadius:6,border:"none",cursor:"pointer",fontSize:10,fontWeight:timeRange===range?600:400,
+                    background:timeRange===range?theme.primaryGlow:theme.inputBg,
+                    color:timeRange===range?"#fff":theme.textMuted,
+                  }}>
+                    {range.charAt(0).toUpperCase() + range.slice(1)}
+                  </button>
+                ))}
+              </div>
+            </div>
+            
+            {/* Range Stats */}
+            <div style={{display:"flex",gap:16,marginBottom:12,flexWrap:"wrap"}}>
+              <div style={{fontSize:11,color:theme.textDim}}>
+                <span style={{color:theme.textMuted}}>Period Total:</span> <span style={{color:"#fff",fontWeight:600}}>{fmt(rangeStats.total)}</span>
+              </div>
+              <div style={{fontSize:11,color:theme.textDim}}>
+                <span style={{color:theme.textMuted}}>{rangeLabels[timeRange].avgLabel}:</span> <span style={{color:"#fff",fontWeight:600}}>{fmt(rangeStats.avg)}</span>
+              </div>
+              {rangeStats.maxPeriod && (
+                <div style={{fontSize:11,color:theme.textDim}}>
+                  <span style={{color:theme.textMuted}}>Peak:</span> <span style={{color:theme.warning,fontWeight:600}}>{rangeStats.maxPeriod.label} ({fmt(rangeStats.max)})</span>
+                </div>
+              )}
+            </div>
+
+            <ResponsiveContainer width="100%" height={220}>
+              <AreaChart data={chartData}>
                 <defs><linearGradient id="grad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={theme.primary} stopOpacity={0.3}/><stop offset="100%" stopColor={theme.primary} stopOpacity={0.02}/></linearGradient></defs>
                 <CartesianGrid strokeDasharray="3 3" stroke={theme.cardBorder}/>
-                <XAxis dataKey="label" tick={{fontSize:9,fill:theme.textDim}} axisLine={false} tickLine={false}/>
+                <XAxis 
+                  dataKey="label" 
+                  tick={{fontSize:timeRange==="daily"?7:9,fill:theme.textDim}} 
+                  axisLine={false} 
+                  tickLine={false}
+                  interval={timeRange==="daily"?9:0}
+                />
                 <YAxis tick={{fontSize:9,fill:theme.textDim}} axisLine={false} tickLine={false} tickFormatter={v => `¥${(v/1000).toFixed(0)}k`}/>
                 <Tooltip content={<CustomTooltip/>}/>
                 <Area type="monotone" dataKey="total" stroke={theme.primary} fill="url(#grad)" strokeWidth={2}/>
               </AreaChart>
             </ResponsiveContainer>
           </div>
+
+          {/* Bar Chart for same data */}
+          <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:12,padding:"16px 14px",marginBottom:14}}>
+            <h3 style={{fontSize:12,fontWeight:600,color:theme.textMuted,marginBottom:12,marginTop:0}}>
+              {rangeLabels[timeRange].title} - Comparison
+            </h3>
+            <ResponsiveContainer width="100%" height={180}>
+              <BarChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke={theme.cardBorder}/>
+                <XAxis 
+                  dataKey="label" 
+                  tick={{fontSize:timeRange==="daily"?6:8,fill:theme.textDim}} 
+                  axisLine={false} 
+                  tickLine={false}
+                  interval={timeRange==="daily"?14:0}
+                  angle={timeRange==="daily"?-45:0}
+                  textAnchor={timeRange==="daily"?"end":"middle"}
+                />
+                <YAxis tick={{fontSize:8,fill:theme.textDim}} axisLine={false} tickLine={false} tickFormatter={v => `¥${(v/1000).toFixed(0)}k`}/>
+                <Tooltip content={<CustomTooltip/>}/>
+                <Bar dataKey="total" fill={theme.primary} radius={[2,2,0,0]} maxBarSize={timeRange==="daily"?8:24}/>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))",gap:14}}>
             <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:12,padding:"16px 14px"}}>
               <h3 style={{fontSize:12,fontWeight:600,color:theme.textMuted,marginBottom:10,marginTop:0}}>Categories</h3>
@@ -1236,6 +1379,13 @@
                   {catData.map((e,i) => <Cell key={i} fill={getCatColor(e.name)} stroke="none"/>)}
                 </Pie><Tooltip content={<CustomTooltip/>}/></PieChart>
               </ResponsiveContainer>
+              <div style={{display:"flex",flexWrap:"wrap",gap:6,justifyContent:"center",marginTop:6}}>
+                {catData.slice(0,5).map((c,i) => (
+                  <div key={i} style={{display:"flex",alignItems:"center",gap:3,fontSize:9,color:theme.textMuted}}>
+                    <div style={{width:6,height:6,borderRadius:2,background:getCatColor(c.name)}}/>{c.name}
+                  </div>
+                ))}
+              </div>
             </div>
             <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:12,padding:"16px 14px"}}>
               <h3 style={{fontSize:12,fontWeight:600,color:theme.textMuted,marginBottom:10,marginTop:0}}>Top Shops</h3>
