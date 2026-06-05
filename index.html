@@ -85,6 +85,12 @@
     const fmt = (n) => `¥${n.toLocaleString()}`;
     const todayStr = () => new Date().toISOString().slice(0, 10);
 
+    // ── Graph filters (overview charts) ──
+    const GRAPH_FILTER_KEY = "cost_management_graph_filters";
+    const DEFAULT_GRAPH_FILTERS = { excludeOutliers: false, excludeFixed: false, categories: [], shops: [], tags: [], dateFrom: "", dateTo: "" };
+    // localStorage wiring is added in the persistence phase; until then defaults only.
+    function getStoredGraphFilters() { return { ...DEFAULT_GRAPH_FILTERS, categories: [], shops: [], tags: [] }; }
+
     function enrichRow(r) {
       const d = new Date(r.date);
       return { ...r, year: d.getFullYear(), month: d.getMonth() + 1 };
@@ -1200,8 +1206,31 @@
     //  OVERVIEW VIEW
     // ═══════════════════════════════════════════
     function OverviewView({ filtered, totalSpend, monthlyAvg, dailyAvg, monthlyData, catData, topShops, allExpenses }) {
-      const { theme, getCatIcon, getCatColor } = useTheme();
+      const { theme, getCatIcon, getCatColor, categories, shops, tags } = useTheme();
       const [timeRange, setTimeRange] = useState("monthly"); // monthly, weekly, daily
+      const [filters, setFilters] = useState(getStoredGraphFilters);
+      const [filterOpen, setFilterOpen] = useState(true);
+
+      const hasActiveFilters = filters.excludeOutliers || filters.excludeFixed ||
+        filters.categories.length > 0 || filters.shops.length > 0 || filters.tags.length > 0 ||
+        !!filters.dateFrom || !!filters.dateTo;
+
+      const toggleField = (field) => setFilters(f => ({ ...f, [field]: !f[field] }));
+      const toggleInArray = (field, val) => setFilters(f => ({
+        ...f, [field]: f[field].includes(val) ? f[field].filter(x => x !== val) : [...f[field], val],
+      }));
+      const setDate = (field, val) => setFilters(f => ({ ...f, [field]: val }));
+      const resetFilters = () => setFilters({ ...DEFAULT_GRAPH_FILTERS, categories: [], shops: [], tags: [] });
+
+      const chipStyle = (active, color) => ({
+        padding: "5px 10px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 11,
+        display: "flex", alignItems: "center", gap: 4,
+        background: active ? `${color}30` : theme.cardBg,
+        color: active ? color : theme.textMuted,
+        outline: active ? `2px solid ${color}` : `1px solid ${theme.cardBorder}`,
+      });
+      const filterLabelStyle = { fontSize: 10, color: theme.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6, display: "block" };
+      const dateInputStyle = { background: theme.inputBg, border: `1px solid ${theme.inputBorder}`, color: theme.text, padding: "6px 10px", borderRadius: 8, fontSize: 12, fontFamily: "inherit" };
 
       // Calculate data for different time ranges
       const chartData = useMemo(() => {
@@ -1295,6 +1324,82 @@
                 <div style={{fontSize:16,fontWeight:700,color:"#fff"}}>{x.v}</div>
               </div>
             ))}
+          </div>
+
+          {/* Graph Filter Bar */}
+          <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:12,marginBottom:14,overflow:"hidden"}}>
+            <button onClick={() => setFilterOpen(o => !o)} style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 14px",background:"transparent",border:"none",cursor:"pointer"}}>
+              <span style={{fontSize:12,fontWeight:600,color:theme.textMuted,display:"flex",alignItems:"center",gap:6}}>
+                🔎 Graph Filters
+                {hasActiveFilters && <span style={{fontSize:9,background:theme.primaryGlow,color:"#fff",padding:"2px 6px",borderRadius:6}}>active</span>}
+              </span>
+              <span style={{color:theme.textMuted,fontSize:11}}>{filterOpen ? "▲" : "▼"}</span>
+            </button>
+            {filterOpen && (
+              <div style={{padding:"0 14px 14px",display:"flex",flexDirection:"column",gap:12}}>
+                {/* Exclude toggles */}
+                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                  <button className="cm-chip" onClick={() => toggleField("excludeOutliers")} style={chipStyle(filters.excludeOutliers, EXPENSE_TYPES.outlier.color)}>⚡ Exclude outliers</button>
+                  <button className="cm-chip" onClick={() => toggleField("excludeFixed")} style={chipStyle(filters.excludeFixed, EXPENSE_TYPES.fixed.color)}>📌 Exclude fixed</button>
+                </div>
+                {/* Categories */}
+                <div>
+                  <label style={filterLabelStyle}>Categories</label>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                    {categories.map(c => (
+                      <button key={c.name} className="cm-chip" onClick={() => toggleInArray("categories", c.name)} style={chipStyle(filters.categories.includes(c.name), c.color)}>
+                        <span>{c.icon}</span>{c.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {/* Shops */}
+                {shops.length > 0 && (
+                  <div>
+                    <label style={filterLabelStyle}>Shops</label>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                      {shops.map(s => (
+                        <button key={s.id} className="cm-chip" onClick={() => toggleInArray("shops", s.name)} style={chipStyle(filters.shops.includes(s.name), theme.primary)}>
+                          {s.is_favorite ? "⭐ " : ""}{s.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {/* Tags */}
+                {tags.length > 0 && (
+                  <div>
+                    <label style={filterLabelStyle}>Tags</label>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                      {tags.map(t => (
+                        <button key={t.name} className="cm-chip" onClick={() => toggleInArray("tags", t.name)} style={chipStyle(filters.tags.includes(t.name), t.color)}>
+                          <span>{t.icon}</span>{t.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {/* Custom date range */}
+                <div>
+                  <label style={filterLabelStyle}>Custom date range</label>
+                  <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                    <input type="date" value={filters.dateFrom} onChange={e => setDate("dateFrom", e.target.value)} style={dateInputStyle}/>
+                    <span style={{color:theme.textDim,fontSize:11}}>to</span>
+                    <input type="date" value={filters.dateTo} onChange={e => setDate("dateTo", e.target.value)} style={dateInputStyle}/>
+                    {(filters.dateFrom || filters.dateTo) && (
+                      <button onClick={() => setFilters(f => ({...f, dateFrom:"", dateTo:""}))} style={{background:"none",border:"none",color:theme.textMuted,cursor:"pointer",fontSize:11}}>clear</button>
+                    )}
+                  </div>
+                </div>
+                {/* Reset */}
+                <div>
+                  <button onClick={resetFilters} disabled={!hasActiveFilters} style={{
+                    padding:"7px 14px",borderRadius:8,border:`1px solid ${theme.cardBorder}`,fontSize:11,fontWeight:500,
+                    cursor:hasActiveFilters?"pointer":"not-allowed",background:theme.inputBg,color:theme.textMuted,opacity:hasActiveFilters?1:0.5,
+                  }}>↺ Reset filters</button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Time Range Chart */}
