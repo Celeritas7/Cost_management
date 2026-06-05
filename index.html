@@ -90,6 +90,21 @@
     const DEFAULT_GRAPH_FILTERS = { excludeOutliers: false, excludeFixed: false, categories: [], shops: [], tags: [], dateFrom: "", dateTo: "" };
     // localStorage wiring is added in the persistence phase; until then defaults only.
     function getStoredGraphFilters() { return { ...DEFAULT_GRAPH_FILTERS, categories: [], shops: [], tags: [] }; }
+    function applyGraphFilters(rows, f) {
+      return rows.filter(r => {
+        if (f.excludeOutliers && r.expense_type === "outlier") return false;
+        if (f.excludeFixed && r.expense_type === "fixed") return false;
+        if (f.categories.length && !f.categories.includes(r.category)) return false;
+        if (f.shops.length && !f.shops.includes(r.shop)) return false;
+        if (f.tags.length) {
+          const rowTags = (r.tags || "").split(",").map(t => t.trim()).filter(Boolean);
+          if (!f.tags.some(t => rowTags.includes(t))) return false;
+        }
+        if (f.dateFrom && r.date < f.dateFrom) return false;
+        if (f.dateTo && r.date > f.dateTo) return false;
+        return true;
+      });
+    }
 
     function enrichRow(r) {
       const d = new Date(r.date);
@@ -1233,66 +1248,116 @@
       const dateInputStyle = { background: theme.inputBg, border: `1px solid ${theme.inputBorder}`, color: theme.text, padding: "6px 10px", borderRadius: 8, fontSize: 12, fontFamily: "inherit" };
 
       // Calculate data for different time ranges
+      // Graph-filtered dataset (filters applied on top of the raw expenses).
+      const graphFiltered = useMemo(() => applyGraphFilters(allExpenses, filters), [allExpenses, filters]);
+
       const chartData = useMemo(() => {
+        const fd = graphFiltered;
         const now = new Date();
-        
+        const custom = filters.dateFrom || filters.dateTo;
+        const parse = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
+        const sortedDates = fd.map(e => e.date).sort();
+        // When a custom range is partially set, fall back to the data extent for the open side.
+        const fromD = filters.dateFrom ? parse(filters.dateFrom) : (sortedDates.length ? parse(sortedDates[0]) : now);
+        const toD = filters.dateTo ? parse(filters.dateTo) : (sortedDates.length ? parse(sortedDates[sortedDates.length - 1]) : now);
+        const dayKey = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+        const mondayOf = (dt) => { const x = new Date(dt); const day = x.getDay(); x.setDate(x.getDate() - (day === 0 ? 6 : day - 1)); x.setHours(0, 0, 0, 0); return x; };
+
         if (timeRange === "monthly") {
-          // Last 12 months
           const months = [];
-          for (let i = 11; i >= 0; i--) {
-            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+          const startM = custom ? new Date(fromD.getFullYear(), fromD.getMonth(), 1) : new Date(now.getFullYear(), now.getMonth() - 11, 1);
+          const endM = custom ? new Date(toD.getFullYear(), toD.getMonth(), 1) : new Date(now.getFullYear(), now.getMonth(), 1);
+          let d = new Date(startM);
+          while (d <= endM) {
             const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-            const label = `${MONTHS_SHORT[d.getMonth() + 1]} ${String(d.getFullYear()).slice(2)}`;
-            months.push({ key, label, total: 0 });
+            months.push({ key, label: `${MONTHS_SHORT[d.getMonth() + 1]} ${String(d.getFullYear()).slice(2)}`, total: 0 });
+            d = new Date(d.getFullYear(), d.getMonth() + 1, 1);
           }
-          allExpenses.forEach(e => {
-            const d = new Date(e.date);
-            const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+          fd.forEach(e => {
+            const d2 = new Date(e.date);
+            const key = `${d2.getFullYear()}-${String(d2.getMonth() + 1).padStart(2, "0")}`;
             const month = months.find(m => m.key === key);
             if (month) month.total += e.amount;
           });
           return months;
         }
-        
+
         if (timeRange === "weekly") {
-          // Last 12 weeks
           const weeks = [];
-          for (let i = 11; i >= 0; i--) {
-            const weekStart = new Date(now);
-            weekStart.setDate(now.getDate() - (i * 7) - now.getDay() + 1); // Monday
-            const weekEnd = new Date(weekStart);
-            weekEnd.setDate(weekStart.getDate() + 6);
-            const key = weekStart.toISOString().slice(0, 10);
-            const label = `${weekStart.getMonth() + 1}/${weekStart.getDate()}`;
-            weeks.push({ key, start: weekStart, end: weekEnd, label, total: 0 });
+          const lastStart = custom ? mondayOf(toD) : mondayOf(now);
+          let cursor = custom ? mondayOf(fromD) : (() => { const c = new Date(lastStart); c.setDate(c.getDate() - 11 * 7); return c; })();
+          while (cursor <= lastStart) {
+            const weekStart = new Date(cursor);
+            const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 6); weekEnd.setHours(23, 59, 59, 999);
+            weeks.push({ key: dayKey(weekStart), start: weekStart, end: weekEnd, label: `${weekStart.getMonth() + 1}/${weekStart.getDate()}`, total: 0 });
+            cursor = new Date(cursor); cursor.setDate(cursor.getDate() + 7);
           }
-          allExpenses.forEach(e => {
-            const d = new Date(e.date);
-            const week = weeks.find(w => d >= w.start && d <= w.end);
+          fd.forEach(e => {
+            const d2 = new Date(e.date);
+            const week = weeks.find(w => d2 >= w.start && d2 <= w.end);
             if (week) week.total += e.amount;
           });
           return weeks.map(w => ({ key: w.key, label: w.label, total: w.total }));
         }
-        
+
         if (timeRange === "daily") {
-          // Last 60 days
           const days = [];
-          for (let i = 59; i >= 0; i--) {
-            const d = new Date(now);
-            d.setDate(now.getDate() - i);
-            const key = d.toISOString().slice(0, 10);
-            const label = `${d.getMonth() + 1}/${d.getDate()}`;
-            days.push({ key, label, total: 0 });
+          let cursor = custom ? new Date(fromD) : (() => { const c = new Date(now); c.setDate(c.getDate() - 59); return c; })();
+          const endD = custom ? new Date(toD) : new Date(now);
+          cursor.setHours(0, 0, 0, 0); endD.setHours(0, 0, 0, 0);
+          while (cursor <= endD) {
+            const key = dayKey(cursor);
+            days.push({ key, label: `${cursor.getMonth() + 1}/${cursor.getDate()}`, total: 0 });
+            cursor = new Date(cursor); cursor.setDate(cursor.getDate() + 1);
           }
-          allExpenses.forEach(e => {
+          fd.forEach(e => {
             const day = days.find(d => d.key === e.date);
             if (day) day.total += e.amount;
           });
           return days;
         }
-        
+
         return [];
-      }, [allExpenses, timeRange]);
+      }, [graphFiltered, timeRange, filters.dateFrom, filters.dateTo]);
+
+      // Date span the chart currently covers (for the exclusion summary).
+      const windowRange = useMemo(() => {
+        const now = new Date();
+        const fmtLocal = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+        if (filters.dateFrom || filters.dateTo) {
+          return { start: filters.dateFrom || "0000-01-01", end: filters.dateTo || "9999-12-31" };
+        }
+        let start;
+        if (timeRange === "monthly") start = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+        else if (timeRange === "weekly") { start = new Date(now); start.setDate(now.getDate() - now.getDay() + 1 - 11 * 7); }
+        else { start = new Date(now); start.setDate(now.getDate() - 59); }
+        return { start: fmtLocal(start), end: fmtLocal(now) };
+      }, [filters.dateFrom, filters.dateTo, timeRange]);
+
+      // Summary of what the active filters removed from the current window.
+      const exclusionSummary = useMemo(() => {
+        if (!hasActiveFilters) return null;
+        const windowRaw = allExpenses.filter(e => e.date >= windowRange.start && e.date <= windowRange.end);
+        const kept = new Set(applyGraphFilters(windowRaw, filters).map(e => e.id));
+        const excluded = windowRaw.filter(e => !kept.has(e.id));
+        if (!excluded.length) return null;
+        const sumOf = (rows) => rows.reduce((s, r) => s + r.amount, 0);
+        const segs = [];
+        const counted = new Set();
+        if (filters.excludeOutliers) {
+          const o = excluded.filter(e => e.expense_type === "outlier");
+          o.forEach(e => counted.add(e.id));
+          if (o.length) segs.push(`${o.length} outlier${o.length > 1 ? "s" : ""} (${fmt(sumOf(o))})`);
+        }
+        if (filters.excludeFixed) {
+          const fx = excluded.filter(e => e.expense_type === "fixed");
+          fx.forEach(e => counted.add(e.id));
+          if (fx.length) segs.push(`${fx.length} fixed (${fmt(sumOf(fx))})`);
+        }
+        const narrowed = excluded.filter(e => !counted.has(e.id));
+        if (narrowed.length) segs.push(`${narrowed.length} filtered out (${fmt(sumOf(narrowed))})`);
+        return segs.length ? "Excluded: " + segs.join(", ") : null;
+      }, [allExpenses, filters, windowRange, hasActiveFilters]);
 
       // Calculate stats for the selected time range
       const rangeStats = useMemo(() => {
@@ -1475,6 +1540,11 @@
               </BarChart>
             </ResponsiveContainer>
           </div>
+
+          {/* Exclusion summary */}
+          {exclusionSummary && (
+            <div className="cm-fade" style={{fontSize:11,color:theme.textDim,marginTop:-4,marginBottom:14}}>{exclusionSummary}</div>
+          )}
 
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))",gap:14}}>
             <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:12,padding:"16px 14px"}}>
