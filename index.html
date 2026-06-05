@@ -21,6 +21,13 @@
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
     input:focus, select:focus { outline: none; }
+    @keyframes cmFadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+    @keyframes cmToastIn { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+    .cm-fade { animation: cmFadeIn 0.35s ease; }
+    .cm-toast { animation: cmToastIn 0.25s ease; }
+    .cm-chip { transition: background 0.15s ease, color 0.15s ease, outline-color 0.15s ease, transform 0.1s ease, filter 0.15s ease; }
+    .cm-chip:hover { filter: brightness(1.18); transform: translateY(-1px); }
+    .cm-chip:active { transform: scale(0.94); }
   </style>
 </head>
 <body>
@@ -84,6 +91,7 @@
 
     const fmt = (n) => `¥${n.toLocaleString()}`;
     const todayStr = () => new Date().toISOString().slice(0, 10);
+    const vibrate = (ms) => { try { if (navigator.vibrate) navigator.vibrate(ms); } catch (e) {} };
 
     // ── Graph filters (overview charts) ──
     const GRAPH_FILTER_KEY = "cost_management_graph_filters";
@@ -1239,19 +1247,25 @@
       const [timeRange, setTimeRange] = useState("monthly"); // monthly, weekly, daily
       const [filters, setFilters] = useState(getStoredGraphFilters);
       const [filterOpen, setFilterOpen] = useState(true);
+      const [filterToast, setFilterToast] = useState(null);
 
       useEffect(() => { setStoredGraphFilters(filters); }, [filters]);
+      useEffect(() => {
+        if (!filterToast) return;
+        const t = setTimeout(() => setFilterToast(null), 2000);
+        return () => clearTimeout(t);
+      }, [filterToast]);
 
       const hasActiveFilters = filters.excludeOutliers || filters.excludeFixed ||
         filters.categories.length > 0 || filters.shops.length > 0 || filters.tags.length > 0 ||
         !!filters.dateFrom || !!filters.dateTo;
 
-      const toggleField = (field) => setFilters(f => ({ ...f, [field]: !f[field] }));
-      const toggleInArray = (field, val) => setFilters(f => ({
+      const toggleField = (field) => { vibrate(10); setFilters(f => ({ ...f, [field]: !f[field] })); };
+      const toggleInArray = (field, val) => { vibrate(10); setFilters(f => ({
         ...f, [field]: f[field].includes(val) ? f[field].filter(x => x !== val) : [...f[field], val],
-      }));
+      })); };
       const setDate = (field, val) => setFilters(f => ({ ...f, [field]: val }));
-      const resetFilters = () => setFilters({ ...DEFAULT_GRAPH_FILTERS, categories: [], shops: [], tags: [] });
+      const resetFilters = () => { vibrate(10); setFilters({ ...DEFAULT_GRAPH_FILTERS, categories: [], shops: [], tags: [] }); setFilterToast("Filters reset"); };
 
       const chipStyle = (active, color) => ({
         padding: "5px 10px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 11,
@@ -1398,6 +1412,11 @@
 
       return (
         <>
+          {filterToast && (
+            <div className="cm-toast" style={{position:"fixed",top:16,right:16,zIndex:999,padding:"10px 16px",borderRadius:10,fontSize:13,fontWeight:500,background:theme.primary,color:"#fff",boxShadow:"0 4px 16px rgba(0,0,0,0.3)"}}>
+              ↺ {filterToast}
+            </div>
+          )}
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(120px, 1fr))",gap:10,marginBottom:16}}>
             {[{l:"Total",v:fmt(totalSpend),c:theme.primary},{l:"Monthly",v:fmt(monthlyAvg),c:theme.success},{l:"Daily",v:fmt(dailyAvg),c:theme.warning},{l:"Count",v:filtered.length,c:"#ec4899"}].map((x,i) => (
               <div key={i} style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:10,padding:"14px 12px",borderLeft:`3px solid ${x.c}`}}>
@@ -1528,7 +1547,7 @@
                 />
                 <YAxis tick={{fontSize:9,fill:theme.textDim}} axisLine={false} tickLine={false} tickFormatter={v => `¥${(v/1000).toFixed(0)}k`}/>
                 <Tooltip content={<CustomTooltip/>}/>
-                <Area type="monotone" dataKey="total" stroke={theme.primary} fill="url(#grad)" strokeWidth={2}/>
+                <Area type="monotone" dataKey="total" stroke={theme.primary} fill="url(#grad)" strokeWidth={2} isAnimationActive={true} animationDuration={450}/>
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -1552,7 +1571,7 @@
                 />
                 <YAxis tick={{fontSize:8,fill:theme.textDim}} axisLine={false} tickLine={false} tickFormatter={v => `¥${(v/1000).toFixed(0)}k`}/>
                 <Tooltip content={<CustomTooltip/>}/>
-                <Bar dataKey="total" fill={theme.primary} radius={[2,2,0,0]} maxBarSize={timeRange==="daily"?8:24}/>
+                <Bar dataKey="total" fill={theme.primary} radius={[2,2,0,0]} maxBarSize={timeRange==="daily"?8:24} isAnimationActive={true} animationDuration={450}/>
               </BarChart>
             </ResponsiveContainer>
           </div>
