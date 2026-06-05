@@ -88,8 +88,22 @@
     // ── Graph filters (overview charts) ──
     const GRAPH_FILTER_KEY = "cost_management_graph_filters";
     const DEFAULT_GRAPH_FILTERS = { excludeOutliers: false, excludeFixed: false, categories: [], shops: [], tags: [], dateFrom: "", dateTo: "" };
-    // localStorage wiring is added in the persistence phase; until then defaults only.
-    function getStoredGraphFilters() { return { ...DEFAULT_GRAPH_FILTERS, categories: [], shops: [], tags: [] }; }
+    function getStoredGraphFilters() {
+      try {
+        const stored = localStorage.getItem(GRAPH_FILTER_KEY);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          return {
+            ...DEFAULT_GRAPH_FILTERS, ...parsed,
+            categories: Array.isArray(parsed.categories) ? parsed.categories : [],
+            shops: Array.isArray(parsed.shops) ? parsed.shops : [],
+            tags: Array.isArray(parsed.tags) ? parsed.tags : [],
+          };
+        }
+      } catch (e) {}
+      return { ...DEFAULT_GRAPH_FILTERS, categories: [], shops: [], tags: [] };
+    }
+    function setStoredGraphFilters(f) { try { localStorage.setItem(GRAPH_FILTER_KEY, JSON.stringify(f)); } catch (e) {} }
     function applyGraphFilters(rows, f) {
       return rows.filter(r => {
         if (f.excludeOutliers && r.expense_type === "outlier") return false;
@@ -1225,6 +1239,8 @@
       const [timeRange, setTimeRange] = useState("monthly"); // monthly, weekly, daily
       const [filters, setFilters] = useState(getStoredGraphFilters);
       const [filterOpen, setFilterOpen] = useState(true);
+
+      useEffect(() => { setStoredGraphFilters(filters); }, [filters]);
 
       const hasActiveFilters = filters.excludeOutliers || filters.excludeFixed ||
         filters.categories.length > 0 || filters.shops.length > 0 || filters.tags.length > 0 ||
