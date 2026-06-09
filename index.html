@@ -1359,7 +1359,7 @@
         }
         let start;
         if (timeRange === "monthly") start = new Date(now.getFullYear(), now.getMonth() - 11, 1);
-        else if (timeRange === "weekly") { start = new Date(now); start.setDate(now.getDate() - now.getDay() + 1 - 11 * 7); }
+        else if (timeRange === "weekly") { start = new Date(now); const day = now.getDay(); start.setDate(now.getDate() - (day === 0 ? 6 : day - 1) - 11 * 7); }
         else { start = new Date(now); start.setDate(now.getDate() - 59); }
         return { start: fmtLocal(start), end: fmtLocal(now) };
       }, [filters.dateFrom, filters.dateTo, timeRange]);
