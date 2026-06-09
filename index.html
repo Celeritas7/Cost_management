@@ -1796,6 +1796,10 @@
       const [deleting, setDeleting] = useState(null);
       const [saving, setSaving] = useState(false);
       const [newId, setNewId] = useState(null);
+      const dragItemRef = useRef(null);
+      const [dragId, setDragId] = useState(null);
+      const [overId, setOverId] = useState(null);
+      const [dragEnabledId, setDragEnabledId] = useState(null);
 
       const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2500); };
 
@@ -1885,6 +1889,29 @@
         showToast("Deleted");
       };
 
+      // ── Drag-to-reorder (within a frequency group) ──
+      const clearDrag = () => { dragItemRef.current = null; setDragId(null); setOverId(null); setDragEnabledId(null); };
+      const persistOrder = (rows) => Promise.all(rows.map(it =>
+        supabase.from("cost_management_recurring").update({ sort_order: it.sort_order }).eq("id", it.id)
+      ));
+      const onRowDrop = (target) => {
+        const dragged = dragItemRef.current;
+        if (!dragged || dragged.id === target.id || dragged.frequency !== target.frequency) { clearDrag(); return; }
+        const freq = dragged.frequency;
+        const group = grouped[freq];
+        const fromIdx = group.findIndex(i => i.id === dragged.id);
+        const toIdx = group.findIndex(i => i.id === target.id);
+        if (fromIdx < 0 || toIdx < 0) { clearDrag(); return; }
+        const reordered = [...group];
+        const [moved] = reordered.splice(fromIdx, 1);
+        reordered.splice(toIdx, 0, moved);
+        const renumbered = reordered.map((it, idx) => ({ ...it, sort_order: idx }));
+        setItems(prev => [...prev.filter(i => i.frequency !== freq), ...renumbered]);
+        vibrate(10);
+        persistOrder(renumbered).catch(() => { showToast("Reorder failed"); fetchList(); });
+        clearDrag();
+      };
+
       const togglePill = (on) => ({
         padding: "4px 10px", borderRadius: 14, border: "none", cursor: "pointer", fontSize: 10, fontWeight: 600,
         background: on ? `${theme.success}25` : theme.inputBg,
@@ -1893,11 +1920,21 @@
       });
 
       const RecurringRow = ({ item }) => (
-        <div style={{
-          display: "flex", alignItems: "center", gap: 10, padding: "12px 14px",
-          background: theme.inputBg, borderRadius: 10, marginBottom: 8,
-          opacity: item.is_active ? 1 : 0.5,
-        }}>
+        <div
+          draggable={dragEnabledId === item.id}
+          onDragStart={(e) => { dragItemRef.current = item; setDragId(item.id); e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", String(item.id)); } catch (err) {} }}
+          onDragOver={(e) => { if (dragItemRef.current && dragItemRef.current.frequency === item.frequency) { e.preventDefault(); setOverId(item.id); } }}
+          onDragLeave={() => setOverId(o => (o === item.id ? null : o))}
+          onDrop={(e) => { e.preventDefault(); onRowDrop(item); }}
+          onDragEnd={clearDrag}
+          className={dragId === item.id ? "cm-dragging" : ""}
+          style={{
+            display: "flex", alignItems: "center", gap: 10, padding: "12px 14px",
+            background: theme.inputBg, borderRadius: 10, marginBottom: 8,
+            opacity: item.is_active ? 1 : 0.5,
+            borderTop: overId === item.id ? `2px solid ${theme.primary}` : "2px solid transparent",
+            transition: "box-shadow 0.15s ease, transform 0.15s ease",
+          }}>
           <div onClick={() => openEdit(item)} style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0, cursor: "pointer" }}>
             <span style={{ fontSize: 20 }}>{getCatIcon(item.category)}</span>
             <div style={{ minWidth: 0 }}>
@@ -1912,6 +1949,13 @@
           </div>
           <span onClick={() => openEdit(item)} style={{ fontSize: 14, fontWeight: 700, color: "#fff", whiteSpace: "nowrap", cursor: "pointer" }}>{fmt(item.amount)}</span>
           <button onClick={(e) => { e.stopPropagation(); handleToggle(item); }} style={togglePill(item.is_active)}>{item.is_active ? "On" : "Off"}</button>
+          <span
+            onMouseDown={() => setDragEnabledId(item.id)}
+            onMouseUp={() => setDragEnabledId(d => (d === item.id ? null : d))}
+            onTouchStart={() => setDragEnabledId(item.id)}
+            title="Drag to reorder"
+            style={{ cursor: "grab", color: theme.textDim, fontSize: 16, padding: "0 2px", userSelect: "none", touchAction: "none" }}
+          >⠿</span>
         </div>
       );
 
