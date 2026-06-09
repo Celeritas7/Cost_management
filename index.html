@@ -1792,6 +1792,8 @@
       const [loading, setLoading] = useState(true);
       const [toast, setToast] = useState(null);
       const [showAdd, setShowAdd] = useState(false);
+      const [editing, setEditing] = useState(null);
+      const [deleting, setDeleting] = useState(null);
       const [saving, setSaving] = useState(false);
       const [newId, setNewId] = useState(null);
 
@@ -1849,6 +1851,40 @@
         setTimeout(() => setNewId(null), 1000);
       };
 
+      const openEdit = (item) => setEditing({
+        id: item.id, name: item.name, amount: item.amount, category: item.category, shop: item.shop,
+        frequency: item.frequency, day_value: item.day_value, expense_type: item.expense_type || "normal",
+        tags: (item.tags || "").split(",").filter(Boolean), is_active: item.is_active, notes: item.notes || "",
+        _origFreq: item.frequency,
+      });
+
+      const handleEdit = async (form) => {
+        setSaving(true);
+        const rec = buildRecord(form);
+        // If the frequency group changed, re-append at the end of the new group.
+        if (form.frequency !== form._origFreq) {
+          const maxSort = grouped[form.frequency].reduce((m, i) => Math.max(m, i.sort_order ?? 0), -1);
+          rec.sort_order = maxSort + 1;
+        }
+        const { error } = await supabase.from("cost_management_recurring").update(rec).eq("id", form.id);
+        setSaving(false);
+        if (error) { showToast(error.message); return; }
+        setEditing(null);
+        showToast("Updated");
+        vibrate(10);
+        await fetchList();
+      };
+
+      const handleDelete = async () => {
+        const id = deleting.id;
+        setDeleting(null);
+        vibrate(10);
+        const { error } = await supabase.from("cost_management_recurring").delete().eq("id", id);
+        if (error) { showToast(error.message); return; }
+        setItems(prev => prev.filter(i => i.id !== id));
+        showToast("Deleted");
+      };
+
       const togglePill = (on) => ({
         padding: "4px 10px", borderRadius: 14, border: "none", cursor: "pointer", fontSize: 10, fontWeight: 600,
         background: on ? `${theme.success}25` : theme.inputBg,
@@ -1862,7 +1898,7 @@
           background: theme.inputBg, borderRadius: 10, marginBottom: 8,
           opacity: item.is_active ? 1 : 0.5,
         }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
+          <div onClick={() => openEdit(item)} style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0, cursor: "pointer" }}>
             <span style={{ fontSize: 20 }}>{getCatIcon(item.category)}</span>
             <div style={{ minWidth: 0 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -1874,8 +1910,8 @@
               </div>
             </div>
           </div>
-          <span style={{ fontSize: 14, fontWeight: 700, color: "#fff", whiteSpace: "nowrap" }}>{fmt(item.amount)}</span>
-          <button onClick={() => handleToggle(item)} style={togglePill(item.is_active)}>{item.is_active ? "On" : "Off"}</button>
+          <span onClick={() => openEdit(item)} style={{ fontSize: 14, fontWeight: 700, color: "#fff", whiteSpace: "nowrap", cursor: "pointer" }}>{fmt(item.amount)}</span>
+          <button onClick={(e) => { e.stopPropagation(); handleToggle(item); }} style={togglePill(item.is_active)}>{item.is_active ? "On" : "Off"}</button>
         </div>
       );
 
@@ -1924,6 +1960,35 @@
             <Modal onClose={() => setShowAdd(false)}>
               <h4 style={{ color: "#fff", fontSize: 14, margin: "0 0 12px 0" }}>🔁 New Recurring Entry</h4>
               <RecurringForm initial={blankForm} saving={saving} onSave={handleAdd} onCancel={() => setShowAdd(false)} />
+            </Modal>
+          )}
+
+          {/* Edit modal */}
+          {editing && (
+            <Modal onClose={() => setEditing(null)}>
+              <h4 style={{ color: "#fff", fontSize: 14, margin: "0 0 12px 0" }}>✏️ Edit Recurring Entry</h4>
+              <RecurringForm
+                initial={editing}
+                saving={saving}
+                onSave={handleEdit}
+                onCancel={() => setEditing(null)}
+                onDelete={() => setDeleting(editing)}
+              />
+            </Modal>
+          )}
+
+          {/* Delete confirm */}
+          {deleting && (
+            <Modal onClose={() => setDeleting(null)}>
+              <h4 style={{ color: theme.danger, fontSize: 14, margin: "0 0 8px 0" }}>Delete this recurring entry?</h4>
+              <div style={{ background: theme.inputBg, borderRadius: 6, padding: 10, marginBottom: 10, display: "flex", justifyContent: "space-between" }}>
+                <span style={{ color: theme.text, fontSize: 12 }}>{getCatIcon(deleting.category)} {deleting.name}</span>
+                <span style={{ color: "#fff", fontWeight: 600, fontSize: 12 }}>{fmt(deleting.amount)}</span>
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => setDeleting(null)} style={{ flex: 1, padding: "8px", borderRadius: 6, border: `1px solid ${theme.cardBorder}`, background: "transparent", color: theme.textMuted, cursor: "pointer", fontSize: 11 }}>Cancel</button>
+                <button onClick={handleDelete} style={{ flex: 1, padding: "8px", borderRadius: 6, border: "none", background: theme.danger, color: "#fff", cursor: "pointer", fontWeight: 600, fontSize: 11 }}>Delete</button>
+              </div>
             </Modal>
           )}
         </div>
