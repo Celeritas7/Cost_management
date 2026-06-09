@@ -1796,6 +1796,7 @@
       const [deleting, setDeleting] = useState(null);
       const [saving, setSaving] = useState(false);
       const [newId, setNewId] = useState(null);
+      const [removingId, setRemovingId] = useState(null);
       const dragItemRef = useRef(null);
       const [dragId, setDragId] = useState(null);
       const [overId, setOverId] = useState(null);
@@ -1882,11 +1883,15 @@
       const handleDelete = async () => {
         const id = deleting.id;
         setDeleting(null);
+        setRemovingId(id);
         vibrate(10);
-        const { error } = await supabase.from("cost_management_recurring").delete().eq("id", id);
-        if (error) { showToast(error.message); return; }
-        setItems(prev => prev.filter(i => i.id !== id));
-        showToast("Deleted");
+        setTimeout(async () => {
+          const { error } = await supabase.from("cost_management_recurring").delete().eq("id", id);
+          if (error) { showToast(error.message); setRemovingId(null); return; }
+          setItems(prev => prev.filter(i => i.id !== id));
+          setRemovingId(null);
+          showToast("Deleted");
+        }, 300);
       };
 
       // ── Drag-to-reorder (within a frequency group) ──
@@ -1927,7 +1932,7 @@
           onDragLeave={() => setOverId(o => (o === item.id ? null : o))}
           onDrop={(e) => { e.preventDefault(); onRowDrop(item); }}
           onDragEnd={clearDrag}
-          className={dragId === item.id ? "cm-dragging" : ""}
+          className={[dragId === item.id ? "cm-dragging" : "", newId === item.id ? "cm-slide-in" : "", removingId === item.id ? "cm-fade-out" : ""].filter(Boolean).join(" ")}
           style={{
             display: "flex", alignItems: "center", gap: 10, padding: "12px 14px",
             background: theme.inputBg, borderRadius: 10, marginBottom: 8,
