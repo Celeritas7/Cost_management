@@ -22,9 +22,14 @@
     ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
     input:focus, select:focus { outline: none; }
     @keyframes cmFadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+    @keyframes cmSlideIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
+    @keyframes cmFadeOut { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(-8px); } }
     @keyframes cmToastIn { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
     .cm-fade { animation: cmFadeIn 0.35s ease; }
+    .cm-slide-in { animation: cmSlideIn 0.32s ease; }
+    .cm-fade-out { animation: cmFadeOut 0.3s ease forwards; pointer-events: none; }
     .cm-toast { animation: cmToastIn 0.25s ease; }
+    .cm-dragging { transform: scale(1.02); box-shadow: 0 8px 24px rgba(0,0,0,0.45); opacity: 0.92; }
     .cm-chip { transition: background 0.15s ease, color 0.15s ease, outline-color 0.15s ease, transform 0.1s ease, filter 0.15s ease; }
     .cm-chip:hover { filter: brightness(1.18); transform: translateY(-1px); }
     .cm-chip:active { transform: scale(0.94); }
@@ -63,7 +68,7 @@
     }
     function setStoredTheme(theme) { localStorage.setItem("cost_mgmt_theme", JSON.stringify({ theme, timestamp: Date.now() })); }
 
-    const { useState, useMemo, useEffect, useCallback, createContext, useContext } = React;
+    const { useState, useMemo, useEffect, useCallback, useRef, createContext, useContext } = React;
     const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area, CartesianGrid } = Recharts;
 
     const ThemeContext = createContext();
@@ -92,6 +97,18 @@
     const fmt = (n) => `¥${n.toLocaleString()}`;
     const todayStr = () => new Date().toISOString().slice(0, 10);
     const vibrate = (ms) => { try { if (navigator.vibrate) navigator.vibrate(ms); } catch (e) {} };
+
+    // ── Recurring (templates) ──
+    const FREQ_ORDER = ["daily", "weekdays", "weekly", "monthly"];
+    const FREQ_LABELS = { daily: "Daily", weekdays: "Weekdays", weekly: "Weekly", monthly: "Monthly" };
+    const DOW_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const freqSummary = (r) => {
+      if (r.frequency === "monthly") return `Monthly · day ${r.day_value}`;
+      if (r.frequency === "weekly") return `Weekly · ${DOW_SHORT[r.day_value] ?? "?"}`;
+      if (r.frequency === "weekdays") return "Weekdays";
+      return "Daily";
+    };
+    const favSort = (a, b) => (a.is_favorite === b.is_favorite ? a.name.localeCompare(b.name) : a.is_favorite ? -1 : 1);
 
     // ── Graph filters (overview charts) ──
     const GRAPH_FILTER_KEY = "cost_management_graph_filters";
@@ -245,6 +262,7 @@
         { id: "add", label: "➕ Add" },
         { id: "overview", label: "📊 Overview" },
         { id: "transactions", label: "📋 History" },
+        { id: "recurring", label: "🔁 Recurring" },
         { id: "settings", label: "⚙️ Settings" },
       ];
 
@@ -313,6 +331,8 @@
                 <OverviewView {...{filtered,totalSpend,monthlyAvg,dailyAvg,monthlyData,catData,topShops}} allExpenses={RAW} />
               ) : view === "transactions" ? (
                 <TransactionsView pageTx={pageTx} txPage={txPage} setTxPage={setTxPage} txPages={txPages} />
+              ) : view === "recurring" ? (
+                <RecurringView />
               ) : (
                 <SettingsView allExpenses={RAW} />
               )}
@@ -1614,6 +1634,105 @@
             </div>
           </div>
         </>
+      );
+    }
+
+    // ═══════════════════════════════════════════
+    //  RECURRING VIEW (templates — CRUD only)
+    // ═══════════════════════════════════════════
+    function RecurringView() {
+      const { theme, supabase, getCatIcon, getCatColor } = useTheme();
+      const [items, setItems] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [toast, setToast] = useState(null);
+
+      const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2500); };
+
+      const fetchList = useCallback(async () => {
+        const { data, error } = await supabase.from("cost_management_recurring")
+          .select("*").order("frequency").order("sort_order");
+        if (!error && data) setItems(data);
+        setLoading(false);
+      }, []);
+      useEffect(() => { fetchList(); }, [fetchList]);
+
+      const grouped = useMemo(() => {
+        const g = { daily: [], weekdays: [], weekly: [], monthly: [] };
+        items.forEach(r => { if (g[r.frequency]) g[r.frequency].push(r); });
+        FREQ_ORDER.forEach(f => g[f].sort((a, b) => a.sort_order - b.sort_order));
+        return g;
+      }, [items]);
+
+      const handleToggle = async (item) => {
+        vibrate(10);
+        setItems(prev => prev.map(i => i.id === item.id ? { ...i, is_active: !i.is_active } : i));
+        const { error } = await supabase.from("cost_management_recurring")
+          .update({ is_active: !item.is_active }).eq("id", item.id);
+        if (error) { showToast("Update failed"); fetchList(); }
+      };
+
+      const togglePill = (on) => ({
+        padding: "4px 10px", borderRadius: 14, border: "none", cursor: "pointer", fontSize: 10, fontWeight: 600,
+        background: on ? `${theme.success}25` : theme.inputBg,
+        color: on ? theme.success : theme.textDim,
+        outline: on ? `1px solid ${theme.success}` : `1px solid ${theme.cardBorder}`,
+      });
+
+      const RecurringRow = ({ item }) => (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 10, padding: "12px 14px",
+          background: theme.inputBg, borderRadius: 10, marginBottom: 8,
+          opacity: item.is_active ? 1 : 0.5,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
+            <span style={{ fontSize: 20 }}>{getCatIcon(item.category)}</span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                {EXPENSE_TYPES[item.expense_type]?.icon && <span style={{ fontSize: 11 }}>{EXPENSE_TYPES[item.expense_type].icon}</span>}
+                <span style={{ fontSize: 14, fontWeight: 600, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</span>
+              </div>
+              <div style={{ fontSize: 11, color: theme.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {item.shop} · {freqSummary(item)}
+              </div>
+            </div>
+          </div>
+          <span style={{ fontSize: 14, fontWeight: 700, color: "#fff", whiteSpace: "nowrap" }}>{fmt(item.amount)}</span>
+          <button onClick={() => handleToggle(item)} style={togglePill(item.is_active)}>{item.is_active ? "On" : "Off"}</button>
+        </div>
+      );
+
+      return (
+        <div style={{ maxWidth: 560, margin: "0 auto", paddingBottom: 80 }}>
+          {toast && (
+            <div className="cm-toast" style={{ position: "fixed", top: 16, right: 16, zIndex: 999, padding: "10px 16px", borderRadius: 10, fontSize: 13, fontWeight: 500, background: theme.primary, color: "#fff", boxShadow: "0 4px 16px rgba(0,0,0,0.3)" }}>
+              {toast}
+            </div>
+          )}
+
+          <div style={{ marginTop: 8, marginBottom: 12 }}>
+            <h3 style={{ fontSize: 15, fontWeight: 700, color: "#fff", margin: 0 }}>🔁 Recurring</h3>
+            <p style={{ fontSize: 11, color: theme.textDim, margin: "4px 0 0" }}>Templates for expenses you log regularly.</p>
+          </div>
+
+          {loading ? (
+            <div style={{ textAlign: "center", padding: 40, color: theme.textMuted }}>⏳ Loading…</div>
+          ) : (
+            FREQ_ORDER.map(freq => (
+              <div key={freq} style={{ marginBottom: 18 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: theme.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+                  {FREQ_LABELS[freq]} <span style={{ color: theme.textDim }}>({grouped[freq].length})</span>
+                </div>
+                {grouped[freq].length === 0 ? (
+                  <div style={{ fontSize: 12, color: theme.textDim, fontStyle: "italic", padding: "10px 14px", background: theme.cardBg, border: `1px dashed ${theme.cardBorder}`, borderRadius: 10 }}>
+                    No {FREQ_LABELS[freq].toLowerCase()} recurring entries yet
+                  </div>
+                ) : (
+                  grouped[freq].map(item => <RecurringRow key={item.id} item={item} />)
+                )}
+              </div>
+            ))
+          )}
+        </div>
       );
     }
 
