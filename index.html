@@ -1638,6 +1638,152 @@
     }
 
     // ═══════════════════════════════════════════
+    //  RECURRING FORM (shared add / edit)
+    // ═══════════════════════════════════════════
+    function RecurringForm({ initial, saving, onSave, onCancel, onDelete }) {
+      const { theme, inputStyle, categories, shops } = useTheme();
+      const [form, setForm] = useState(initial);
+      const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+      const categoryShops = useMemo(() => {
+        if (!form.category) return [];
+        return shops.filter(s => s.category === form.category).sort(favSort);
+      }, [shops, form.category]);
+
+      const changeFreq = (freq) => setForm(f => ({
+        ...f, frequency: freq,
+        day_value: freq === "monthly"
+          ? (f.day_value >= 1 && f.day_value <= 31 ? f.day_value : 1)
+          : freq === "weekly"
+          ? (f.day_value != null && f.day_value >= 0 && f.day_value <= 6 ? f.day_value : null)
+          : null,
+      }));
+
+      const dayOk = form.frequency === "monthly"
+        ? (Number(form.day_value) >= 1 && Number(form.day_value) <= 31)
+        : form.frequency === "weekly"
+        ? (form.day_value != null && form.day_value !== "")
+        : true;
+      const valid = form.name.trim() && Number(form.amount) > 0 && form.category && form.shop.trim() && dayOk;
+
+      const labelS = { fontSize: 11, color: theme.textMuted, marginBottom: 6, display: "block" };
+      const segBtn = (on, color) => ({
+        flex: 1, padding: "8px 6px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 11,
+        background: on ? (color && color !== "transparent" ? `${color}30` : theme.primaryGlow) : theme.inputBg,
+        color: on ? (color && color !== "transparent" ? color : "#fff") : theme.textMuted,
+        outline: on ? `2px solid ${color && color !== "transparent" ? color : theme.primary}` : `1px solid ${theme.cardBorder}`,
+      });
+
+      return (
+        <div style={{ maxHeight: "72vh", overflowY: "auto", paddingRight: 2 }}>
+          {/* Name */}
+          <div style={{ marginBottom: 12 }}>
+            <label style={labelS}>NAME</label>
+            <input type="text" value={form.name} onChange={e => set("name", e.target.value)} placeholder="e.g. Rent, Konbini" style={{ ...inputStyle, fontSize: 13 }} />
+          </div>
+          {/* Amount */}
+          <div style={{ marginBottom: 12 }}>
+            <label style={labelS}>AMOUNT</label>
+            <input type="number" inputMode="numeric" value={form.amount} onChange={e => set("amount", e.target.value)} placeholder="¥" style={{ ...inputStyle, fontSize: 14, fontWeight: 600 }} />
+          </div>
+          {/* Category */}
+          <div style={{ marginBottom: 12 }}>
+            <label style={labelS}>CATEGORY</label>
+            <select value={form.category} onChange={e => { set("category", e.target.value); set("shop", ""); }} style={{ ...inputStyle, fontSize: 13, cursor: "pointer" }}>
+              <option value="">Select…</option>
+              {categories.map(c => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
+            </select>
+          </div>
+          {/* Shop */}
+          <div style={{ marginBottom: 12 }}>
+            <label style={labelS}>SHOP</label>
+            {form.category ? (
+              <>
+                {categoryShops.length > 0 && (
+                  <select value={categoryShops.some(s => s.name === form.shop) ? form.shop : ""} onChange={e => e.target.value && set("shop", e.target.value)} style={{ ...inputStyle, fontSize: 13, cursor: "pointer", marginBottom: 6 }}>
+                    <option value="">Pick a shop…</option>
+                    {categoryShops.map(s => <option key={s.id} value={s.name}>{s.is_favorite ? "⭐ " : ""}{s.name}</option>)}
+                  </select>
+                )}
+                <input type="text" value={form.shop} onChange={e => set("shop", e.target.value)} placeholder="Or type a shop name" style={{ ...inputStyle, fontSize: 13 }} />
+              </>
+            ) : (
+              <div style={{ fontSize: 11, color: theme.textDim }}>Choose a category first.</div>
+            )}
+          </div>
+          {/* Frequency */}
+          <div style={{ marginBottom: 12 }}>
+            <label style={labelS}>FREQUENCY</label>
+            <div style={{ display: "flex", gap: 6 }}>
+              {FREQ_ORDER.map(f => (
+                <button key={f} onClick={() => changeFreq(f)} style={segBtn(form.frequency === f)}>{FREQ_LABELS[f]}</button>
+              ))}
+            </div>
+          </div>
+          {/* Day value (conditional) */}
+          {form.frequency === "weekly" && (
+            <div style={{ marginBottom: 12 }}>
+              <label style={labelS}>DAY OF WEEK</label>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {DOW_SHORT.map((d, i) => (
+                  <button key={d} onClick={() => set("day_value", i)} style={{
+                    padding: "6px 10px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 11,
+                    background: form.day_value === i ? theme.primaryGlow : theme.inputBg,
+                    color: form.day_value === i ? "#fff" : theme.textMuted,
+                    outline: form.day_value === i ? `2px solid ${theme.primary}` : `1px solid ${theme.cardBorder}`,
+                  }}>{d}</button>
+                ))}
+              </div>
+            </div>
+          )}
+          {form.frequency === "monthly" && (
+            <div style={{ marginBottom: 12 }}>
+              <label style={labelS}>DAY OF MONTH (1–31)</label>
+              <input type="number" inputMode="numeric" min="1" max="31" value={form.day_value ?? ""} onChange={e => set("day_value", e.target.value === "" ? "" : Number(e.target.value))} style={{ ...inputStyle, fontSize: 13 }} />
+            </div>
+          )}
+          {/* Expense type */}
+          <div style={{ marginBottom: 12 }}>
+            <label style={labelS}>TYPE</label>
+            <div style={{ display: "flex", gap: 6 }}>
+              {Object.entries(EXPENSE_TYPES).map(([key, cfg]) => (
+                <button key={key} onClick={() => set("expense_type", key)} style={segBtn(form.expense_type === key, cfg.color)}>{cfg.icon} {cfg.label}</button>
+              ))}
+            </div>
+          </div>
+          {/* Tags */}
+          <div style={{ marginBottom: 12 }}>
+            <label style={labelS}>TAGS</label>
+            <TagSelector selectedTags={form.tags} onChange={t => set("tags", t)} />
+          </div>
+          {/* Active */}
+          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, fontSize: 12, color: theme.textMuted, cursor: "pointer" }}>
+            <input type="checkbox" checked={form.is_active} onChange={e => set("is_active", e.target.checked)} />
+            Active
+          </label>
+          {/* Notes */}
+          <div style={{ marginBottom: 14 }}>
+            <label style={labelS}>NOTES</label>
+            <textarea value={form.notes} onChange={e => set("notes", e.target.value)} rows={2} placeholder="Optional" style={{ ...inputStyle, fontSize: 12, resize: "vertical", fontFamily: "inherit" }} />
+          </div>
+
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={onCancel} style={{ flex: 1, padding: "10px", borderRadius: 8, border: `1px solid ${theme.cardBorder}`, background: "transparent", color: theme.textMuted, cursor: "pointer", fontSize: 12 }}>Cancel</button>
+            <button onClick={() => onSave(form)} disabled={!valid || saving} style={{
+              flex: 2, padding: "10px", borderRadius: 8, border: "none", fontWeight: 600, fontSize: 12, color: "#fff",
+              cursor: (!valid || saving) ? "not-allowed" : "pointer",
+              background: (!valid || saving) ? theme.textDim : `linear-gradient(135deg,${theme.primary},${theme.accent})`,
+              opacity: (!valid || saving) ? 0.5 : 1,
+            }}>{saving ? "Saving…" : "Save"}</button>
+          </div>
+          {onDelete && (
+            <button onClick={onDelete} style={{ width: "100%", marginTop: 10, padding: "9px", borderRadius: 8, border: `1px solid ${theme.danger}40`, background: "transparent", color: theme.danger, cursor: "pointer", fontSize: 12 }}>🗑️ Delete this recurring entry</button>
+          )}
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════
     //  RECURRING VIEW (templates — CRUD only)
     // ═══════════════════════════════════════════
     function RecurringView() {
@@ -1645,8 +1791,25 @@
       const [items, setItems] = useState([]);
       const [loading, setLoading] = useState(true);
       const [toast, setToast] = useState(null);
+      const [showAdd, setShowAdd] = useState(false);
+      const [saving, setSaving] = useState(false);
+      const [newId, setNewId] = useState(null);
 
       const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2500); };
+
+      const blankForm = { name: "", amount: "", category: "", shop: "", frequency: "monthly", day_value: 1, expense_type: "normal", tags: [], is_active: true, notes: "" };
+      const buildRecord = (form) => ({
+        name: form.name.trim(),
+        category: form.category,
+        shop: form.shop.trim(),
+        amount: Number(form.amount),
+        expense_type: form.expense_type,
+        tags: (form.tags || []).join(","),
+        frequency: form.frequency,
+        day_value: (form.frequency === "weekly" || form.frequency === "monthly") ? Number(form.day_value) : null,
+        notes: (form.notes || "").trim(),
+        is_active: form.is_active,
+      });
 
       const fetchList = useCallback(async () => {
         const { data, error } = await supabase.from("cost_management_recurring")
@@ -1669,6 +1832,21 @@
         const { error } = await supabase.from("cost_management_recurring")
           .update({ is_active: !item.is_active }).eq("id", item.id);
         if (error) { showToast("Update failed"); fetchList(); }
+      };
+
+      const handleAdd = async (form) => {
+        setSaving(true);
+        const maxSort = grouped[form.frequency].reduce((m, i) => Math.max(m, i.sort_order ?? 0), -1);
+        const rec = { ...buildRecord(form), sort_order: maxSort + 1 };
+        const { data, error } = await supabase.from("cost_management_recurring").insert(rec).select().single();
+        setSaving(false);
+        if (error) { showToast(error.message); return; }
+        setShowAdd(false);
+        setNewId(data?.id ?? null);
+        showToast("Recurring entry added");
+        vibrate(10);
+        await fetchList();
+        setTimeout(() => setNewId(null), 1000);
       };
 
       const togglePill = (on) => ({
@@ -1731,6 +1909,22 @@
                 )}
               </div>
             ))
+          )}
+
+          {/* Floating add button */}
+          <button onClick={() => { vibrate(10); setShowAdd(true); }} title="Add recurring entry" style={{
+            position: "fixed", right: 20, bottom: 20, zIndex: 80, width: 54, height: 54, borderRadius: "50%",
+            border: "none", cursor: "pointer", fontSize: 26, color: "#fff", lineHeight: 1,
+            background: `linear-gradient(135deg,${theme.primary},${theme.accent})`,
+            boxShadow: `0 6px 20px ${theme.primaryGlow}`,
+          }}>+</button>
+
+          {/* Add modal */}
+          {showAdd && (
+            <Modal onClose={() => setShowAdd(false)}>
+              <h4 style={{ color: "#fff", fontSize: 14, margin: "0 0 12px 0" }}>🔁 New Recurring Entry</h4>
+              <RecurringForm initial={blankForm} saving={saving} onSave={handleAdd} onCancel={() => setShowAdd(false)} />
+            </Modal>
           )}
         </div>
       );
