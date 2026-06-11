@@ -576,11 +576,11 @@
         setRows((rs) => (onlyBlank ? ds.map(blankRow) : [...rs, ...ds.map(blankRow)]));
         setActiveRow(onlyBlank ? 0 : rows.length);
       };
-      const addDayRow = (d) => { appendDayRows([d]); if (isDiff) setPadOpen(true); };
+      const addDayRow = (d) => { appendDayRows([d]); if (isDiff) setPickerOpen(true); };
       const removeRow = (i) => { setRows((rs) => { const n = rs.filter((_, j) => j !== i); return n.length ? n : [blankRow(isoOfDate(today))]; }); setActiveRow((a) => (i < a ? a - 1 : a)); };
 
       const switchMode = (m) => {
-        setMode(m); setCalOpen(false); setNewCatOpen(false); setNewShopOpen(false); setPickerOpen(false); setPadOpen(false);
+        setMode(m); setCalOpen(false); setNewCatOpen(false); setNewShopOpen(false); setPickerOpen(false);
         if (m === "list" || m === "same") { setDates([]); setRows((rs) => (rs.length ? rs : [blankRow(isoOfDate(today))])); setActiveRow(0); }
         else setDates([isoOfDate(today)]);
       };
@@ -761,7 +761,7 @@
               const active = i === activeIdx;
               const ringColor = rc ? rc.color : theme.primary;
               return (
-                <div key={i} onClick={() => { setActiveRow(i); setPadOpen(true); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 12, cursor: "pointer", background: active ? `${ringColor}1f` : C.input, boxShadow: active ? `inset 0 0 0 1.5px ${ringColor}` : `inset 0 0 0 1px ${C.border}` }}>
+                <div key={i} onClick={() => { setActiveRow(i); if (isDiff) setPickerOpen(true); else setPadOpen(true); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 12, cursor: "pointer", background: active ? `${ringColor}1f` : C.input, boxShadow: active ? `inset 0 0 0 1.5px ${ringColor}` : `inset 0 0 0 1px ${C.border}` }}>
                   <span style={{ fontSize: 10.5, fontWeight: 700, color: active ? "#fff" : C.muted, minWidth: 56 }}>{whenLabel(r.date)}</span>
                   <span style={{ width: 26, height: 26, borderRadius: 8, background: `${rc ? rc.color : "#888"}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>{rc ? rc.icon : "▫"}</span>
                   <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: rShop ? C.text : C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{rShop || (isSame ? "choose shop above" : (rCat ? "Pick a shop" : "Tap → set shop"))}</span>
@@ -828,8 +828,7 @@
           </div>
 
           {/* amount hero — tap to open the keypad */}
-          {isMulti && (<div style={{ padding: "12px 0 4px", textAlign: "center" }}><div style={{ fontSize: 15, fontWeight: 700, color: "#fff" }}>{isSame ? "Same shop · many days" : "Different shops"}</div><div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>Pick days → tap a row to enter its cost</div></div>)}
-          <div onClick={() => { if (!isMulti) setPadOpen(true); }} style={{ padding: "14px 0 12px", textAlign: "center", cursor: "pointer", display: isMulti ? "none" : "block" }}>
+          <div onClick={() => setPadOpen(true)} style={{ padding: "14px 0 12px", textAlign: "center", cursor: "pointer" }}>
             <div style={{ fontSize: 50, fontWeight: 700, letterSpacing: -2, lineHeight: 1, color: amt > 0 ? "#fff" : C.dim, display: "inline-flex", alignItems: "center", gap: 8, padding: "2px 14px", borderRadius: 14, boxShadow: padOpen ? `inset 0 0 0 1.5px ${accent}66` : "none", transition: "box-shadow .15s" }}>{amt > 0 ? fmt(amt) : "¥0"}</div>
             <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8, minHeight: 18 }}>
               {isMulti
@@ -875,42 +874,15 @@
                   <button onClick={() => setPickerOpen(false)} style={{ border: "none", background: C.input, color: C.muted, width: 34, height: 34, borderRadius: 17, fontSize: 19, cursor: "pointer", boxShadow: `inset 0 0 0 1px ${C.border}`, flexShrink: 0 }}>×</button>
                 </div>
                 {Editor}
-                <button onClick={() => { setPickerOpen(false); }} style={{ width: "100%", height: 50, marginTop: 18, borderRadius: 14, border: "none", fontFamily: "inherit", fontSize: 15, fontWeight: 700, cursor: "pointer", background: curShop ? `linear-gradient(135deg, ${accent}, ${theme.accent})` : C.input, color: curShop ? "#fff" : C.muted }}>
+                <button onClick={() => { setPickerOpen(false); setPadOpen(true); }} style={{ width: "100%", height: 50, marginTop: 18, borderRadius: 14, border: "none", fontFamily: "inherit", fontSize: 15, fontWeight: 700, cursor: "pointer", background: curShop ? `linear-gradient(135deg, ${accent}, ${theme.accent})` : C.input, color: curShop ? "#fff" : C.muted }}>
                   {curShop ? "Done · enter amount ↓" : "Pick a category & shop above"}
                 </button>
               </div>
             </>
           )}
 
-          {/* row cost modal (multi) */}
-          {isMulti && padOpen && (
-            <>
-              <div onClick={() => setPadOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(6,8,16,0.7)", zIndex: 210 }} />
-              <div className="cm-sheet-in" style={{ position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: "calc(100% - 32px)", maxWidth: 380, zIndex: 211, background: theme.bg, backgroundColor: "#0c0c16", borderRadius: 22, padding: "16px 18px 18px", maxHeight: "88vh", overflowY: "auto", boxShadow: "0 24px 70px rgba(0,0,0,0.6)", border: `1px solid ${C.border}` }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 2 }}>
-                  <div style={{ fontSize: 10.5, letterSpacing: 1.4, textTransform: "uppercase", color: C.dim, fontWeight: 600 }}>Entry {activeIdx + 1}/{rows.length} · {whenLabel(aRow.date)}</div>
-                  <button onClick={() => setPadOpen(false)} style={{ border: "none", background: C.input, color: C.muted, width: 32, height: 32, borderRadius: 16, fontSize: 18, cursor: "pointer", boxShadow: `inset 0 0 0 1px ${C.border}` }}>×</button>
-                </div>
-                <div style={{ textAlign: "center", padding: "4px 0 2px" }}>
-                  <div style={{ fontSize: 44, fontWeight: 700, letterSpacing: -2, lineHeight: 1, color: amt > 0 ? "#fff" : C.dim }}>{amt > 0 ? fmt(amt) : "¥0"}</div>
-                  <div style={{ fontSize: 12, color: C.muted, marginTop: 6, minHeight: 16 }}>{curShop ? <span style={{ color: catObj.color }}>{catObj.icon} {curShop}</span> : isSame ? "set the shop first" : curCat ? "pick a shop below" : "pick a category below"}</div>
-                </div>
-                {isDiff && <div style={{ marginTop: 4, marginBottom: 6 }}>{Editor}</div>}
-                <div style={{ padding: "8px 0 4px", display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
-                  {["7","8","9","4","5","6","1","2","3","00","0","del"].map((k) => (
-                    <button key={k} className="cm-chip" onClick={() => press(k)} style={{ height: 46, borderRadius: 12, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: k === "del" ? 18 : 22, fontWeight: 600, color: k === "del" ? C.muted : "#fff", background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${C.border}` }}>{k === "del" ? "⌫" : k}</button>
-                  ))}
-                </div>
-                <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-                  {activeIdx < rows.length - 1 && <button onClick={() => setActiveRow(activeIdx + 1)} style={{ flex: 1, height: 48, borderRadius: 13, border: "none", background: C.input, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", boxShadow: `inset 0 0 0 1px ${C.border}` }}>Next day →</button>}
-                  <button onClick={() => setPadOpen(false)} style={{ flex: 1, height: 48, borderRadius: 13, border: "none", background: `linear-gradient(135deg, ${accent}, ${theme.accent})`, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Done</button>
-                </div>
-              </div>
-            </>
-          )}
-
           {/* numpad — only when the amount is tapped */}
-          {padOpen && !isMulti && (
+          {padOpen && (
             <div className="cm-sheet-in" style={{ padding: "10px 0 6px", display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
               {["7","8","9","4","5","6","1","2","3","00","0","del"].map((k) => (
                 <button key={k} className="cm-chip" onClick={() => press(k)} style={{ height: 48, borderRadius: 12, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: k === "del" ? 18 : 22, fontWeight: 600, color: k === "del" ? C.muted : "#fff", background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${C.border}` }}>
