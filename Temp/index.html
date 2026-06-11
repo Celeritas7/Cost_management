@@ -22,13 +22,11 @@
     ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
     input:focus, select:focus { outline: none; }
     @keyframes cmFadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
-    @keyframes cmSlideIn { from { opacity: 0.4; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
-    @keyframes cmSheetIn { from { opacity: 0.4; } to { opacity: 1; } }
+    @keyframes cmSlideIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
     @keyframes cmFadeOut { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(-8px); } }
     @keyframes cmToastIn { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
     .cm-fade { animation: cmFadeIn 0.35s ease; }
-    .cm-slide-in { animation: cmSlideIn 0.32s ease both; }
-    .cm-sheet-in { animation: cmSheetIn 0.22s ease both; }
+    .cm-slide-in { animation: cmSlideIn 0.32s ease; }
     .cm-fade-out { animation: cmFadeOut 0.3s ease forwards; pointer-events: none; }
     .cm-toast { animation: cmToastIn 0.25s ease; }
     .cm-dragging { transform: scale(1.02); box-shadow: 0 8px 24px rgba(0,0,0,0.45); opacity: 0.92; }
@@ -498,446 +496,313 @@
     // ═══════════════════════════════════════════
     //  ADD ENTRY VIEW
     // ═══════════════════════════════════════════
-    // ═══════════════════════════════════════════
-    //  ADD ENTRY VIEW  (redesigned: Quick / Same shop / Different)
-    // ═══════════════════════════════════════════
     function AddEntryView({ recentEntries, allExpenses }) {
-      const { theme, supabase, fetchData, categories, shops, tags } = useTheme();
-      const C = {
-        text: theme.text, muted: theme.textMuted, dim: theme.textDim,
-        card: theme.cardBg, border: theme.cardBorder, input: theme.inputBg, primary: theme.primary,
-      };
-      const ADD_EMOJI = ["🛒","🏪","🍜","🌏","☕","🧹","🚗","🏠","📦","🍕","💊","🎮","📚","👕","💡","✈️","🎁","💰","🍎","🛍️"];
-      const ADD_COLOR = ["#2563eb","#f59e0b","#10b981","#ef4444","#8b5cf6","#ec4899","#06b6d4","#f97316","#14b8a6","#a78bfa","#64748b","#84cc16"];
-      const today = new Date(); const yest = new Date(Date.now() - 86400000);
-      const isoOfDate = (d) => d.toISOString().slice(0, 10);
-      const blankRow = (d) => ({ date: d, cat: null, shop: null, type: "normal", tags: [], amount: "" });
-
-      const [mode, setMode] = useState("quick"); // quick | same | list
-      const [amount, setAmount] = useState("");
-      const [dates, setDates] = useState([isoOfDate(today)]);
-      const [cat, setCat] = useState(null);
-      const [shop, setShop] = useState(null);
-      const [etype, setEtype] = useState("normal");
-      const [etags, setEtags] = useState([]);
-      const [rows, setRows] = useState([blankRow(isoOfDate(today))]);
-      const [activeRow, setActiveRow] = useState(0);
-      const [pickerOpen, setPickerOpen] = useState(false);
-      const [calOpen, setCalOpen] = useState(false);
-      const [tagsOpen, setTagsOpen] = useState(false);
+      const { theme, inputStyle, supabase, fetchData, categories, shops, tags, getCatIcon, getCatColor, getTagIcon } = useTheme();
+      const [selectedDates, setSelectedDates] = useState([todayStr()]);
+      const [shopMode, setShopMode] = useState("same"); // "same" or "different"
+      const [sharedCategory, setSharedCategory] = useState("");
+      const [sharedShop, setSharedShop] = useState("");
+      const [sharedExpenseType, setSharedExpenseType] = useState("normal");
+      const [sharedTags, setSharedTags] = useState([]);
+      const [entries, setEntries] = useState([]);
       const [saving, setSaving] = useState(false);
-      const [saved, setSaved] = useState(false);
-      const [flash, setFlash] = useState(null);
       const [toast, setToast] = useState(null);
-      const [newCatOpen, setNewCatOpen] = useState(false);
-      const [newCat, setNewCat] = useState({ name: "", icon: "📦", color: "#8b5cf6" });
-      const [newShopOpen, setNewShopOpen] = useState(false);
-      const [newShop, setNewShop] = useState({ name: "", fav: false });
+      const [customShop, setCustomShop] = useState("");
 
-      const isDiff = mode === "list";
-      const isSame = mode === "same";
-      const isMulti = isDiff || isSame;
-      const activeIdx = Math.min(activeRow, rows.length - 1);
-      const aRow = rows[activeIdx];
+      // When dates change, rebuild entries
+      useEffect(() => {
+        if (shopMode === "same") {
+          setEntries(selectedDates.map(d => ({ date: d, amount: "", notes: "" })));
+        } else {
+          setEntries(selectedDates.map(d => ({ date: d, category: "", shop: "", amount: "", notes: "", expense_type: "normal", tags: [] })));
+        }
+      }, [selectedDates, shopMode]);
 
-      const curAmountStr = isMulti ? aRow.amount : amount;
-      const curCat = isDiff ? aRow.cat : cat;
-      const curShop = isDiff ? aRow.shop : shop;
-      const curType = isDiff ? aRow.type : etype;
-      const curTags = isDiff ? aRow.tags : etags;
-
-      const catObj = categories.find((c) => c.name === curCat);
-      const accent = catObj ? catObj.color : theme.primary;
-      const favSort = (a, b) => (b.is_favorite ? 1 : 0) - (a.is_favorite ? 1 : 0);
-      const catShops = shops.filter((s) => s.category === curCat).sort(favSort);
-      const amt = Number(curAmountStr) || 0;
-      const valid = amt > 0 && curCat && curShop;
-
-      const whenLabel = (s) => s === isoOfDate(today) ? "Today" : s === isoOfDate(yest) ? "Yesterday"
-        : `${MONTHS_SHORT[Number(s.slice(5, 7))]} ${Number(s.slice(8, 10))}`;
-      const dateLabel = dates.length > 1 ? `${dates.length} dates` : dates.length === 1 ? whenLabel(dates[0]) : "Pick day";
-
-      const updRow = (patch) => setRows((rs) => rs.map((r, i) => (i === activeIdx ? { ...r, ...patch } : r)));
-      const press = (key) => {
-        setSaved(false);
-        const apply = (a) => key === "del" ? a.slice(0, -1) : key === "00" ? (a === "" ? "" : (a.length < 8 ? a + "00" : a)) : (a.length < 9 ? (a === "0" ? key : a + key) : a);
-        if (isMulti) setRows((rs) => rs.map((r, i) => (i === activeIdx ? { ...r, amount: apply(r.amount) } : r))); else setAmount((a) => apply(a));
-      };
-      const setCurCat = (name) => { if (isDiff) updRow({ cat: name, shop: null }); else { setCat(name); setShop(null); } };
-      const setCurShop = (name) => { if (isDiff) { updRow({ shop: name }); setPickerOpen(false); } else { setShop(name); if (isSame) setPickerOpen(false); } };
-      const setCurType = (t) => { if (isDiff) updRow({ type: t }); else setEtype(t); };
-      const toggleTag = (t) => { const has = (curTags || []).includes(t); const next = has ? curTags.filter((x) => x !== t) : [...curTags, t]; if (isDiff) updRow({ tags: next }); else setEtags(next); };
-      const pickCat = (c) => { setCurCat(c.name); setNewCatOpen(false); setNewShopOpen(false); };
-
-      const appendDayRows = (ds) => {
-        if (!ds.length) return;
-        const onlyBlank = rows.length === 1 && !rows[0].cat && !rows[0].shop && !rows[0].amount;
-        setRows((rs) => (onlyBlank ? ds.map(blankRow) : [...rs, ...ds.map(blankRow)]));
-        setActiveRow(onlyBlank ? 0 : rows.length);
-      };
-      const addDayRow = (d) => { appendDayRows([d]); if (isDiff) setPickerOpen(true); };
-      const removeRow = (i) => { setRows((rs) => { const n = rs.filter((_, j) => j !== i); return n.length ? n : [blankRow(isoOfDate(today))]; }); setActiveRow((a) => (i < a ? a - 1 : a)); };
-
-      const switchMode = (m) => {
-        setMode(m); setCalOpen(false); setNewCatOpen(false); setNewShopOpen(false); setPickerOpen(false);
-        if (m === "list" || m === "same") { setDates([]); setRows((rs) => (rs.length ? rs : [blankRow(isoOfDate(today))])); setActiveRow(0); }
-        else setDates([isoOfDate(today)]);
+      const updateEntry = (index, field, value) => {
+        setEntries(prev => { const n = [...prev]; n[index] = { ...n[index], [field]: value }; return n; });
       };
 
-      const showToast = (type, msg) => { setToast({ type, msg }); setTimeout(() => setToast(null), 3000); };
-      const insertExpenses = async (records) => {
+      const categoryShops = useMemo(() => {
+        const cat = shopMode === "same" ? sharedCategory : null;
+        if (!cat) return [];
+        return shops.filter(s => s.category === cat).sort((a,b) => {
+          if (a.is_favorite && !b.is_favorite) return -1;
+          if (!a.is_favorite && b.is_favorite) return 1;
+          return a.name.localeCompare(b.name);
+        });
+      }, [shops, sharedCategory, shopMode]);
+
+      const totalAmount = entries.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+      const validEntries = shopMode === "same"
+        ? (sharedCategory && sharedShop ? entries.filter(e => e.amount && Number(e.amount) > 0) : [])
+        : entries.filter(e => e.category && e.shop && e.amount && Number(e.amount) > 0);
+
+      const handleSubmit = async () => {
+        if (validEntries.length === 0) {
+          setToast({ type: "error", msg: "Complete entries" });
+          setTimeout(() => setToast(null), 3000);
+          return;
+        }
         setSaving(true);
+        const records = validEntries.map(e => ({
+          date: e.date,
+          category: shopMode === "same" ? sharedCategory : e.category,
+          shop: shopMode === "same" ? sharedShop : e.shop,
+          amount: Number(e.amount),
+          notes: e.notes?.trim() || "",
+          expense_type: shopMode === "same" ? sharedExpenseType : (e.expense_type || "normal"),
+          tags: shopMode === "same" ? sharedTags.join(",") : (e.tags || []).join(","),
+        }));
         const { error } = await supabase.from("cost_management_expenses").insert(records);
         setSaving(false);
-        if (error) { showToast("error", error.message); return false; }
-        await fetchData();
-        return true;
-      };
-
-      const save = async () => {
-        if (!valid || saving) return;
-        const records = dates.map((d) => ({ date: d, category: cat, shop, amount: amt, notes: "", expense_type: etype, tags: (etags || []).join(",") }));
-        const ok = await insertExpenses(records);
-        if (!ok) return;
-        setSaved(true); setFlash(fmt(amt) + (dates.length > 1 ? ` × ${dates.length}` : ""));
-        setTimeout(() => { setAmount(""); setShop(null); setCat(null); setEtags([]); setEtype("normal"); setTagsOpen(false); setSaved(false); }, 900);
-        setTimeout(() => setFlash(null), 1700);
-      };
-      const filledRows = rows.map((r) => (isSame ? { ...r, cat, shop, type: etype, tags: etags } : r)).filter((r) => r.cat && r.shop && Number(r.amount) > 0);
-      const rowsTotal = rows.reduce((s, r) => s + Number(r.amount || 0), 0);
-      const saveMulti = async () => {
-        if (!filledRows.length || saving) return;
-        const records = filledRows.map((r) => ({ date: r.date, category: r.cat, shop: r.shop, amount: Number(r.amount), notes: "", expense_type: r.type || "normal", tags: (r.tags || []).join(",") }));
-        const ok = await insertExpenses(records);
-        if (!ok) return;
-        setSaved(true); setFlash(`${records.length} item${records.length > 1 ? "s" : ""} · ${fmt(records.reduce((s, r) => s + r.amount, 0))}`);
-        setTimeout(() => { setRows([blankRow(isoOfDate(today))]); setActiveRow(0); setSaved(false); setPickerOpen(false); if (isSame) { setShop(null); setCat(null); } }, 900);
-        setTimeout(() => setFlash(null), 1700);
-      };
-
-      const addCategory = async () => {
-        const name = newCat.name.trim(); if (!name) return;
-        const existing = categories.find((c) => c.name.toLowerCase() === name.toLowerCase());
-        if (!existing) {
-          const { error } = await supabase.from("cost_management_categories").insert({ name, icon: newCat.icon, color: newCat.color, sort_order: categories.length + 1 });
-          if (error) { showToast("error", error.message.includes("duplicate") ? "Exists" : error.message); return; }
-          await fetchData();
+        if (error) { setToast({ type: "error", msg: error.message }); }
+        else {
+          setToast({ type: "success", msg: `Saved ${records.length} entries` });
+          setSelectedDates([todayStr()]);
+          setSharedCategory(""); setSharedShop(""); setSharedTags([]); setSharedExpenseType("normal");
+          fetchData();
         }
-        setCurCat(existing ? existing.name : name);
-        setNewCat({ name: "", icon: "📦", color: "#8b5cf6" }); setNewCatOpen(false);
+        setTimeout(() => setToast(null), 3000);
       };
-      const addShop = async () => {
-        const name = newShop.name.trim(); if (!name || !curCat) return;
-        if (!shops.some((s) => s.name === name && s.category === curCat)) {
-          const { error } = await supabase.from("cost_management_shops").insert({ name, category: curCat, is_favorite: newShop.fav });
-          if (error) { showToast("error", error.message.includes("duplicate") ? "Shop exists" : error.message); return; }
-          await fetchData();
-        }
-        setCurShop(name); setNewShop({ name: "", fav: false }); setNewShopOpen(false);
-      };
-      const repeat = (e) => { if (isDiff) updRow({ cat: e.category, shop: e.shop, amount: String(e.amount) }); else if (isSame) { setCat(e.category); setShop(e.shop); updRow({ amount: String(e.amount) }); } else { setCat(e.category); setShop(e.shop); setAmount(String(e.amount)); } };
 
-      // styles
-      const chip = (active, color) => ({ padding: "9px 13px", borderRadius: 11, border: "none", cursor: "pointer", fontSize: 13, fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0, transition: "all .15s", display: "flex", alignItems: "center", gap: 6, background: active ? `${color}26` : C.input, color: active ? "#fff" : C.muted, boxShadow: active ? `inset 0 0 0 1.5px ${color}` : `inset 0 0 0 1px ${C.border}` });
-      const sLbl = { fontSize: 10.5, letterSpacing: 1.4, textTransform: "uppercase", color: C.dim, margin: "0 0 9px", fontWeight: 600 };
-      const scrollRow = { display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4 };
-      const newChip = (on) => ({ padding: "8px 12px", borderRadius: 11, cursor: "pointer", fontSize: 13, fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0, display: "flex", alignItems: "center", gap: 5, color: theme.primary, fontWeight: 600, background: on ? `${theme.primary}22` : "transparent", border: `1.5px dashed ${on ? theme.primary : theme.primary + "70"}` });
-      const creatorCard = { marginTop: 12, background: C.card, borderRadius: 14, padding: 14, boxShadow: `inset 0 0 0 1px ${C.border}` };
-      const fieldInput = { width: "100%", padding: "11px 13px", borderRadius: 11, border: "none", background: C.input, color: "#fff", fontSize: 14.5, fontFamily: "inherit", boxShadow: `inset 0 0 0 1px ${C.border}`, outline: "none" };
-      const emojiBtn = (on) => ({ width: 34, height: 34, borderRadius: 9, border: "none", cursor: "pointer", fontSize: 16, background: on ? `${theme.primary}26` : C.input, boxShadow: on ? `inset 0 0 0 1.5px ${theme.primary}` : `inset 0 0 0 1px ${C.border}` });
-      const swatch = (col, on) => ({ width: 28, height: 28, borderRadius: 8, border: on ? "2px solid #fff" : "none", background: col, cursor: "pointer", boxShadow: on ? "0 0 0 2px rgba(255,255,255,0.18)" : "none" });
-      const ghostBtn = { flex: 1, height: 44, borderRadius: 12, border: "none", background: C.input, color: C.muted, fontSize: 13.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", boxShadow: `inset 0 0 0 1px ${C.border}` };
-      const okBtn = (en) => ({ flex: 2, height: 44, borderRadius: 12, border: "none", color: en ? "#fff" : C.dim, fontSize: 13.5, fontWeight: 700, cursor: en ? "pointer" : "not-allowed", fontFamily: "inherit", background: en ? `linear-gradient(135deg, ${theme.primary}, ${theme.accent})` : C.input });
-      const ctaStyle = (en) => ({ width: "100%", height: 54, borderRadius: 15, border: "none", fontFamily: "inherit", fontSize: 16, fontWeight: 700, cursor: en && !saving ? "pointer" : "not-allowed", transition: "all .2s", background: saved ? theme.success : en ? `linear-gradient(135deg, ${accent}, ${theme.accent})` : C.input, boxShadow: en && !saved ? `0 8px 24px ${accent}44` : "none", color: en || saved ? "#fff" : C.dim, opacity: saving ? 0.7 : 1 });
+      const selectShop = (name) => { setSharedShop(name); setCustomShop(""); };
+      const useCustomShop = () => { if (customShop.trim()) { setSharedShop(customShop.trim()); setCustomShop(""); } };
 
-      const Editor = (
-        <>
-          <div style={{ marginBottom: 16 }}>
-            <div style={sLbl}>Category</div>
-            <div style={scrollRow}>
-              {categories.map((c) => (
-                <button key={c.id || c.name} onClick={() => pickCat(c)} style={chip(curCat === c.name, c.color)}>
-                  <span style={{ fontSize: 15 }}>{c.icon}</span>{c.name}
-                </button>
-              ))}
-              <button onClick={() => { setNewCatOpen((o) => !o); setNewShopOpen(false); }} style={newChip(newCatOpen)}>＋ New</button>
-            </div>
-            {newCatOpen && (
-              <div className="cm-slide-in" style={creatorCard}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-                  <span style={{ width: 38, height: 38, borderRadius: 11, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 19, flexShrink: 0, background: `${newCat.color}22`, boxShadow: `inset 0 0 0 1.5px ${newCat.color}` }}>{newCat.icon}</span>
-                  <input value={newCat.name} onChange={(e) => setNewCat((n) => ({ ...n, name: e.target.value }))} placeholder="Category name" style={fieldInput} />
-                </div>
-                <div style={{ ...sLbl, marginBottom: 7 }}>Icon</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 13 }}>
-                  {ADD_EMOJI.map((em) => <button key={em} onClick={() => setNewCat((n) => ({ ...n, icon: em }))} style={emojiBtn(newCat.icon === em)}>{em}</button>)}
-                </div>
-                <div style={{ ...sLbl, marginBottom: 7 }}>Color</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 15 }}>
-                  {ADD_COLOR.map((col) => <button key={col} onClick={() => setNewCat((n) => ({ ...n, color: col }))} style={swatch(col, newCat.color === col)} />)}
-                </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button onClick={() => setNewCatOpen(false)} style={ghostBtn}>Cancel</button>
-                  <button onClick={addCategory} disabled={!newCat.name.trim()} style={okBtn(!!newCat.name.trim())}>Add category</button>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {curCat && (
-            <div className="cm-slide-in" style={{ marginBottom: 16 }}>
-              <div style={sLbl}>{catObj.icon} {curCat} · shops</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                {catShops.map((s) => (
-                  <button key={s.id || s.name} onClick={() => setCurShop(s.name)} style={chip(curShop === s.name, accent)}>{s.is_favorite ? "⭐ " : ""}{s.name}</button>
-                ))}
-                <button onClick={() => { setNewShopOpen((o) => !o); setNewCatOpen(false); }} style={newChip(newShopOpen)}>＋ New shop</button>
-              </div>
-              {newShopOpen && (
-                <div className="cm-slide-in" style={creatorCard}>
-                  <input value={newShop.name} onChange={(e) => setNewShop((s) => ({ ...s, name: e.target.value }))} placeholder={`New shop in ${curCat}`} style={fieldInput} />
-                  <label style={{ display: "flex", alignItems: "center", gap: 9, margin: "13px 2px 15px", fontSize: 13.5, color: C.muted, cursor: "pointer" }}>
-                    <input type="checkbox" checked={newShop.fav} onChange={(e) => setNewShop((s) => ({ ...s, fav: e.target.checked }))} style={{ width: 17, height: 17, accentColor: accent }} />
-                    ⭐ Mark as favorite (shows first)
-                  </label>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button onClick={() => setNewShopOpen(false)} style={ghostBtn}>Cancel</button>
-                    <button onClick={addShop} disabled={!newShop.name.trim()} style={okBtn(!!newShop.name.trim())}>Add shop</button>
-                  </div>
-                </div>
-              )}
+      return (
+        <div style={{maxWidth:560,margin:"0 auto"}}>
+          {toast && (
+            <div style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:999,padding:"12px 20px",borderRadius:10,fontSize:13,fontWeight:500,background:toast.type==="success"?theme.success:theme.danger,color:"#fff"}}>
+              {toast.type==="success"?"✅":"❌"} {toast.msg}
             </div>
           )}
 
-          {curCat && curShop && (
-            <div className="cm-slide-in">
-              <div style={{ marginBottom: 16 }}>
-                <div style={sLbl}>Type</div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  {Object.entries(EXPENSE_TYPES).map(([key, cfg]) => (
-                    <button key={key} onClick={() => setCurType(key)} style={{ ...chip(curType === key, cfg.color !== "transparent" ? cfg.color : theme.primary), flex: 1, justifyContent: "center" }}>{cfg.icon} {cfg.label}</button>
-                  ))}
+          <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:14,padding:"20px",marginTop:8}}>
+            <h3 style={{fontSize:15,fontWeight:700,color:"#fff",margin:"0 0 16px 0"}}>💰 New Expense</h3>
+
+            {/* Date Selection */}
+            <MultiDateCalendar selectedDates={selectedDates} setSelectedDates={setSelectedDates} expenses={allExpenses} />
+
+            {/* Shop Mode */}
+            {selectedDates.length > 0 && (
+              <div style={{marginBottom:16}}>
+                <label style={{...inputStyle,fontSize:11,marginBottom:8,display:"block",background:"transparent",border:"none",padding:0,color:theme.textMuted}}>SHOP MODE</label>
+                <div style={{display:"flex",gap:8}}>
+                  <button onClick={() => setShopMode("same")} style={{
+                    flex:1,padding:"10px",borderRadius:8,border:"none",cursor:"pointer",fontSize:12,
+                    background:shopMode==="same"?theme.primaryGlow:theme.inputBg,
+                    color:shopMode==="same"?"#fff":theme.textMuted,
+                    outline:shopMode==="same"?`2px solid ${theme.primary}`:`1px solid ${theme.cardBorder}`,
+                  }}>🏪 Same shop for all</button>
+                  <button onClick={() => setShopMode("different")} style={{
+                    flex:1,padding:"10px",borderRadius:8,border:"none",cursor:"pointer",fontSize:12,
+                    background:shopMode==="different"?theme.primaryGlow:theme.inputBg,
+                    color:shopMode==="different"?"#fff":theme.textMuted,
+                    outline:shopMode==="different"?`2px solid ${theme.primary}`:`1px solid ${theme.cardBorder}`,
+                  }}>📋 Different shops</button>
                 </div>
               </div>
-              <div style={{ marginBottom: 4 }}>
-                <button onClick={() => setTagsOpen((o) => !o)} style={{ ...sLbl, background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", alignItems: "center", gap: 6 }}>
-                  Tags {curTags.length > 0 && <span style={{ color: accent }}>· {curTags.length}</span>} <span style={{ fontSize: 9 }}>{tagsOpen ? "▴" : "▾"}</span>
-                </button>
-                {tagsOpen && (
-                  <div className="cm-slide-in" style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
-                    {tags.map((t) => (
-                      <button key={t.id || t.name} onClick={() => toggleTag(t.name)} style={chip(curTags.includes(t.name), t.color)}>{t.icon} {t.name}</button>
+            )}
+
+            {/* SAME SHOP MODE */}
+            {shopMode === "same" && selectedDates.length > 0 && (
+              <>
+                {/* Shared Category */}
+                <div style={{marginBottom:12}}>
+                  <label style={{fontSize:11,color:theme.textMuted,marginBottom:6,display:"block"}}>CATEGORY</label>
+                  <select value={sharedCategory} onChange={e => { setSharedCategory(e.target.value); setSharedShop(""); }}
+                    style={{...inputStyle,cursor:"pointer"}}>
+                    <option value="">Select...</option>
+                    {categories.map(c => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
+                  </select>
+                </div>
+
+                {/* Shared Shop */}
+                {sharedCategory && (
+                  <div style={{marginBottom:12}}>
+                    <label style={{fontSize:11,color:theme.textMuted,marginBottom:6,display:"block"}}>SHOP</label>
+                    {categoryShops.length > 0 && (
+                      <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
+                        {categoryShops.map(s => (
+                          <button key={s.id} onClick={() => selectShop(s.name)} style={{
+                            padding:"8px 12px",borderRadius:8,border:"none",cursor:"pointer",fontSize:12,
+                            background:sharedShop===s.name?theme.primaryGlow:theme.inputBg,
+                            color:sharedShop===s.name?"#fff":theme.text,
+                            outline:sharedShop===s.name?`2px solid ${theme.primary}`:`1px solid ${theme.cardBorder}`,
+                          }}>{s.is_favorite?"⭐ ":""}{s.name}</button>
+                        ))}
+                        <button onClick={() => selectShop("Other")} style={{
+                          padding:"8px 12px",borderRadius:8,border:"none",cursor:"pointer",fontSize:12,
+                          background:sharedShop==="Other"?`${getCatColor("Other")}30`:theme.inputBg,
+                          color:sharedShop==="Other"?getCatColor("Other"):theme.textMuted,
+                          outline:sharedShop==="Other"?`2px solid ${getCatColor("Other")}`:`1px solid ${theme.cardBorder}`,
+                        }}>📦 Other</button>
+                      </div>
+                    )}
+                    <div style={{display:"flex",gap:6}}>
+                      <input type="text" placeholder="Or type new..." value={customShop} onChange={e => setCustomShop(e.target.value)} onKeyDown={e => { if(e.key==="Enter")useCustomShop(); }} style={{...inputStyle,fontSize:12,flex:1}}/>
+                      {customShop.trim() && <button onClick={useCustomShop} style={{background:theme.primary,border:"none",borderRadius:8,padding:"8px 12px",color:"#fff",cursor:"pointer",fontSize:11}}>Use</button>}
+                    </div>
+                  </div>
+                )}
+
+                {/* Expense Type & Tags (shared) */}
+                {sharedCategory && sharedShop && (
+                  <>
+                    <div style={{marginBottom:12}}>
+                      <label style={{fontSize:11,color:theme.textMuted,marginBottom:6,display:"block"}}>TYPE</label>
+                      <div style={{display:"flex",gap:6}}>
+                        {Object.entries(EXPENSE_TYPES).map(([key, cfg]) => (
+                          <button key={key} onClick={() => setSharedExpenseType(key)} style={{
+                            padding:"6px 12px",borderRadius:8,border:"none",cursor:"pointer",fontSize:11,
+                            background:sharedExpenseType===key?(cfg.color!=="transparent"?`${cfg.color}30`:theme.primaryGlow):theme.inputBg,
+                            color:sharedExpenseType===key?(cfg.color!=="transparent"?cfg.color:"#fff"):theme.textMuted,
+                            outline:sharedExpenseType===key?`2px solid ${cfg.color!=="transparent"?cfg.color:theme.primary}`:`1px solid ${theme.cardBorder}`,
+                          }}>{cfg.icon} {cfg.label}</button>
+                        ))}
+                      </div>
+                    </div>
+                    <div style={{marginBottom:16}}>
+                      <label style={{fontSize:11,color:theme.textMuted,marginBottom:6,display:"block"}}>TAGS</label>
+                      <TagSelector selectedTags={sharedTags} onChange={setSharedTags} />
+                    </div>
+                  </>
+                )}
+
+                {/* Entry rows (date + amount only) */}
+                {sharedCategory && sharedShop && (
+                  <div style={{background:theme.inputBg,borderRadius:10,padding:12,marginBottom:16}}>
+                    <div style={{fontSize:11,color:theme.textMuted,marginBottom:10}}>AMOUNTS PER DATE</div>
+                    {entries.map((entry, i) => (
+                      <div key={i} style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+                        <span style={{fontSize:12,color:theme.text,minWidth:90}}>{entry.date}</span>
+                        <input type="number" inputMode="numeric" placeholder="¥" value={entry.amount}
+                          onChange={e => updateEntry(i, "amount", e.target.value)}
+                          style={{...inputStyle,flex:1,fontSize:16,fontWeight:600,textAlign:"right",padding:"8px 12px"}}/>
+                      </div>
                     ))}
                   </div>
                 )}
-              </div>
-            </div>
-          )}
-        </>
-      );
+              </>
+            )}
 
-      const RowsSection = (
-        <div style={{ marginBottom: 16 }}>
-          {isSame && (
-            <div style={{ marginBottom: 14 }}>
-              <div style={sLbl}>Shop · applies to every day</div>
-              <button onClick={() => setPickerOpen(true)} style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 12, cursor: "pointer", border: "none", background: shop ? `${accent}1a` : C.input, boxShadow: shop ? `inset 0 0 0 1.5px ${accent}` : `inset 0 0 0 1px ${C.border}`, fontFamily: "inherit" }}>
-                <span style={{ width: 30, height: 30, borderRadius: 9, background: `${catObj ? catObj.color : "#888"}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>{catObj ? catObj.icon : "🏪"}</span>
-                <span style={{ flex: 1, textAlign: "left", minWidth: 0 }}>
-                  <span style={{ display: "block", fontSize: 14, fontWeight: 600, color: shop ? "#fff" : C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{shop || "Choose a shop"}</span>
-                  <span style={{ display: "block", fontSize: 10.5, color: C.dim }}>{shop ? cat : "tap to pick category & shop"}</span>
-                </span>
-                <span style={{ color: C.muted, fontSize: 12 }}>▸</span>
-              </button>
-            </div>
-          )}
-          <div style={sLbl}>{isSame ? "Amount per day" : "Entries"} · {rows.length}{rowsTotal > 0 ? ` · ${fmt(rowsTotal)}` : ""}</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {rows.map((r, i) => {
-              const rCat = isDiff ? r.cat : cat;
-              const rShop = isDiff ? r.shop : shop;
-              const rc = categories.find((c) => c.name === rCat);
-              const active = i === activeIdx;
-              const ringColor = rc ? rc.color : theme.primary;
-              return (
-                <div key={i} onClick={() => { setActiveRow(i); if (isDiff) setPickerOpen(true); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 12, cursor: "pointer", background: active ? `${ringColor}1f` : C.input, boxShadow: active ? `inset 0 0 0 1.5px ${ringColor}` : `inset 0 0 0 1px ${C.border}` }}>
-                  <span style={{ fontSize: 10.5, fontWeight: 700, color: active ? "#fff" : C.muted, minWidth: 56 }}>{whenLabel(r.date)}</span>
-                  <span style={{ width: 26, height: 26, borderRadius: 8, background: `${rc ? rc.color : "#888"}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>{rc ? rc.icon : "▫"}</span>
-                  <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: rShop ? C.text : C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{rShop || (isSame ? "choose shop above" : (rCat ? "Pick a shop" : "Tap → set shop"))}</span>
-                  <span style={{ fontSize: 13.5, fontWeight: 700, color: r.amount ? "#fff" : C.dim }}>{r.amount ? fmt(Number(r.amount)) : "¥–"}</span>
-                  <button onClick={(e) => { e.stopPropagation(); removeRow(i); }} style={{ border: "none", background: "none", color: C.dim, cursor: "pointer", fontSize: 17, lineHeight: 1, padding: "0 2px" }}>×</button>
-                </div>
-              );
-            })}
-          </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <button onClick={() => addDayRow(isoOfDate(today))} style={{ ...newChip(false), flex: 1, justifyContent: "center" }}>＋ Today</button>
-            <button onClick={() => addDayRow(isoOfDate(yest))} style={{ ...newChip(false), flex: 1, justifyContent: "center" }}>＋ Yesterday</button>
-            <button onClick={() => setCalOpen((o) => !o)} style={{ ...newChip(calOpen), flex: 1, justifyContent: "center" }}>📅 Pick days</button>
-          </div>
-          <div style={{ marginTop: 12, fontSize: 11, color: C.dim, textAlign: "center" }}>{isSame ? "Set the shop once · tap a day, then type its amount" : "Tap a row to set its shop · type the amount"}</div>
-        </div>
-      );
-
-      return (
-        <div style={{ maxWidth: 460, margin: "0 auto", position: "relative", minHeight: "calc(100vh - 120px)", display: "flex", flexDirection: "column" }}>
-          {toast && (
-            <div className="cm-toast" style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 999, padding: "12px 20px", borderRadius: 10, fontSize: 13, fontWeight: 500, background: toast.type === "success" ? theme.success : theme.danger, color: "#fff" }}>
-              {toast.type === "success" ? "✅" : "❌"} {toast.msg}
-            </div>
-          )}
-          {flash && (
-            <div className="cm-fade" style={{ position: "fixed", inset: 0, zIndex: 1000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, background: "rgba(8,11,22,0.8)", backdropFilter: "blur(6px)" }}>
-              <div style={{ width: 76, height: 76, borderRadius: 38, background: theme.success, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <svg width="38" height="38" viewBox="0 0 38 38" fill="none"><path d="M10 20l6 6 12-13" stroke="#fff" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
-              </div>
-              <div style={{ fontSize: 20, fontWeight: 700, color: "#fff" }}>Added {flash}</div>
-            </div>
-          )}
-
-          {/* mode switcher */}
-          <div style={{ display: "flex", gap: 3, padding: 3, background: theme.headerBg, borderRadius: 12, border: `1px solid ${C.border}`, marginTop: 8 }}>
-            {[{ k: "quick", label: "Quick", sub: "one entry" }, { k: "same", label: "Same shop", sub: "many days" }, { k: "list", label: "Different", sub: "many shops" }].map((m) => (
-              <button key={m.k} onClick={() => switchMode(m.k)} style={{ flex: 1, padding: "6px 4px", borderRadius: 9, border: "none", cursor: "pointer", fontFamily: "inherit", background: mode === m.k ? theme.primaryGlow : "transparent", boxShadow: mode === m.k ? `inset 0 0 0 1px ${theme.primary}` : "none" }}>
-                <div style={{ fontSize: 12.5, fontWeight: 700, color: mode === m.k ? "#fff" : C.muted }}>{m.label}</div>
-                <div style={{ fontSize: 8.5, color: mode === m.k ? "rgba(255,255,255,0.7)" : C.dim, marginTop: 1 }}>{m.sub}</div>
-              </button>
-            ))}
-          </div>
-
-          {/* amount hero */}
-          <div style={{ padding: "14px 0 12px", textAlign: "center" }}>
-            <div style={{ fontSize: 50, fontWeight: 700, letterSpacing: -2, lineHeight: 1, color: amt > 0 ? "#fff" : C.dim }}>{amt > 0 ? fmt(amt) : "¥0"}</div>
-            <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8, minHeight: 18 }}>
-              {isMulti
-                ? <span><span style={{ color: C.dim }}>{isSame ? "Day" : "Entry"} {activeIdx + 1}/{rows.length} · {whenLabel(aRow.date)}</span>{curShop ? <span> · <span style={{ color: catObj.color }}>{curShop}</span></span> : isSame ? " · choose the shop" : curCat ? " · pick shop" : " · choose category"}</span>
-                : curCat && curShop ? <span><span style={{ color: catObj.color }}>{catObj.icon} {curCat}</span> · {curShop}</span>
-                : curCat ? <span style={{ color: catObj.color }}>{catObj.icon} {curCat} — pick a shop</span>
-                : (isMulti ? "" : "Choose a category below")}
-            </div>
-          </div>
-
-          {/* date chip (quick only) */}
-          {!isMulti && (
-            <div style={{ display: "flex", justifyContent: "center", marginBottom: 6 }}>
-              <button onClick={() => setCalOpen((o) => !o)} style={{ ...chip(true, theme.primary), padding: "8px 14px", fontWeight: 600 }}>📅 {dateLabel} ▾</button>
-            </div>
-          )}
-
-          {/* scroll body */}
-          <div style={{ flex: 1 }}>
-            {calOpen && (
-              <div className="cm-slide-in" style={{ marginBottom: 16 }}>
-                <AddCalSheet dates={dates} setDates={setDates} today={today} yest={yest} C={C} chip={chip} theme={theme}
-                  confirmLabel={isMulti ? "Add these days" : "Done"}
-                  onClose={() => { if (isMulti) { appendDayRows(dates); setDates([]); } setCalOpen(false); }} />
+            {/* DIFFERENT SHOPS MODE */}
+            {shopMode === "different" && selectedDates.length > 0 && (
+              <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:16}}>
+                {entries.map((entry, i) => (
+                  <DifferentShopEntry key={i} entry={entry} index={i} updateEntry={updateEntry} />
+                ))}
               </div>
             )}
-            {isMulti && RowsSection}
-            {mode === "quick" && Editor}
 
-            {recentEntries && recentEntries.length > 0 && (
-              <div style={{ marginTop: 18 }}>
-                <div style={sLbl}>Recent · tap to repeat</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                  {recentEntries.slice(0, 5).map((e) => {
-                    const ec = categories.find((c) => c.name === e.category);
-                    return (
-                      <button key={e.id} onClick={() => repeat(e)} style={{ display: "flex", alignItems: "center", gap: 11, padding: "10px 4px", background: "none", border: "none", borderBottom: `1px solid ${C.border}`, cursor: "pointer", textAlign: "left", width: "100%" }}>
-                        <span style={{ width: 30, height: 30, borderRadius: 9, background: `${ec ? ec.color : "#888"}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0 }}>{ec ? ec.icon : "📦"}</span>
-                        <span style={{ flex: 1, minWidth: 0 }}>
-                          <span style={{ display: "block", fontSize: 13.5, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.shop}</span>
-                          <span style={{ display: "block", fontSize: 10.5, color: C.dim }}>{e.category} · {whenLabel(e.date)}</span>
-                        </span>
-                        <span style={{ fontSize: 13.5, fontWeight: 700, color: "#fff" }}>{fmt(e.amount)}</span>
-                        <span style={{ color: C.dim, fontSize: 15, marginLeft: 2 }}>↻</span>
-                      </button>
-                    );
-                  })}
-                </div>
+            {/* Summary & Submit */}
+            {validEntries.length > 0 && (
+              <div style={{background:theme.inputBg,borderRadius:10,padding:"12px 16px",marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <span style={{fontSize:12,color:theme.textMuted}}>{validEntries.length} entries</span>
+                <span style={{fontSize:18,fontWeight:700,color:"#fff"}}>{fmt(totalAmount)}</span>
               </div>
             )}
+
+            <button onClick={handleSubmit} disabled={saving || validEntries.length === 0}
+              style={{
+                width:"100%",padding:"14px",borderRadius:10,border:"none",
+                cursor:(saving||validEntries.length===0)?"not-allowed":"pointer",
+                fontSize:14,fontWeight:600,color:"#fff",
+                background:(saving||validEntries.length===0)?theme.textDim:`linear-gradient(135deg,${theme.primary},${theme.accent})`,
+                opacity:(saving||validEntries.length===0)?0.5:1,
+              }}>
+              {saving ? "Saving…" : `💾 Save ${validEntries.length || ""}`}
+            </button>
           </div>
 
-          {/* shop picker sheet (multi) */}
-          {isMulti && pickerOpen && (
-            <>
-              <div onClick={() => setPickerOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(6,8,16,0.62)", zIndex: 200 }} />
-              <div className="cm-sheet-in" style={{ position: "fixed", top: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 460, zIndex: 201, background: theme.bg, borderBottomLeftRadius: 24, borderBottomRightRadius: 24, padding: "22px 20px 20px", maxHeight: "85vh", overflowY: "auto", boxShadow: "0 24px 60px rgba(0,0,0,0.55)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                  <div>
-                    <div style={{ fontSize: 10.5, letterSpacing: 1.4, textTransform: "uppercase", color: C.dim, fontWeight: 600 }}>{isSame ? "Shop · applies to all days" : `Set up entry · ${whenLabel(aRow.date)}`}</div>
-                    <div style={{ fontSize: 19, fontWeight: 700, marginTop: 3, color: "#fff" }}>
-                      {curCat && curShop ? <span style={{ color: catObj.color }}>{catObj.icon} {curShop}</span> : curCat ? <span style={{ color: catObj.color }}>{catObj.icon} {curCat} — pick a shop</span> : "Choose a category"}
+          {/* Recent */}
+          {recentEntries.length > 0 && (
+            <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:14,padding:"16px",marginTop:16}}>
+              <h4 style={{fontSize:11,fontWeight:600,color:theme.textMuted,marginTop:0,marginBottom:10,textTransform:"uppercase"}}>Recent</h4>
+              {recentEntries.slice(0,4).map(e => (
+                <div key={e.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:`1px solid ${theme.cardBorder}`}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    {EXPENSE_TYPES[e.expense_type]?.icon && <span style={{fontSize:10}}>{EXPENSE_TYPES[e.expense_type].icon}</span>}
+                    <span style={{fontSize:14}}>{getCatIcon(e.category)}</span>
+                    <div>
+                      <div style={{fontSize:12,color:theme.text}}>{e.shop}</div>
+                      <div style={{fontSize:10,color:theme.textDim}}>{e.date}</div>
                     </div>
                   </div>
-                  <button onClick={() => setPickerOpen(false)} style={{ border: "none", background: C.input, color: C.muted, width: 34, height: 34, borderRadius: 17, fontSize: 19, cursor: "pointer", boxShadow: `inset 0 0 0 1px ${C.border}`, flexShrink: 0 }}>×</button>
+                  <span style={{fontSize:13,fontWeight:600,color:"#fff"}}>{fmt(e.amount)}</span>
                 </div>
-                {Editor}
-                <button onClick={() => setPickerOpen(false)} style={{ width: "100%", height: 50, marginTop: 18, borderRadius: 14, border: "none", fontFamily: "inherit", fontSize: 15, fontWeight: 700, cursor: "pointer", background: curShop ? `linear-gradient(135deg, ${accent}, ${theme.accent})` : C.input, color: curShop ? "#fff" : C.muted }}>
-                  {curShop ? "Done · enter amount ↓" : "Pick a category & shop above"}
-                </button>
-              </div>
-            </>
+              ))}
+            </div>
           )}
-
-          {/* numpad */}
-          <div style={{ padding: "10px 0 6px", display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
-            {["7","8","9","4","5","6","1","2","3","00","0","del"].map((k) => (
-              <button key={k} className="cm-chip" onClick={() => press(k)} style={{ height: 48, borderRadius: 12, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: k === "del" ? 18 : 22, fontWeight: 600, color: k === "del" ? C.muted : "#fff", background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${C.border}` }}>
-                {k === "del" ? "⌫" : k}
-              </button>
-            ))}
-          </div>
-
-          {/* action bar */}
-          <div style={{ padding: "6px 0 24px" }}>
-            {!isMulti ? (
-              <button onClick={save} disabled={!valid || saving} style={ctaStyle(valid)}>
-                {saving ? "Saving…" : saved ? "✓ Saved" : valid ? `Add ${fmt(amt)}${dates.length > 1 ? ` × ${dates.length}` : ""}` : "Enter amount, category & shop"}
-              </button>
-            ) : (
-              <button onClick={saveMulti} disabled={!filledRows.length || saving} style={ctaStyle(!!filledRows.length)}>
-                {saving ? "Saving…" : saved ? "✓ Saved" : filledRows.length ? `Save all (${filledRows.length}) · ${fmt(filledRows.reduce((s, r) => s + Number(r.amount), 0))}` : (isSame ? "Set a shop & amounts" : "Fill in a shop & amount")}
-              </button>
-            )}
-          </div>
         </div>
       );
     }
 
-    // compact multi-date picker sheet for the Add screen
-    function AddCalSheet({ dates, setDates, today, yest, C, chip, theme, onClose, confirmLabel = "Done" }) {
-      const [view, setView] = useState({ y: today.getFullYear(), m: today.getMonth() });
-      const dim = new Date(view.y, view.m + 1, 0).getDate();
-      const fd = (new Date(view.y, view.m, 1).getDay() + 6) % 7;
-      const isoOf = (day) => `${view.y}-${String(view.m + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-      const toggle = (day) => { const s = isoOf(day); setDates((p) => p.includes(s) ? p.filter((x) => x !== s) : [...p, s].sort()); };
-      const quick = (d) => setDates([d.toISOString().slice(0, 10)]);
+    // Different Shop Entry Row
+    function DifferentShopEntry({ entry, index, updateEntry }) {
+      const { theme, inputStyle, categories, shops, getCatIcon, getCatColor } = useTheme();
+      const [customShop, setCustomShop] = useState("");
+
+      const categoryShops = useMemo(() => {
+        if (!entry.category) return [];
+        return shops.filter(s => s.category === entry.category).sort((a,b) => {
+          if (a.is_favorite && !b.is_favorite) return -1;
+          if (!a.is_favorite && b.is_favorite) return 1;
+          return a.name.localeCompare(b.name);
+        });
+      }, [shops, entry.category]);
+
+      const selectShop = (name) => { updateEntry(index, "shop", name); setCustomShop(""); };
+
       return (
-        <div style={{ background: C.card, borderRadius: 16, padding: 14, boxShadow: `inset 0 0 0 1px ${C.border}` }}>
-          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-            <button onClick={() => quick(today)} style={{ ...chip(dates.length === 1 && dates[0] === today.toISOString().slice(0, 10), theme.primary), flex: 1, justifyContent: "center" }}>Today</button>
-            <button onClick={() => quick(yest)} style={{ ...chip(dates.length === 1 && dates[0] === yest.toISOString().slice(0, 10), theme.primary), flex: 1, justifyContent: "center" }}>Yesterday</button>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-            <button onClick={() => setView((v) => v.m === 0 ? { y: v.y - 1, m: 11 } : { ...v, m: v.m - 1 })} style={{ background: C.input, border: "none", color: C.muted, width: 28, height: 28, borderRadius: 8, cursor: "pointer" }}>◀</button>
-            <span style={{ fontSize: 13, fontWeight: 600, color: "#fff" }}>{MONTHS_FULL[view.m]} {view.y}</span>
-            <button onClick={() => setView((v) => v.m === 11 ? { y: v.y + 1, m: 0 } : { ...v, m: v.m + 1 })} style={{ background: C.input, border: "none", color: C.muted, width: 28, height: 28, borderRadius: 8, cursor: "pointer" }}>▶</button>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 3 }}>
-            {["M","T","W","T","F","S","S"].map((d, i) => <div key={i} style={{ textAlign: "center", fontSize: 9, color: C.dim, padding: 2 }}>{d}</div>)}
-            {Array.from({ length: fd }).map((_, i) => <div key={"e" + i} />)}
-            {Array.from({ length: dim }).map((_, i) => {
-              const day = i + 1; const sel = dates.includes(isoOf(day));
-              return (
-                <button key={day} onClick={() => toggle(day)} style={{ aspectRatio: "1", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, background: sel ? theme.primary : "transparent", color: sel ? "#fff" : C.text, fontWeight: sel ? 700 : 400 }}>{day}</button>
-              );
-            })}
-          </div>
-          <button onClick={onClose} style={{ width: "100%", marginTop: 10, height: 38, borderRadius: 11, border: "none", background: dates.length ? theme.primary : C.input, color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-            {confirmLabel}{dates.length > 1 ? ` · ${dates.length} days` : ""}
-          </button>
+        <div style={{background:theme.inputBg,borderRadius:10,padding:12,border:`1px solid ${theme.cardBorder}`}}>
+          <div style={{fontSize:12,fontWeight:600,color:theme.text,marginBottom:10}}>#{index+1} — {entry.date}</div>
+          
+          <select value={entry.category||""} onChange={e => { updateEntry(index, "category", e.target.value); updateEntry(index, "shop", ""); }}
+            style={{...inputStyle,marginBottom:8,fontSize:12,cursor:"pointer"}}>
+            <option value="">Category...</option>
+            {categories.map(c => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
+          </select>
+
+          {entry.category && (
+            <>
+              {categoryShops.length > 0 && (
+                <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:8}}>
+                  {categoryShops.map(s => (
+                    <button key={s.id} onClick={() => selectShop(s.name)} style={{
+                      padding:"6px 10px",borderRadius:6,border:"none",cursor:"pointer",fontSize:11,
+                      background:entry.shop===s.name?theme.primaryGlow:theme.cardBg,
+                      color:entry.shop===s.name?"#fff":theme.text,
+                    }}>{s.is_favorite?"⭐ ":""}{s.name}</button>
+                  ))}
+                  <button onClick={() => selectShop("Other")} style={{
+                    padding:"6px 10px",borderRadius:6,border:"none",cursor:"pointer",fontSize:11,
+                    background:entry.shop==="Other"?`${getCatColor("Other")}30`:theme.cardBg,
+                    color:entry.shop==="Other"?getCatColor("Other"):theme.textMuted,
+                  }}>Other</button>
+                </div>
+              )}
+              <div style={{display:"flex",gap:6,marginBottom:8}}>
+                <input type="text" placeholder="Or type shop..." value={customShop} onChange={e => setCustomShop(e.target.value)}
+                  onKeyDown={e => { if(e.key==="Enter" && customShop.trim()) selectShop(customShop.trim()); }}
+                  style={{...inputStyle,fontSize:11,flex:1,padding:"6px 10px"}}/>
+                {customShop.trim() && <button onClick={() => selectShop(customShop.trim())} style={{background:theme.primary,border:"none",borderRadius:6,padding:"6px 10px",color:"#fff",cursor:"pointer",fontSize:10}}>Use</button>}
+              </div>
+            </>
+          )}
+
+          {entry.category && entry.shop && (
+            <div style={{display:"flex",gap:8}}>
+              <input type="number" inputMode="numeric" placeholder="¥ Amount" value={entry.amount||""}
+                onChange={e => updateEntry(index, "amount", e.target.value)}
+                style={{...inputStyle,flex:1,fontSize:14,fontWeight:600,textAlign:"right",padding:"8px 10px"}}/>
+              <select value={entry.expense_type||"normal"} onChange={e => updateEntry(index, "expense_type", e.target.value)}
+                style={{...inputStyle,width:90,fontSize:11,cursor:"pointer",padding:"8px"}}>
+                <option value="normal">Normal</option>
+                <option value="fixed">📌 Fixed</option>
+                <option value="outlier">⚡ Outlier</option>
+              </select>
+            </div>
+          )}
         </div>
       );
     }
