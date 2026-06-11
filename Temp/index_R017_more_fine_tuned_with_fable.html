@@ -524,7 +524,6 @@
       const [activeRow, setActiveRow] = useState(0);
       const [pickerOpen, setPickerOpen] = useState(false);
       const [calOpen, setCalOpen] = useState(false);
-      const [padOpen, setPadOpen] = useState(false);
       const [tagsOpen, setTagsOpen] = useState(false);
       const [saving, setSaving] = useState(false);
       const [saved, setSaved] = useState(false);
@@ -641,7 +640,7 @@
       // styles
       const chip = (active, color) => ({ padding: "9px 13px", borderRadius: 11, border: "none", cursor: "pointer", fontSize: 13, fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0, transition: "all .15s", display: "flex", alignItems: "center", gap: 6, background: active ? `${color}26` : C.input, color: active ? "#fff" : C.muted, boxShadow: active ? `inset 0 0 0 1.5px ${color}` : `inset 0 0 0 1px ${C.border}` });
       const sLbl = { fontSize: 10.5, letterSpacing: 1.4, textTransform: "uppercase", color: C.dim, margin: "0 0 9px", fontWeight: 600 };
-      const scrollRow = { display: "flex", flexWrap: "wrap", gap: 8, paddingBottom: 4 };
+      const scrollRow = { display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4 };
       const newChip = (on) => ({ padding: "8px 12px", borderRadius: 11, cursor: "pointer", fontSize: 13, fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0, display: "flex", alignItems: "center", gap: 5, color: theme.primary, fontWeight: 600, background: on ? `${theme.primary}22` : "transparent", border: `1.5px dashed ${on ? theme.primary : theme.primary + "70"}` });
       const creatorCard = { marginTop: 12, background: C.card, borderRadius: 14, padding: 14, boxShadow: `inset 0 0 0 1px ${C.border}` };
       const fieldInput = { width: "100%", padding: "11px 13px", borderRadius: 11, border: "none", background: C.input, color: "#fff", fontSize: 14.5, fontFamily: "inherit", boxShadow: `inset 0 0 0 1px ${C.border}`, outline: "none" };
@@ -761,7 +760,7 @@
               const active = i === activeIdx;
               const ringColor = rc ? rc.color : theme.primary;
               return (
-                <div key={i} onClick={() => { setActiveRow(i); if (isDiff) setPickerOpen(true); else setPadOpen(true); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 12, cursor: "pointer", background: active ? `${ringColor}1f` : C.input, boxShadow: active ? `inset 0 0 0 1.5px ${ringColor}` : `inset 0 0 0 1px ${C.border}` }}>
+                <div key={i} onClick={() => { setActiveRow(i); if (isDiff) setPickerOpen(true); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 12, cursor: "pointer", background: active ? `${ringColor}1f` : C.input, boxShadow: active ? `inset 0 0 0 1.5px ${ringColor}` : `inset 0 0 0 1px ${C.border}` }}>
                   <span style={{ fontSize: 10.5, fontWeight: 700, color: active ? "#fff" : C.muted, minWidth: 56 }}>{whenLabel(r.date)}</span>
                   <span style={{ width: 26, height: 26, borderRadius: 8, background: `${rc ? rc.color : "#888"}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>{rc ? rc.icon : "▫"}</span>
                   <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: rShop ? C.text : C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{rShop || (isSame ? "choose shop above" : (rCat ? "Pick a shop" : "Tap → set shop"))}</span>
@@ -780,29 +779,8 @@
         </div>
       );
 
-      const recentBlock = recentEntries && recentEntries.length > 0 ? (
-        <div style={{ marginTop: 22 }}>
-          <div style={sLbl}>Recent · tap to repeat</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            {recentEntries.slice(0, 5).map((e) => {
-              const ec = categories.find((c) => c.name === e.category);
-              return (
-                <button key={e.id} onClick={() => repeat(e)} style={{ display: "flex", alignItems: "center", gap: 11, padding: "10px 4px", background: "none", border: "none", borderBottom: `1px solid ${C.border}`, cursor: "pointer", textAlign: "left", width: "100%" }}>
-                  <span style={{ width: 30, height: 30, borderRadius: 9, background: `${ec ? ec.color : "#888"}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0 }}>{ec ? ec.icon : "📦"}</span>
-                  <span style={{ flex: 1, minWidth: 0 }}>
-                    <span style={{ display: "block", fontSize: 13.5, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.shop}</span>
-                    <span style={{ display: "block", fontSize: 10.5, color: C.dim }}>{e.category} · {whenLabel(e.date)}</span>
-                  </span>
-                  <span style={{ fontSize: 13.5, fontWeight: 700, color: "#fff" }}>{fmt(e.amount)}</span>
-                  <span style={{ color: C.dim, fontSize: 15, marginLeft: 2 }}>↻</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ) : null;
       return (
-        <div style={{ maxWidth: 460, margin: "0 auto", position: "relative" }}>
+        <div style={{ maxWidth: 460, margin: "0 auto", position: "relative", minHeight: "calc(100vh - 120px)", display: "flex", flexDirection: "column" }}>
           {toast && (
             <div className="cm-toast" style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 999, padding: "12px 20px", borderRadius: 10, fontSize: 13, fontWeight: 500, background: toast.type === "success" ? theme.success : theme.danger, color: "#fff" }}>
               {toast.type === "success" ? "✅" : "❌"} {toast.msg}
@@ -827,13 +805,13 @@
             ))}
           </div>
 
-          {/* amount hero — tap to open the keypad */}
-          <div onClick={() => setPadOpen(true)} style={{ padding: "14px 0 12px", textAlign: "center", cursor: "pointer" }}>
-            <div style={{ fontSize: 50, fontWeight: 700, letterSpacing: -2, lineHeight: 1, color: amt > 0 ? "#fff" : C.dim, display: "inline-flex", alignItems: "center", gap: 8, padding: "2px 14px", borderRadius: 14, boxShadow: padOpen ? `inset 0 0 0 1.5px ${accent}66` : "none", transition: "box-shadow .15s" }}>{amt > 0 ? fmt(amt) : "¥0"}</div>
+          {/* amount hero */}
+          <div style={{ padding: "14px 0 12px", textAlign: "center" }}>
+            <div style={{ fontSize: 50, fontWeight: 700, letterSpacing: -2, lineHeight: 1, color: amt > 0 ? "#fff" : C.dim }}>{amt > 0 ? fmt(amt) : "¥0"}</div>
             <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8, minHeight: 18 }}>
               {isMulti
                 ? <span><span style={{ color: C.dim }}>{isSame ? "Day" : "Entry"} {activeIdx + 1}/{rows.length} · {whenLabel(aRow.date)}</span>{curShop ? <span> · <span style={{ color: catObj.color }}>{curShop}</span></span> : isSame ? " · choose the shop" : curCat ? " · pick shop" : " · choose category"}</span>
-                : curCat && curShop ? <span><span style={{ color: catObj.color }}>{catObj.icon} {curCat}</span> · {curShop}{!padOpen && amt === 0 ? <span style={{ color: C.dim }}> · tap ¥ to enter amount</span> : ""}</span>
+                : curCat && curShop ? <span><span style={{ color: catObj.color }}>{catObj.icon} {curCat}</span> · {curShop}</span>
                 : curCat ? <span style={{ color: catObj.color }}>{catObj.icon} {curCat} — pick a shop</span>
                 : (isMulti ? "" : "Choose a category below")}
             </div>
@@ -847,7 +825,7 @@
           )}
 
           {/* scroll body */}
-          <div>
+          <div style={{ flex: 1 }}>
             {calOpen && (
               <div className="cm-slide-in" style={{ marginBottom: 16 }}>
                 <AddCalSheet dates={dates} setDates={setDates} today={today} yest={yest} C={C} chip={chip} theme={theme}
@@ -857,6 +835,28 @@
             )}
             {isMulti && RowsSection}
             {mode === "quick" && Editor}
+
+            {recentEntries && recentEntries.length > 0 && (
+              <div style={{ marginTop: 18 }}>
+                <div style={sLbl}>Recent · tap to repeat</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  {recentEntries.slice(0, 5).map((e) => {
+                    const ec = categories.find((c) => c.name === e.category);
+                    return (
+                      <button key={e.id} onClick={() => repeat(e)} style={{ display: "flex", alignItems: "center", gap: 11, padding: "10px 4px", background: "none", border: "none", borderBottom: `1px solid ${C.border}`, cursor: "pointer", textAlign: "left", width: "100%" }}>
+                        <span style={{ width: 30, height: 30, borderRadius: 9, background: `${ec ? ec.color : "#888"}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0 }}>{ec ? ec.icon : "📦"}</span>
+                        <span style={{ flex: 1, minWidth: 0 }}>
+                          <span style={{ display: "block", fontSize: 13.5, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.shop}</span>
+                          <span style={{ display: "block", fontSize: 10.5, color: C.dim }}>{e.category} · {whenLabel(e.date)}</span>
+                        </span>
+                        <span style={{ fontSize: 13.5, fontWeight: 700, color: "#fff" }}>{fmt(e.amount)}</span>
+                        <span style={{ color: C.dim, fontSize: 15, marginLeft: 2 }}>↻</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* shop picker sheet (multi) */}
@@ -874,23 +874,21 @@
                   <button onClick={() => setPickerOpen(false)} style={{ border: "none", background: C.input, color: C.muted, width: 34, height: 34, borderRadius: 17, fontSize: 19, cursor: "pointer", boxShadow: `inset 0 0 0 1px ${C.border}`, flexShrink: 0 }}>×</button>
                 </div>
                 {Editor}
-                <button onClick={() => { setPickerOpen(false); setPadOpen(true); }} style={{ width: "100%", height: 50, marginTop: 18, borderRadius: 14, border: "none", fontFamily: "inherit", fontSize: 15, fontWeight: 700, cursor: "pointer", background: curShop ? `linear-gradient(135deg, ${accent}, ${theme.accent})` : C.input, color: curShop ? "#fff" : C.muted }}>
+                <button onClick={() => setPickerOpen(false)} style={{ width: "100%", height: 50, marginTop: 18, borderRadius: 14, border: "none", fontFamily: "inherit", fontSize: 15, fontWeight: 700, cursor: "pointer", background: curShop ? `linear-gradient(135deg, ${accent}, ${theme.accent})` : C.input, color: curShop ? "#fff" : C.muted }}>
                   {curShop ? "Done · enter amount ↓" : "Pick a category & shop above"}
                 </button>
               </div>
             </>
           )}
 
-          {/* numpad — only when the amount is tapped */}
-          {padOpen && (
-            <div className="cm-sheet-in" style={{ padding: "10px 0 6px", display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
-              {["7","8","9","4","5","6","1","2","3","00","0","del"].map((k) => (
-                <button key={k} className="cm-chip" onClick={() => press(k)} style={{ height: 48, borderRadius: 12, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: k === "del" ? 18 : 22, fontWeight: 600, color: k === "del" ? C.muted : "#fff", background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${C.border}` }}>
-                  {k === "del" ? "⌫" : k}
-                </button>
-              ))}
-            </div>
-          )}
+          {/* numpad */}
+          <div style={{ padding: "10px 0 6px", display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
+            {["7","8","9","4","5","6","1","2","3","00","0","del"].map((k) => (
+              <button key={k} className="cm-chip" onClick={() => press(k)} style={{ height: 48, borderRadius: 12, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: k === "del" ? 18 : 22, fontWeight: 600, color: k === "del" ? C.muted : "#fff", background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${C.border}` }}>
+                {k === "del" ? "⌫" : k}
+              </button>
+            ))}
+          </div>
 
           {/* action bar */}
           <div style={{ padding: "6px 0 24px" }}>
@@ -904,8 +902,6 @@
               </button>
             )}
           </div>
-
-          {recentBlock}
         </div>
       );
     }
@@ -1087,10 +1083,10 @@
                   <div style={{display:"flex",alignItems:"center",gap:10}}>
                     <span style={{fontSize:20}}>{cat.icon}</span>
                     <div>
-                      <div style={{color:theme.text,fontSize:13,fontWeight:500,display:"flex",alignItems:"center",gap:7}}>{cat.name}<span style={{width:9,height:9,borderRadius:3,background:cat.color,display:"inline-block",flexShrink:0}}/></div>
-                      <div style={{color:theme.textDim,fontSize:10,whiteSpace:"nowrap"}}>{getCategoryUsage(cat.name)} expenses</div>
+                      <div style={{color:theme.text,fontSize:13,fontWeight:500}}>{cat.name}</div>
+                      <div style={{color:theme.textDim,fontSize:10}}>{getCategoryUsage(cat.name)} expenses</div>
                     </div>
-                    <div style={{width:0,height:0,display:"none"}}/>
+                    <div style={{width:10,height:10,borderRadius:3,background:cat.color}}/>
                   </div>
                   <button onClick={() => setEditingCat({ ...cat, originalName: cat.name })} style={{background:"none",border:"none",cursor:"pointer",fontSize:12}}>✏️</button>
                 </div>
@@ -1128,7 +1124,7 @@
                         </button>
                         <div>
                           <div style={{color:theme.text,fontSize:13,fontWeight:500}}>{shop.name}</div>
-                          <div style={{color:theme.textDim,fontSize:10,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{getCatIcon(shop.category)} {shop.category} • {getShopUsage(shop.name)} expenses</div>
+                          <div style={{color:theme.textDim,fontSize:10}}>{getCatIcon(shop.category)} {shop.category} • {getShopUsage(shop.name)} expenses</div>
                         </div>
                       </div>
                       <div style={{display:"flex",gap:6}}>
@@ -1181,10 +1177,10 @@
                   <div style={{display:"flex",alignItems:"center",gap:10}}>
                     <span style={{fontSize:18}}>{tag.icon}</span>
                     <div>
-                      <div style={{color:theme.text,fontSize:13,fontWeight:500,display:"flex",alignItems:"center",gap:7}}>{tag.name}<span style={{width:9,height:9,borderRadius:3,background:tag.color,display:"inline-block",flexShrink:0}}/></div>
-                      <div style={{color:theme.textDim,fontSize:10,whiteSpace:"nowrap"}}>{getTagUsage(tag.name)} expenses</div>
+                      <div style={{color:theme.text,fontSize:13,fontWeight:500}}>{tag.name}</div>
+                      <div style={{color:theme.textDim,fontSize:10}}>{getTagUsage(tag.name)} expenses</div>
                     </div>
-                    <div style={{width:0,height:0,display:"none"}}/>
+                    <div style={{width:10,height:10,borderRadius:3,background:tag.color}}/>
                   </div>
                   <div style={{display:"flex",gap:6}}>
                     <button onClick={() => setEditingTag({ ...tag, originalName: tag.name })} style={{background:"none",border:"none",cursor:"pointer",fontSize:12}}>✏️</button>
@@ -1312,7 +1308,7 @@
             </div>
           )}
 
-          <div style={{overflowX:"auto",scrollbarWidth:"thin"}} className="tx-scroll">
+          <div style={{overflowX:"auto"}}>
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
               <thead>
                 <tr style={{borderBottom:`1px solid ${theme.cardBorder}`}}>
@@ -1327,16 +1323,16 @@
                     <td style={{padding:"8px 6px",width:20}}>{EXPENSE_TYPES[tx.expense_type]?.icon}</td>
                     <td style={{padding:"8px 6px",color:theme.textMuted,whiteSpace:"nowrap"}}>{tx.date}</td>
                     <td style={{padding:"8px 6px",color:theme.text,fontWeight:500,maxWidth:100,overflow:"hidden",textOverflow:"ellipsis"}}>{tx.shop}</td>
-                    <td style={{padding:"8px 6px"}}><span style={{fontSize:14,cursor:"default"}} title={tx.category}>{getCatIcon(tx.category)}</span></td>
+                    <td style={{padding:"8px 6px"}}><span style={{fontSize:14}}>{getCatIcon(tx.category)}</span></td>
                     <td style={{padding:"8px 6px"}}>
                       {(tx.tags||"").split(",").filter(Boolean).slice(0,2).map(t => (
-                        <span key={t} title={t} style={{fontSize:12,marginRight:3,cursor:"default"}}>{getTagIcon(t)}</span>
+                        <span key={t} style={{fontSize:10,marginRight:2}}>{getTagIcon(t)}</span>
                       ))}
                     </td>
                     <td style={{padding:"8px 6px",color:"#fff",fontWeight:600}}>{fmt(tx.amount)}</td>
                     <td style={{padding:"8px 6px"}}>
-                      <button title="Edit" onClick={() => openEdit(tx)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,opacity:0.8,padding:"2px 4px"}}>✏️</button>
-                      <button title="Delete" onClick={() => setDeletingTx(tx)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,opacity:0.8,padding:"2px 4px"}}>🗑️</button>
+                      <button onClick={() => openEdit(tx)} style={{background:"none",border:"none",cursor:"pointer",fontSize:11}}>✏️</button>
+                      <button onClick={() => setDeletingTx(tx)} style={{background:"none",border:"none",cursor:"pointer",fontSize:11}}>🗑️</button>
                     </td>
                   </tr>
                 ))}
@@ -1345,7 +1341,7 @@
           </div>
           <div style={{display:"flex",justifyContent:"center",gap:8,padding:"12px"}}>
             <button onClick={() => setTxPage(p => Math.max(0,p-1))} disabled={txPage===0} style={{padding:"5px 12px",borderRadius:6,border:"none",cursor:txPage===0?"default":"pointer",background:txPage===0?theme.cardBg:theme.inputBg,color:theme.textMuted,fontSize:11}}>←</button>
-            <span style={{fontSize:11,color:theme.textDim,alignSelf:"center"}}>Page {txPage+1} of {txPages||1}</span>
+            <span style={{fontSize:11,color:theme.textDim}}>{txPage+1}/{txPages||1}</span>
             <button onClick={() => setTxPage(p => Math.min(txPages-1,p+1))} disabled={txPage>=txPages-1} style={{padding:"5px 12px",borderRadius:6,border:"none",cursor:txPage>=txPages-1?"default":"pointer",background:txPage>=txPages-1?theme.cardBg:theme.inputBg,color:theme.textMuted,fontSize:11}}>→</button>
           </div>
 
@@ -1401,105 +1397,11 @@
     // ═══════════════════════════════════════════
     //  OVERVIEW VIEW
     // ═══════════════════════════════════════════
-    // ═══════════════════════════════════════════
-    //  SVG CHARTS (dependency-free — replaces Recharts, which fails to paint)
-    // ═══════════════════════════════════════════
-    function SvgAreaChart({ data, height = 220, color, gridColor, labelColor, labelStep = 1, peakColor }) {
-      if (!data || data.length === 0) return <div style={{ height, display: "flex", alignItems: "center", justifyContent: "center", color: labelColor, fontSize: 12 }}>No data for this range</div>;
-      const W = 540, H = height, padL = 42, padR = 10, padT = 14, padB = 22;
-      const innerW = W - padL - padR, innerH = H - padT - padB;
-      const max = Math.max(...data.map(d => d.total), 1) * 1.12;
-      const n = data.length;
-      const x = i => padL + (n === 1 ? innerW / 2 : (i / (n - 1)) * innerW);
-      const y = v => padT + innerH * (1 - v / max);
-      const pts = data.map((d, i) => [x(i), y(d.total)]);
-      let line = `M ${pts[0][0]} ${pts[0][1]}`;
-      for (let i = 1; i < n; i++) { const mx = (pts[i-1][0] + pts[i][0]) / 2; line += ` C ${mx} ${pts[i-1][1]}, ${mx} ${pts[i][1]}, ${pts[i][0]} ${pts[i][1]}`; }
-      const area = `${line} L ${pts[n-1][0]} ${padT + innerH} L ${pts[0][0]} ${padT + innerH} Z`;
-      const peakIdx = data.reduce((bi, d, i, a) => (d.total > a[bi].total ? i : bi), 0);
-      const gridVals = [0, 0.5, 1].map(t => (max / 1.12) * t);
-      const uid = useMemo(() => Math.random().toString(36).slice(2, 8), []);
-      return (
-        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block", overflow: "visible" }}>
-          <defs><linearGradient id={`ag-${uid}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity="0.3" /><stop offset="100%" stopColor={color} stopOpacity="0.02" /></linearGradient></defs>
-          {gridVals.map((gv, i) => (
-            <g key={i}>
-              <line x1={padL} y1={y(gv)} x2={W - padR} y2={y(gv)} stroke={gridColor} strokeDasharray="3 3" strokeWidth="1" />
-              <text x={padL - 6} y={y(gv) + 3} textAnchor="end" fontSize="9" fill={labelColor} fontFamily="inherit">{`¥${Math.round(gv / 1000)}k`}</text>
-            </g>
-          ))}
-          <path d={area} fill={`url(#ag-${uid})`} />
-          <path d={line} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
-          {pts.map(([cx, cy], i) => (
-            <circle key={i} cx={cx} cy={cy} r={i === peakIdx ? 4 : (n > 40 ? 0 : 2.2)} fill={i === peakIdx ? (peakColor || color) : color} stroke="rgba(0,0,0,0.4)" strokeWidth="1">
-              <title>{data[i].label}: {fmt(data[i].total)}</title>
-            </circle>
-          ))}
-          {data.map((d, i) => (i % labelStep === 0 ? <text key={`l${i}`} x={x(i)} y={H - 6} textAnchor="middle" fontSize={n > 20 ? 7.5 : 9} fill={i === peakIdx ? (peakColor || color) : labelColor} fontWeight={i === peakIdx ? 700 : 400} fontFamily="inherit">{d.label}</text> : null))}
-        </svg>
-      );
-    }
-    function SvgBarChart({ data, height = 180, color, gridColor, labelColor, labelStep = 1, peakColor }) {
-      if (!data || data.length === 0) return <div style={{ height, display: "flex", alignItems: "center", justifyContent: "center", color: labelColor, fontSize: 12 }}>No data for this range</div>;
-      const W = 540, H = height, padL = 42, padR = 10, padT = 12, padB = 22;
-      const innerW = W - padL - padR, innerH = H - padT - padB;
-      const max = Math.max(...data.map(d => d.total), 1) * 1.1;
-      const n = data.length, slot = innerW / n, bw = Math.min(24, slot * 0.62);
-      const y = v => padT + innerH * (1 - v / max);
-      const peakIdx = data.reduce((bi, d, i, a) => (d.total > a[bi].total ? i : bi), 0);
-      const gridVals = [0, 0.5, 1].map(t => (max / 1.1) * t);
-      return (
-        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block", overflow: "visible" }}>
-          {gridVals.map((gv, i) => (
-            <g key={i}>
-              <line x1={padL} y1={y(gv)} x2={W - padR} y2={y(gv)} stroke={gridColor} strokeDasharray="3 3" strokeWidth="1" />
-              <text x={padL - 6} y={y(gv) + 3} textAnchor="end" fontSize="9" fill={labelColor} fontFamily="inherit">{`¥${Math.round(gv / 1000)}k`}</text>
-            </g>
-          ))}
-          {data.map((d, i) => {
-            const bx = padL + slot * i + (slot - bw) / 2;
-            const by = y(d.total);
-            return (
-              <g key={i}>
-                <rect x={bx} y={by} width={bw} height={Math.max(0, padT + innerH - by)} rx="2" fill={i === peakIdx ? (peakColor || color) : color} opacity={i === peakIdx ? 1 : 0.85}>
-                  <title>{d.label}: {fmt(d.total)}</title>
-                </rect>
-                {i % labelStep === 0 && <text x={bx + bw / 2} y={H - 6} textAnchor="middle" fontSize={n > 20 ? 7 : 8.5} fill={labelColor} fontFamily="inherit">{d.label}</text>}
-              </g>
-            );
-          })}
-        </svg>
-      );
-    }
-    function SvgDonut({ data, getColor, height = 140 }) {
-      const total = (data || []).reduce((s, d) => s + d.value, 0);
-      if (!data || data.length === 0 || total <= 0) return <div style={{ height, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, opacity: 0.5 }}>No data</div>;
-      const size = height, th = 20, r = (size - th) / 2 - 2, c = size / 2, circ = 2 * Math.PI * r;
-      let acc = 0;
-      return (
-        <div style={{ display: "flex", justifyContent: "center" }}>
-          <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} style={{ display: "block" }}>
-            {data.map((s, i) => {
-              const frac = s.value / total, dash = Math.max(frac * circ - 1.5, 0.5);
-              const el = (
-                <circle key={i} cx={c} cy={c} r={r} fill="none" stroke={getColor(s.name)} strokeWidth={th}
-                  strokeDasharray={`${dash} ${circ - dash}`} strokeDashoffset={-acc * circ} transform={`rotate(-90 ${c} ${c})`}>
-                  <title>{s.name}: {fmt(s.value)} ({Math.round(frac * 100)}%)</title>
-                </circle>
-              );
-              acc += frac;
-              return el;
-            })}
-            <text x={c} y={c + 4} textAnchor="middle" fontSize="13" fontWeight="700" fill="#fff" fontFamily="inherit">{`¥${Math.round(total / 1000)}k`}</text>
-          </svg>
-        </div>
-      );
-    }
     function OverviewView({ filtered, totalSpend, monthlyAvg, dailyAvg, monthlyData, catData, topShops, allExpenses }) {
       const { theme, getCatIcon, getCatColor, categories, shops, tags } = useTheme();
       const [timeRange, setTimeRange] = useState("monthly"); // monthly, weekly, daily
       const [filters, setFilters] = useState(getStoredGraphFilters);
-      const [filterOpen, setFilterOpen] = useState(false); const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
+      const [filterOpen, setFilterOpen] = useState(true);
       const [filterToast, setFilterToast] = useState(null);
 
       useEffect(() => { setStoredGraphFilters(filters); }, [filters]);
@@ -1706,12 +1608,8 @@
                     ))}
                   </div>
                 </div>
-                <button onClick={() => setMoreFiltersOpen(o => !o)} style={{alignSelf:"flex-start",background:"none",border:"none",cursor:"pointer",padding:0,fontSize:11,fontWeight:600,color:theme.textMuted,display:"flex",alignItems:"center",gap:5}}>
-                  {moreFiltersOpen ? "▾" : "▸"} More filters · shops & tags
-                  {(filters.shops.length > 0 || filters.tags.length > 0) && <span style={{fontSize:9,background:theme.primaryGlow,color:"#fff",padding:"2px 6px",borderRadius:6}}>{filters.shops.length + filters.tags.length}</span>}
-                </button>
                 {/* Shops */}
-                {moreFiltersOpen && shops.length > 0 && (
+                {shops.length > 0 && (
                   <div>
                     <label style={filterLabelStyle}>Shops</label>
                     <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
@@ -1724,7 +1622,7 @@
                   </div>
                 )}
                 {/* Tags */}
-                {moreFiltersOpen && tags.length > 0 && (
+                {tags.length > 0 && (
                   <div>
                     <label style={filterLabelStyle}>Tags</label>
                     <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
@@ -1791,7 +1689,22 @@
               )}
             </div>
 
-            <SvgAreaChart data={chartData} height={220} color={theme.primary} gridColor={theme.cardBorder} labelColor={theme.textDim} labelStep={timeRange==="daily"?10:1} peakColor={theme.warning} />
+            <ResponsiveContainer width="100%" height={220}>
+              <AreaChart data={chartData}>
+                <defs><linearGradient id="grad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={theme.primary} stopOpacity={0.3}/><stop offset="100%" stopColor={theme.primary} stopOpacity={0.02}/></linearGradient></defs>
+                <CartesianGrid strokeDasharray="3 3" stroke={theme.cardBorder}/>
+                <XAxis 
+                  dataKey="label" 
+                  tick={{fontSize:timeRange==="daily"?7:9,fill:theme.textDim}} 
+                  axisLine={false} 
+                  tickLine={false}
+                  interval={timeRange==="daily"?9:0}
+                />
+                <YAxis tick={{fontSize:9,fill:theme.textDim}} axisLine={false} tickLine={false} tickFormatter={v => `¥${(v/1000).toFixed(0)}k`}/>
+                <Tooltip content={<CustomTooltip/>}/>
+                <Area type="monotone" dataKey="total" stroke={theme.primary} fill="url(#grad)" strokeWidth={2} isAnimationActive={true} animationDuration={450}/>
+              </AreaChart>
+            </ResponsiveContainer>
           </div>
 
           {/* Bar Chart for same data */}
@@ -1799,7 +1712,23 @@
             <h3 style={{fontSize:12,fontWeight:600,color:theme.textMuted,marginBottom:12,marginTop:0}}>
               {rangeLabels[timeRange].title} - Comparison
             </h3>
-            <SvgBarChart data={chartData} height={180} color={theme.primary} gridColor={theme.cardBorder} labelColor={theme.textDim} labelStep={timeRange==="daily"?15:1} peakColor={theme.warning} />
+            <ResponsiveContainer width="100%" height={180}>
+              <BarChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke={theme.cardBorder}/>
+                <XAxis 
+                  dataKey="label" 
+                  tick={{fontSize:timeRange==="daily"?6:8,fill:theme.textDim}} 
+                  axisLine={false} 
+                  tickLine={false}
+                  interval={timeRange==="daily"?14:0}
+                  angle={timeRange==="daily"?-45:0}
+                  textAnchor={timeRange==="daily"?"end":"middle"}
+                />
+                <YAxis tick={{fontSize:8,fill:theme.textDim}} axisLine={false} tickLine={false} tickFormatter={v => `¥${(v/1000).toFixed(0)}k`}/>
+                <Tooltip content={<CustomTooltip/>}/>
+                <Bar dataKey="total" fill={theme.primary} radius={[2,2,0,0]} maxBarSize={timeRange==="daily"?8:24} isAnimationActive={true} animationDuration={450}/>
+              </BarChart>
+            </ResponsiveContainer>
           </div>
 
           {/* Exclusion summary */}
@@ -1810,7 +1739,11 @@
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))",gap:14}}>
             <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:12,padding:"16px 14px"}}>
               <h3 style={{fontSize:12,fontWeight:600,color:theme.textMuted,marginBottom:10,marginTop:0}}>Categories</h3>
-              <SvgDonut data={catData} getColor={getCatColor} height={140} />
+              <ResponsiveContainer width="100%" height={140}>
+                <PieChart><Pie data={catData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={35} outerRadius={55} paddingAngle={2}>
+                  {catData.map((e,i) => <Cell key={i} fill={getCatColor(e.name)} stroke="none"/>)}
+                </Pie><Tooltip content={<CustomTooltip/>}/></PieChart>
+              </ResponsiveContainer>
               <div style={{display:"flex",flexWrap:"wrap",gap:6,justifyContent:"center",marginTop:6}}>
                 {catData.slice(0,5).map((c,i) => (
                   <div key={i} style={{display:"flex",alignItems:"center",gap:3,fontSize:9,color:theme.textMuted}}>
