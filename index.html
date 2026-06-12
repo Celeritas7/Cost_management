@@ -175,7 +175,8 @@
       const changeTheme = (t) => { setThemeName(t); setStoredTheme(t); setShowThemePicker(false); };
 
       const fetchData = useCallback(async () => {
-        setLoading(true);
+        // no setLoading(true) here: refetches after a save must not unmount the
+        // active view (the Add view keeps its review list / flash state)
         const [expRes, shopRes, catRes, tagRes, recRes] = await Promise.all([
           supabase.from("cost_management_expenses").select("*").order("date", { ascending: true }),
           supabase.from("cost_management_shops").select("*").order("is_favorite", { ascending: false }).order("name"),
@@ -520,8 +521,8 @@
       const [shop, setShop] = useState(null);
       const [etype, setEtype] = useState("normal");
       const [etags, setEtags] = useState([]);
-      const [rows, setRows] = useState([blankRow(isoOfDate(today))]);
-      const [activeRow, setActiveRow] = useState(0);
+      const [rows, setRows] = useState([]);
+      const [activeRow, setActiveRow] = useState(-1); // expanded review row (multi); -1 = none
       const [catSheetOpen, setCatSheetOpen] = useState(false);
       const [shopSheetOpen, setShopSheetOpen] = useState(false);
       const [calOpen, setCalOpen] = useState(false);
@@ -539,14 +540,14 @@
       const isDiff = mode === "list";
       const isSame = mode === "same";
       const isMulti = isDiff || isSame;
-      const activeIdx = Math.min(activeRow, rows.length - 1);
-      const aRow = rows[activeIdx];
+      const activeIdx = activeRow >= 0 && activeRow < rows.length ? activeRow : -1;
+      const aRow = activeIdx >= 0 ? rows[activeIdx] : null;
 
-      const curAmountStr = isMulti ? aRow.amount : amount;
-      const curCat = isDiff ? aRow.cat : cat;
-      const curShop = isDiff ? aRow.shop : shop;
-      const curType = isDiff ? aRow.type : etype;
-      const curTags = isDiff ? aRow.tags : etags;
+      const curAmountStr = isMulti ? (aRow ? aRow.amount : "") : amount;
+      const curCat = isDiff ? (aRow ? aRow.cat : null) : cat;
+      const curShop = isDiff ? (aRow ? aRow.shop : null) : shop;
+      const curType = isDiff ? (aRow ? aRow.type : "normal") : etype;
+      const curTags = isDiff ? (aRow ? aRow.tags : []) : etags;
 
       const catObj = categories.find((c) => c.name === curCat);
       const accent = catObj ? catObj.color : theme.primary;
@@ -557,13 +558,15 @@
 
       const whenLabel = (s) => s === isoOfDate(today) ? "Today" : s === isoOfDate(yest) ? "Yesterday"
         : `${MONTHS_SHORT[Number(s.slice(5, 7))]} ${Number(s.slice(8, 10))}`;
-      const dateLabel = dates.length > 1 ? `${dates.length} dates` : dates.length === 1 ? whenLabel(dates[0]) : "Pick day";
+      const dateLabel = isMulti
+        ? (rows.length === 0 ? "Select days" : rows.length === 1 ? whenLabel(rows[0].date) : `${rows.length} days`)
+        : whenLabel(dates[0]);
 
-      const updRow = (patch) => setRows((rs) => rs.map((r, i) => (i === activeIdx ? { ...r, ...patch } : r)));
+      const updRow = (patch) => { if (activeIdx < 0) return; setRows((rs) => rs.map((r, i) => (i === activeIdx ? { ...r, ...patch } : r))); };
       const press = (key) => {
         setSaved(false);
         const apply = (a) => key === "del" ? a.slice(0, -1) : key === "00" ? (a === "" ? "" : (a.length < 8 ? a + "00" : a)) : (a.length < 9 ? (a === "0" ? key : a + key) : a);
-        if (isMulti) setRows((rs) => rs.map((r, i) => (i === activeIdx ? { ...r, amount: apply(r.amount) } : r))); else setAmount((a) => apply(a));
+        if (isMulti) { if (activeIdx < 0) return; setRows((rs) => rs.map((r, i) => (i === activeIdx ? { ...r, amount: apply(r.amount) } : r))); } else setAmount((a) => apply(a));
       };
       const setCurCat = (name) => { if (isDiff) updRow({ cat: name, shop: null }); else { setCat(name); setShop(null); } };
       const setCurShop = (name) => { if (isDiff) updRow({ shop: name }); else setShop(name); };
@@ -572,19 +575,22 @@
       const pickCat = (c) => { setCurCat(c.name); setNewCatOpen(false); setNewShopOpen(false); setCatSheetOpen(false); setShopSheetOpen(true); };
       const pickShop = (name) => { setCurShop(name); setNewShopOpen(false); setShopSheetOpen(false); };
 
-      const appendDayRows = (ds) => {
-        if (!ds.length) return;
-        const onlyBlank = rows.length === 1 && !rows[0].cat && !rows[0].shop && !rows[0].amount;
-        setRows((rs) => (onlyBlank ? ds.map(blankRow) : [...rs, ...ds.map(blankRow)]));
-        setActiveRow(onlyBlank ? 0 : rows.length);
+      // the multi-date selection drives the review list: one editable row per picked day,
+      // keeping whatever was already entered for days that stay selected
+      const applyDates = (ds) => {
+        const uniq = [...new Set(ds)].sort();
+        setRows((prev) => uniq.map((d) => prev.find((r) => r.date === d) || blankRow(d)));
+        setActiveRow(-1);
       };
-      const addDayRow = (d) => { appendDayRows([d]); if (isDiff) setPadOpen(true); };
-      const removeRow = (i) => { setRows((rs) => { const n = rs.filter((_, j) => j !== i); return n.length ? n : [blankRow(isoOfDate(today))]; }); setActiveRow((a) => (i < a ? a - 1 : a)); };
+      const openCal = () => { if (isMulti) setDates([...new Set(rows.map((r) => r.date))].sort()); setCalOpen(true); };
+      const removeRow = (i) => {
+        setRows((rs) => rs.filter((_, j) => j !== i));
+        setActiveRow((a) => (a === i ? -1 : i < a ? a - 1 : a));
+      };
 
       const switchMode = (m) => {
-        setMode(m); setCalOpen(false); setNewCatOpen(false); setNewShopOpen(false); setCatSheetOpen(false); setShopSheetOpen(false); setPadOpen(false);
-        if (m === "list" || m === "same") { setDates([]); setRows((rs) => (rs.length ? rs : [blankRow(isoOfDate(today))])); setActiveRow(0); }
-        else setDates([isoOfDate(today)]);
+        setMode(m); setCalOpen(false); setNewCatOpen(false); setNewShopOpen(false); setCatSheetOpen(false); setShopSheetOpen(false); setPadOpen(false); setActiveRow(-1);
+        if (m === "quick") setDates([isoOfDate(today)]); else setDates([]);
       };
 
       const showToast = (type, msg) => { setToast({ type, msg }); setTimeout(() => setToast(null), 3000); };
@@ -606,16 +612,30 @@
         setTimeout(() => { setAmount(""); setShop(null); setCat(null); setEtags([]); setEtype("normal"); setTagsOpen(false); setSaved(false); }, 900);
         setTimeout(() => setFlash(null), 1700);
       };
-      const filledRows = rows.map((r) => (isSame ? { ...r, cat, shop, type: etype, tags: etags } : r)).filter((r) => r.cat && r.shop && Number(r.amount) > 0);
+      const rowCatOf = (r) => (isSame ? cat : r.cat);
+      const rowShopOf = (r) => (isSame ? shop : r.shop);
+      const isRowFilled = (r) => rowCatOf(r) && rowShopOf(r) && Number(r.amount) > 0;
+      const buildRecord = (r) => ({ date: r.date, category: rowCatOf(r), shop: rowShopOf(r), amount: Number(r.amount), notes: "", expense_type: isSame ? etype : (r.type || "normal"), tags: ((isSame ? etags : r.tags) || []).join(",") });
+      const filledEntries = rows.map((r, i) => ({ r, i })).filter(({ r }) => isRowFilled(r));
       const rowsTotal = rows.reduce((s, r) => s + Number(r.amount || 0), 0);
-      const saveMulti = async () => {
-        if (!filledRows.length || saving) return;
-        const records = filledRows.map((r) => ({ date: r.date, category: r.cat, shop: r.shop, amount: Number(r.amount), notes: "", expense_type: r.type || "normal", tags: (r.tags || []).join(",") }));
-        const ok = await insertExpenses(records);
+
+      const commitMulti = async (entries) => { // entries: [{ record, rowIdx }] — saved rows leave the list, the rest stay editable
+        if (!entries.length) return;
+        const ok = await insertExpenses(entries.map((e) => e.record));
         if (!ok) return;
-        setSaved(true); setFlash(`${records.length} item${records.length > 1 ? "s" : ""} · ${fmt(records.reduce((s, r) => s + r.amount, 0))}`);
-        setTimeout(() => { setRows([blankRow(isoOfDate(today))]); setActiveRow(0); setSaved(false); if (isSame) { setShop(null); setCat(null); } }, 900);
+        const savedIdx = new Set(entries.map((e) => e.rowIdx));
+        const remaining = rows.filter((_, i) => !savedIdx.has(i));
+        setSaved(true);
+        setFlash(`${entries.length} item${entries.length > 1 ? "s" : ""} · ${fmt(entries.reduce((s, e) => s + e.record.amount, 0))}`);
+        setTimeout(() => {
+          setRows(remaining); setActiveRow(-1); setSaved(false);
+          if (!remaining.length && isSame) { setShop(null); setCat(null); setEtags([]); setEtype("normal"); }
+        }, 900);
         setTimeout(() => setFlash(null), 1700);
+      };
+      const saveMulti = () => {
+        if (!filledEntries.length || saving) return;
+        commitMulti(filledEntries.map(({ r, i }) => ({ record: buildRecord(r), rowIdx: i })));
       };
 
       const addCategory = async () => {
@@ -757,46 +777,65 @@
         </Modal>
       );
 
-      const RowsSection = (
-        <div style={{ marginBottom: 16 }}>
+      const keypad = (h) => (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
+          {["7","8","9","4","5","6","1","2","3","00","0","del"].map((k) => (
+            <button key={k} className="cm-chip" onClick={() => press(k)} style={{ height: h, borderRadius: 12, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: k === "del" ? 18 : 22, fontWeight: 600, color: k === "del" ? C.muted : "#fff", background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${C.border}` }}>{k === "del" ? "⌫" : k}</button>
+          ))}
+        </div>
+      );
+
+      // ── per-entry editable review list (multi modes): tap a row to edit it inline ──
+      const reviewList = (
+        <div style={{ marginTop: 2, marginBottom: 16 }}>
           {isSame && (
-            <div style={{ marginBottom: 14 }}>
-              <div style={sLbl}>Shop · applies to every day</div>
-              <button onClick={() => { if (cat) setShopSheetOpen(true); else setCatSheetOpen(true); }} style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 12, cursor: "pointer", border: "none", background: shop ? `${accent}1a` : C.input, boxShadow: shop ? `inset 0 0 0 1.5px ${accent}` : `inset 0 0 0 1px ${C.border}`, fontFamily: "inherit" }}>
-                <span style={{ width: 30, height: 30, borderRadius: 9, background: `${catObj ? catObj.color : "#888"}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>{catObj ? catObj.icon : "🏪"}</span>
-                <span style={{ flex: 1, textAlign: "left", minWidth: 0 }}>
-                  <span style={{ display: "block", fontSize: 14, fontWeight: 600, color: shop ? "#fff" : C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{shop || "Choose a shop"}</span>
-                  <span style={{ display: "block", fontSize: 10.5, color: C.dim }}>{shop ? cat : "tap to pick category & shop"}</span>
-                </span>
-                <span style={{ color: C.muted, fontSize: 12 }}>▸</span>
-              </button>
+            <div style={{ marginBottom: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ ...sLbl, margin: 0 }}>Shop · applies to every day</div>
+              {catChipsRow}
+              {typeRow}
+              {tagsRow}
             </div>
           )}
-          <div style={sLbl}>{isSame ? "Amount per day" : "Entries"} · {rows.length}{rowsTotal > 0 ? ` · ${fmt(rowsTotal)}` : ""}</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {rows.map((r, i) => {
-              const rCat = isDiff ? r.cat : cat;
-              const rShop = isDiff ? r.shop : shop;
-              const rc = categories.find((c) => c.name === rCat);
-              const active = i === activeIdx;
-              const ringColor = rc ? rc.color : theme.primary;
-              return (
-                <div key={i} onClick={() => { setActiveRow(i); setPadOpen(true); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 12, cursor: "pointer", background: active ? `${ringColor}1f` : C.input, boxShadow: active ? `inset 0 0 0 1.5px ${ringColor}` : `inset 0 0 0 1px ${C.border}` }}>
-                  <span style={{ fontSize: 10.5, fontWeight: 700, color: active ? "#fff" : C.muted, minWidth: 56 }}>{whenLabel(r.date)}</span>
-                  <span style={{ width: 26, height: 26, borderRadius: 8, background: `${rc ? rc.color : "#888"}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>{rc ? rc.icon : "▫"}</span>
-                  <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: rShop ? C.text : C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{rShop || (isSame ? "choose shop above" : (rCat ? "Pick a shop" : "Tap → set shop"))}</span>
-                  <span style={{ fontSize: 13.5, fontWeight: 700, color: r.amount ? "#fff" : C.dim }}>{r.amount ? fmt(Number(r.amount)) : "¥–"}</span>
-                  <button onClick={(e) => { e.stopPropagation(); removeRow(i); }} style={{ border: "none", background: "none", color: C.dim, cursor: "pointer", fontSize: 17, lineHeight: 1, padding: "0 2px" }}>×</button>
-                </div>
-              );
-            })}
-          </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <button onClick={() => addDayRow(isoOfDate(today))} style={{ ...newChip(false), flex: 1, justifyContent: "center" }}>＋ Today</button>
-            <button onClick={() => addDayRow(isoOfDate(yest))} style={{ ...newChip(false), flex: 1, justifyContent: "center" }}>＋ Yesterday</button>
-            <button onClick={() => setCalOpen((o) => !o)} style={{ ...newChip(calOpen), flex: 1, justifyContent: "center" }}>📅 Pick days</button>
-          </div>
-          <div style={{ marginTop: 12, fontSize: 11, color: C.dim, textAlign: "center" }}>{isSame ? "Set the shop once · tap a day, then type its amount" : "Tap a row to set its shop · type the amount"}</div>
+          <div style={sLbl}>Entries · {rows.length}{rowsTotal > 0 ? ` · ${fmt(rowsTotal)}` : ""}</div>
+          {rows.length === 0 ? (
+            <div style={{ padding: "18px 14px", borderRadius: 12, background: C.card, boxShadow: `inset 0 0 0 1px ${C.border}`, fontSize: 12.5, color: C.dim, textAlign: "center" }}>
+              Pick days with the date control above — one editable entry per day shows up here.
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {rows.map((r, i) => {
+                const rCat = rowCatOf(r), rShop = rowShopOf(r);
+                const rc = categories.find((c) => c.name === rCat);
+                const expanded = i === activeIdx;
+                const ringColor = rc ? rc.color : theme.primary;
+                const rType = isSame ? etype : (r.type || "normal");
+                return (
+                  <div key={i} style={{ borderRadius: 12, background: expanded ? `${ringColor}14` : C.input, boxShadow: expanded ? `inset 0 0 0 1.5px ${ringColor}` : `inset 0 0 0 1px ${C.border}` }}>
+                    <div onClick={() => setActiveRow(expanded ? -1 : i)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", cursor: "pointer" }}>
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: expanded ? "#fff" : C.muted, minWidth: 56 }}>{whenLabel(r.date)}</span>
+                      <span style={{ width: 26, height: 26, borderRadius: 8, background: `${rc ? rc.color : "#888"}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>{rc ? rc.icon : "▫"}</span>
+                      <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: rShop ? C.text : C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{rShop || (isSame ? "set the shop above" : "tap to set shop")}</span>
+                      {EXPENSE_TYPES[rType]?.icon && <span style={{ fontSize: 12 }}>{EXPENSE_TYPES[rType].icon}</span>}
+                      <span style={{ fontSize: 13.5, fontWeight: 700, color: r.amount ? "#fff" : C.dim }}>{r.amount ? fmt(Number(r.amount)) : "¥–"}</span>
+                      <button onClick={(e) => { e.stopPropagation(); removeRow(i); }} style={{ border: "none", background: "none", color: C.dim, cursor: "pointer", fontSize: 17, lineHeight: 1, padding: "0 2px" }}>×</button>
+                    </div>
+                    {expanded && (
+                      <div className="cm-slide-in" style={{ padding: "2px 12px 12px", display: "flex", flexDirection: "column", gap: 10 }}>
+                        <input type="date" value={r.date} onChange={(e) => e.target.value && updRow({ date: e.target.value })} style={{ ...fieldInput, colorScheme: "dark" }} />
+                        {isDiff && catChipsRow}
+                        {keypad(42)}
+                        {isDiff && typeRow}
+                        {isDiff && tagsRow}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {rows.length > 0 && (
+            <div style={{ marginTop: 12, fontSize: 11, color: C.dim, textAlign: "center" }}>{isSame ? "Tap a day to edit its amount or date" : "Tap a row to set its shop, amount, date & type"}</div>
+          )}
         </div>
       );
 
@@ -847,56 +886,41 @@
             ))}
           </div>
 
-          {/* date control — on top, defaults to Today */}
+          {/* date control — on top, all modes; single date for Quick, multi-date otherwise */}
+          <div style={{ marginTop: 12 }}>
+            <button onClick={() => (calOpen ? setCalOpen(false) : openCal())} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 14px", borderRadius: 12, border: "none", cursor: "pointer", fontFamily: "inherit", background: C.input, boxShadow: `inset 0 0 0 1px ${C.border}` }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, fontWeight: 600, color: "#fff" }}>📅 {dateLabel}</span>
+              <span style={{ color: C.muted, fontSize: 11 }}>{calOpen ? "▴" : "▾"}</span>
+            </button>
+            {calOpen && (
+              <div className="cm-slide-in" style={{ marginTop: 8 }}>
+                <AddCalSheet dates={dates} setDates={setDates} today={today} yest={yest} C={C} chip={chip} theme={theme}
+                  single={!isMulti} confirmLabel={isMulti ? "Use these days" : "Done"}
+                  onClose={() => { if (isMulti) applyDates(dates); setCalOpen(false); }} />
+              </div>
+            )}
+          </div>
+
+          {/* amount hero — tap to open the keypad (quick only) */}
           {!isMulti && (
-            <div style={{ marginTop: 12 }}>
-              <button onClick={() => setCalOpen((o) => !o)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 14px", borderRadius: 12, border: "none", cursor: "pointer", fontFamily: "inherit", background: C.input, boxShadow: `inset 0 0 0 1px ${C.border}` }}>
-                <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, fontWeight: 600, color: "#fff" }}>📅 {dateLabel}</span>
-                <span style={{ color: C.muted, fontSize: 11 }}>{calOpen ? "▴" : "▾"}</span>
-              </button>
-              {calOpen && (
-                <div className="cm-slide-in" style={{ marginTop: 8 }}>
-                  <AddCalSheet dates={dates} setDates={setDates} today={today} yest={yest} C={C} chip={chip} theme={theme}
-                    single confirmLabel="Done" onClose={() => setCalOpen(false)} />
-                </div>
-              )}
+            <div onClick={() => setPadOpen((o) => !o)} style={{ padding: "14px 0 12px", textAlign: "center", cursor: "pointer" }}>
+              <div style={{ fontSize: 50, fontWeight: 700, letterSpacing: -2, lineHeight: 1, color: amt > 0 ? "#fff" : C.dim, display: "inline-flex", alignItems: "center", gap: 8, padding: "2px 14px", borderRadius: 14, boxShadow: padOpen ? `inset 0 0 0 1.5px ${accent}66` : "none", transition: "box-shadow .15s" }}>{amt > 0 ? fmt(amt) : "¥0"}</div>
+              <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8, minHeight: 18 }}>
+                {curCat && curShop ? <span><span style={{ color: catObj.color }}>{catObj.icon} {curCat}</span> · {curShop}{!padOpen && amt === 0 ? <span style={{ color: C.dim }}> · tap ¥ to enter amount</span> : ""}</span>
+                  : curCat ? <span style={{ color: catObj.color }}>{catObj.icon} {curCat} — pick a shop</span>
+                  : "Tap ¥ for the keypad · pick a category"}
+              </div>
             </div>
           )}
-
-          {/* amount hero — tap to open the keypad */}
-          {isMulti && (<div style={{ padding: "12px 0 4px", textAlign: "center" }}><div style={{ fontSize: 15, fontWeight: 700, color: "#fff" }}>{isSame ? "Same shop · many days" : "Different shops"}</div><div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>Pick days → tap a row to enter its cost</div></div>)}
-          <div onClick={() => { if (!isMulti) setPadOpen(true); }} style={{ padding: "14px 0 12px", textAlign: "center", cursor: "pointer", display: isMulti ? "none" : "block" }}>
-            <div style={{ fontSize: 50, fontWeight: 700, letterSpacing: -2, lineHeight: 1, color: amt > 0 ? "#fff" : C.dim, display: "inline-flex", alignItems: "center", gap: 8, padding: "2px 14px", borderRadius: 14, boxShadow: padOpen ? `inset 0 0 0 1.5px ${accent}66` : "none", transition: "box-shadow .15s" }}>{amt > 0 ? fmt(amt) : "¥0"}</div>
-            <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8, minHeight: 18 }}>
-              {isMulti
-                ? <span><span style={{ color: C.dim }}>{isSame ? "Day" : "Entry"} {activeIdx + 1}/{rows.length} · {whenLabel(aRow.date)}</span>{curShop ? <span> · <span style={{ color: catObj.color }}>{curShop}</span></span> : isSame ? " · choose the shop" : curCat ? " · pick shop" : " · choose category"}</span>
-                : curCat && curShop ? <span><span style={{ color: catObj.color }}>{catObj.icon} {curCat}</span> · {curShop}{!padOpen && amt === 0 ? <span style={{ color: C.dim }}> · tap ¥ to enter amount</span> : ""}</span>
-                : curCat ? <span style={{ color: catObj.color }}>{catObj.icon} {curCat} — pick a shop</span>
-                : (isMulti ? "" : "Tap ¥ for the keypad · pick a category")}
-            </div>
-          </div>
 
           {/* numpad — only when the amount is tapped */}
           {padOpen && !isMulti && (
-            <div className="cm-sheet-in" style={{ padding: "0 0 12px", display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
-              {["7","8","9","4","5","6","1","2","3","00","0","del"].map((k) => (
-                <button key={k} className="cm-chip" onClick={() => press(k)} style={{ height: 48, borderRadius: 12, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: k === "del" ? 18 : 22, fontWeight: 600, color: k === "del" ? C.muted : "#fff", background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${C.border}` }}>
-                  {k === "del" ? "⌫" : k}
-                </button>
-              ))}
-            </div>
+            <div className="cm-sheet-in" style={{ padding: "0 0 12px" }}>{keypad(48)}</div>
           )}
 
-          {/* scroll body */}
+          {/* entry body */}
           <div>
-            {isMulti && calOpen && (
-              <div className="cm-slide-in" style={{ marginBottom: 16 }}>
-                <AddCalSheet dates={dates} setDates={setDates} today={today} yest={yest} C={C} chip={chip} theme={theme}
-                  confirmLabel="Add these days"
-                  onClose={() => { appendDayRows(dates); setDates([]); setCalOpen(false); }} />
-              </div>
-            )}
-            {isMulti && RowsSection}
+            {isMulti && reviewList}
             {mode === "quick" && (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {catChipsRow}
@@ -906,33 +930,6 @@
             )}
           </div>
 
-          {/* row cost modal (multi) */}
-          {isMulti && padOpen && (
-            <>
-              <div onClick={() => setPadOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(6,8,16,0.7)", zIndex: 210 }} />
-              <div className="cm-sheet-in" style={{ position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: "calc(100% - 32px)", maxWidth: 380, zIndex: 211, background: theme.bg, backgroundColor: "#0c0c16", borderRadius: 22, padding: "16px 18px 18px", maxHeight: "88vh", overflowY: "auto", boxShadow: "0 24px 70px rgba(0,0,0,0.6)", border: `1px solid ${C.border}` }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 2 }}>
-                  <div style={{ fontSize: 10.5, letterSpacing: 1.4, textTransform: "uppercase", color: C.dim, fontWeight: 600 }}>Entry {activeIdx + 1}/{rows.length} · {whenLabel(aRow.date)}</div>
-                  <button onClick={() => setPadOpen(false)} style={{ border: "none", background: C.input, color: C.muted, width: 32, height: 32, borderRadius: 16, fontSize: 18, cursor: "pointer", boxShadow: `inset 0 0 0 1px ${C.border}` }}>×</button>
-                </div>
-                <div style={{ textAlign: "center", padding: "4px 0 2px" }}>
-                  <div style={{ fontSize: 44, fontWeight: 700, letterSpacing: -2, lineHeight: 1, color: amt > 0 ? "#fff" : C.dim }}>{amt > 0 ? fmt(amt) : "¥0"}</div>
-                  <div style={{ fontSize: 12, color: C.muted, marginTop: 6, minHeight: 16 }}>{curShop ? <span style={{ color: catObj.color }}>{catObj.icon} {curShop}</span> : isSame ? "set the shop first" : curCat ? "pick a shop below" : "pick a category below"}</div>
-                </div>
-                {isDiff && <div style={{ marginTop: 8, marginBottom: 6, display: "flex", flexDirection: "column", gap: 10 }}>{catChipsRow}{typeRow}{tagsRow}</div>}
-                <div style={{ padding: "8px 0 4px", display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
-                  {["7","8","9","4","5","6","1","2","3","00","0","del"].map((k) => (
-                    <button key={k} className="cm-chip" onClick={() => press(k)} style={{ height: 46, borderRadius: 12, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: k === "del" ? 18 : 22, fontWeight: 600, color: k === "del" ? C.muted : "#fff", background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${C.border}` }}>{k === "del" ? "⌫" : k}</button>
-                  ))}
-                </div>
-                <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-                  {activeIdx < rows.length - 1 && <button onClick={() => setActiveRow(activeIdx + 1)} style={{ flex: 1, height: 48, borderRadius: 13, border: "none", background: C.input, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", boxShadow: `inset 0 0 0 1px ${C.border}` }}>Next day →</button>}
-                  <button onClick={() => setPadOpen(false)} style={{ flex: 1, height: 48, borderRadius: 13, border: "none", background: `linear-gradient(135deg, ${accent}, ${theme.accent})`, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Done</button>
-                </div>
-              </div>
-            </>
-          )}
-
           {/* action bar */}
           <div style={{ padding: "6px 0 24px" }}>
             {!isMulti ? (
@@ -940,8 +937,8 @@
                 {saving ? "Saving…" : saved ? "✓ Saved" : valid ? `Add ${fmt(amt)} · ${dateLabel}` : "Enter amount, category & shop"}
               </button>
             ) : (
-              <button onClick={saveMulti} disabled={!filledRows.length || saving} style={ctaStyle(!!filledRows.length)}>
-                {saving ? "Saving…" : saved ? "✓ Saved" : filledRows.length ? `Save all (${filledRows.length}) · ${fmt(filledRows.reduce((s, r) => s + Number(r.amount), 0))}` : (isSame ? "Set a shop & amounts" : "Fill in a shop & amount")}
+              <button onClick={saveMulti} disabled={!filledEntries.length || saving} style={ctaStyle(!!filledEntries.length)}>
+                {saving ? "Saving…" : saved ? "✓ Saved" : filledEntries.length ? `Save all (${filledEntries.length}) · ${fmt(filledEntries.reduce((s, e) => s + Number(e.r.amount), 0))}` : (isSame ? "Set a shop & amounts" : "Fill in shops & amounts")}
               </button>
             )}
           </div>
