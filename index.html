@@ -536,6 +536,7 @@
       const [newCat, setNewCat] = useState({ name: "", icon: "📦", color: "#8b5cf6" });
       const [newShopOpen, setNewShopOpen] = useState(false);
       const [newShop, setNewShop] = useState({ name: "", fav: false });
+      const [dupDialog, setDupDialog] = useState(null); // { multi, queue: [{ record, existing, rowIdx }], idx, kept, view }
 
       const isDiff = mode === "list";
       const isSame = mode === "same";
@@ -589,7 +590,7 @@
       };
 
       const switchMode = (m) => {
-        setMode(m); setCalOpen(false); setNewCatOpen(false); setNewShopOpen(false); setCatSheetOpen(false); setShopSheetOpen(false); setPadOpen(false); setActiveRow(-1);
+        setMode(m); setCalOpen(false); setNewCatOpen(false); setNewShopOpen(false); setCatSheetOpen(false); setShopSheetOpen(false); setPadOpen(false); setActiveRow(-1); setDupDialog(null);
         if (m === "quick") setDates([isoOfDate(today)]); else setDates([]);
       };
 
@@ -603,14 +604,23 @@
         return true;
       };
 
-      const save = async () => {
-        if (!valid || saving) return;
-        const record = { date: dates[0], category: cat, shop, amount: amt, notes: "", expense_type: etype, tags: (etags || []).join(",") };
-        const ok = await insertExpenses([record]);
+      // ── duplicate detection: same date + same shop + same amount already in the table ──
+      const findDuplicate = (date, shopName, amountVal) =>
+        allExpenses.find((e) => e.date === date && e.shop === shopName && Number(e.amount) === Number(amountVal)) || null;
+
+      const commitQuick = async (records) => {
+        const ok = await insertExpenses(records);
         if (!ok) return;
-        setSaved(true); setFlash(fmt(amt));
+        setSaved(true); setFlash(fmt(records.reduce((s, r) => s + r.amount, 0)));
         setTimeout(() => { setAmount(""); setShop(null); setCat(null); setEtags([]); setEtype("normal"); setTagsOpen(false); setSaved(false); }, 900);
         setTimeout(() => setFlash(null), 1700);
+      };
+      const save = () => {
+        if (!valid || saving) return;
+        const record = { date: dates[0], category: cat, shop, amount: amt, notes: "", expense_type: etype, tags: (etags || []).join(",") };
+        const existing = findDuplicate(record.date, record.shop, record.amount);
+        if (existing) { setDupDialog({ multi: false, queue: [{ record, existing }], idx: 0, kept: [], view: false }); return; }
+        commitQuick([record]);
       };
       const rowCatOf = (r) => (isSame ? cat : r.cat);
       const rowShopOf = (r) => (isSame ? shop : r.shop);
@@ -636,6 +646,18 @@
       const saveMulti = () => {
         if (!filledEntries.length || saving) return;
         commitMulti(filledEntries.map(({ r, i }) => ({ record: buildRecord(r), rowIdx: i })));
+      };
+
+      // Add-anyway / Cancel for the entry the duplicate dialog is showing;
+      // when the queue is exhausted, insert whatever was kept
+      const dupAdvance = (keep) => {
+        const d = dupDialog; if (!d) return;
+        const cur = d.queue[d.idx];
+        const kept = keep ? [...d.kept, { record: cur.record, rowIdx: cur.rowIdx }] : d.kept;
+        if (d.idx + 1 < d.queue.length) { setDupDialog({ ...d, kept, idx: d.idx + 1, view: false }); return; }
+        setDupDialog(null);
+        if (d.multi) commitMulti(kept);
+        else if (kept.length) commitQuick(kept.map((k) => k.record));
       };
 
       const addCategory = async () => {
@@ -776,6 +798,38 @@
           )}
         </Modal>
       );
+
+      // ── non-blocking duplicate warning: Add anyway / View / Cancel ──
+      const dupModal = dupDialog && (() => {
+        const cur = dupDialog.queue[dupDialog.idx];
+        const ex = cur.existing;
+        const exType = EXPENSE_TYPES[ex.expense_type || "normal"] || EXPENSE_TYPES.normal;
+        const dlgBtn = { flex: 1, padding: "10px 6px", borderRadius: 9, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit" };
+        return (
+          <Modal onClose={() => dupAdvance(false)}>
+            <h4 style={{ color: theme.warning, fontSize: 14, margin: "0 0 8px" }}>⚠ Possible duplicate{dupDialog.queue.length > 1 ? ` · ${dupDialog.idx + 1} of ${dupDialog.queue.length}` : ""}</h4>
+            <p style={{ fontSize: 13, color: theme.text, margin: "0 0 12px", lineHeight: 1.55 }}>
+              <b>{fmt(cur.record.amount)}</b> at <b>{cur.record.shop}</b> already logged on <b>{cur.record.date}</b>.
+            </p>
+            {dupDialog.view && (
+              <div className="cm-slide-in" style={{ background: theme.inputBg, borderRadius: 10, padding: 12, marginBottom: 12 }}>
+                <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase", color: theme.textDim, marginBottom: 8 }}>Existing entry</div>
+                {[["Date", ex.date], ["Shop", ex.shop], ["Amount", fmt(ex.amount)], ["Type", `${exType.icon ? exType.icon + " " : ""}${exType.label}`], ["Notes", ex.notes || "—"]].map(([k, v]) => (
+                  <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12, padding: "3px 0" }}>
+                    <span style={{ color: theme.textMuted }}>{k}</span>
+                    <span style={{ color: "#fff", fontWeight: 500, textAlign: "right" }}>{v}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={() => dupAdvance(false)} style={{ ...dlgBtn, background: "transparent", color: theme.textMuted, boxShadow: `inset 0 0 0 1px ${theme.cardBorder}` }}>Cancel</button>
+              <button onClick={() => setDupDialog((d) => ({ ...d, view: !d.view }))} style={{ ...dlgBtn, background: theme.inputBg, color: "#fff", boxShadow: `inset 0 0 0 1px ${theme.cardBorder}` }}>{dupDialog.view ? "Hide" : "View"}</button>
+              <button onClick={() => dupAdvance(true)} style={{ ...dlgBtn, background: `linear-gradient(135deg, ${theme.primary}, ${theme.accent})`, color: "#fff" }}>Add anyway</button>
+            </div>
+          </Modal>
+        );
+      })();
 
       const keypad = (h) => (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
@@ -946,6 +1000,7 @@
           {recentBlock}
           {catSheet}
           {shopSheet}
+          {dupModal}
         </div>
       );
     }
