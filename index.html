@@ -522,7 +522,8 @@
       const [etags, setEtags] = useState([]);
       const [rows, setRows] = useState([blankRow(isoOfDate(today))]);
       const [activeRow, setActiveRow] = useState(0);
-      const [pickerOpen, setPickerOpen] = useState(false);
+      const [catSheetOpen, setCatSheetOpen] = useState(false);
+      const [shopSheetOpen, setShopSheetOpen] = useState(false);
       const [calOpen, setCalOpen] = useState(false);
       const [padOpen, setPadOpen] = useState(false);
       const [tagsOpen, setTagsOpen] = useState(false);
@@ -565,10 +566,11 @@
         if (isMulti) setRows((rs) => rs.map((r, i) => (i === activeIdx ? { ...r, amount: apply(r.amount) } : r))); else setAmount((a) => apply(a));
       };
       const setCurCat = (name) => { if (isDiff) updRow({ cat: name, shop: null }); else { setCat(name); setShop(null); } };
-      const setCurShop = (name) => { if (isDiff) { updRow({ shop: name }); setPickerOpen(false); } else { setShop(name); if (isSame) setPickerOpen(false); } };
+      const setCurShop = (name) => { if (isDiff) updRow({ shop: name }); else setShop(name); };
       const setCurType = (t) => { if (isDiff) updRow({ type: t }); else setEtype(t); };
-      const toggleTag = (t) => { const has = (curTags || []).includes(t); const next = has ? curTags.filter((x) => x !== t) : [...curTags, t]; if (isDiff) updRow({ tags: next }); else setEtags(next); };
-      const pickCat = (c) => { setCurCat(c.name); setNewCatOpen(false); setNewShopOpen(false); };
+      const setCurTags = (list) => { if (isDiff) updRow({ tags: list }); else setEtags(list); };
+      const pickCat = (c) => { setCurCat(c.name); setNewCatOpen(false); setNewShopOpen(false); setCatSheetOpen(false); setShopSheetOpen(true); };
+      const pickShop = (name) => { setCurShop(name); setNewShopOpen(false); setShopSheetOpen(false); };
 
       const appendDayRows = (ds) => {
         if (!ds.length) return;
@@ -580,7 +582,7 @@
       const removeRow = (i) => { setRows((rs) => { const n = rs.filter((_, j) => j !== i); return n.length ? n : [blankRow(isoOfDate(today))]; }); setActiveRow((a) => (i < a ? a - 1 : a)); };
 
       const switchMode = (m) => {
-        setMode(m); setCalOpen(false); setNewCatOpen(false); setNewShopOpen(false); setPickerOpen(false); setPadOpen(false);
+        setMode(m); setCalOpen(false); setNewCatOpen(false); setNewShopOpen(false); setCatSheetOpen(false); setShopSheetOpen(false); setPadOpen(false);
         if (m === "list" || m === "same") { setDates([]); setRows((rs) => (rs.length ? rs : [blankRow(isoOfDate(today))])); setActiveRow(0); }
         else setDates([isoOfDate(today)]);
       };
@@ -612,7 +614,7 @@
         const ok = await insertExpenses(records);
         if (!ok) return;
         setSaved(true); setFlash(`${records.length} item${records.length > 1 ? "s" : ""} · ${fmt(records.reduce((s, r) => s + r.amount, 0))}`);
-        setTimeout(() => { setRows([blankRow(isoOfDate(today))]); setActiveRow(0); setSaved(false); setPickerOpen(false); if (isSame) { setShop(null); setCat(null); } }, 900);
+        setTimeout(() => { setRows([blankRow(isoOfDate(today))]); setActiveRow(0); setSaved(false); if (isSame) { setShop(null); setCat(null); } }, 900);
         setTimeout(() => setFlash(null), 1700);
       };
 
@@ -624,8 +626,8 @@
           if (error) { showToast("error", error.message.includes("duplicate") ? "Exists" : error.message); return; }
           await fetchData();
         }
-        setCurCat(existing ? existing.name : name);
-        setNewCat({ name: "", icon: "📦", color: "#8b5cf6" }); setNewCatOpen(false);
+        setNewCat({ name: "", icon: "📦", color: "#8b5cf6" });
+        pickCat(existing || { name });
       };
       const addShop = async () => {
         const name = newShop.name.trim(); if (!name || !curCat) return;
@@ -634,14 +636,15 @@
           if (error) { showToast("error", error.message.includes("duplicate") ? "Shop exists" : error.message); return; }
           await fetchData();
         }
-        setCurShop(name); setNewShop({ name: "", fav: false }); setNewShopOpen(false);
+        setNewShop({ name: "", fav: false });
+        pickShop(name);
       };
       const repeat = (e) => { if (isDiff) updRow({ cat: e.category, shop: e.shop, amount: String(e.amount) }); else if (isSame) { setCat(e.category); setShop(e.shop); updRow({ amount: String(e.amount) }); } else { setCat(e.category); setShop(e.shop); setAmount(String(e.amount)); } };
 
       // styles
       const chip = (active, color) => ({ padding: "9px 13px", borderRadius: 11, border: "none", cursor: "pointer", fontSize: 13, fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0, transition: "all .15s", display: "flex", alignItems: "center", gap: 6, background: active ? `${color}26` : C.input, color: active ? "#fff" : C.muted, boxShadow: active ? `inset 0 0 0 1.5px ${color}` : `inset 0 0 0 1px ${C.border}` });
       const sLbl = { fontSize: 10.5, letterSpacing: 1.4, textTransform: "uppercase", color: C.dim, margin: "0 0 9px", fontWeight: 600 };
-      const scrollRow = { display: "flex", flexWrap: "wrap", gap: 8, paddingBottom: 4 };
+      const closeBtn = { border: "none", background: C.input, color: C.muted, width: 30, height: 30, borderRadius: 15, fontSize: 17, cursor: "pointer", boxShadow: `inset 0 0 0 1px ${C.border}`, flexShrink: 0 };
       const newChip = (on) => ({ padding: "8px 12px", borderRadius: 11, cursor: "pointer", fontSize: 13, fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0, display: "flex", alignItems: "center", gap: 5, color: theme.primary, fontWeight: 600, background: on ? `${theme.primary}22` : "transparent", border: `1.5px dashed ${on ? theme.primary : theme.primary + "70"}` });
       const creatorCard = { marginTop: 12, background: C.card, borderRadius: 14, padding: 14, boxShadow: `inset 0 0 0 1px ${C.border}` };
       const fieldInput = { width: "100%", padding: "11px 13px", borderRadius: 11, border: "none", background: C.input, color: "#fff", fontSize: 14.5, fontFamily: "inherit", boxShadow: `inset 0 0 0 1px ${C.border}`, outline: "none" };
@@ -651,90 +654,107 @@
       const okBtn = (en) => ({ flex: 2, height: 44, borderRadius: 12, border: "none", color: en ? "#fff" : C.dim, fontSize: 13.5, fontWeight: 700, cursor: en ? "pointer" : "not-allowed", fontFamily: "inherit", background: en ? `linear-gradient(135deg, ${theme.primary}, ${theme.accent})` : C.input });
       const ctaStyle = (en) => ({ width: "100%", height: 54, borderRadius: 15, border: "none", fontFamily: "inherit", fontSize: 16, fontWeight: 700, cursor: en && !saving ? "pointer" : "not-allowed", transition: "all .2s", background: saved ? theme.success : en ? `linear-gradient(135deg, ${accent}, ${theme.accent})` : C.input, boxShadow: en && !saved ? `0 8px 24px ${accent}44` : "none", color: en || saved ? "#fff" : C.dim, opacity: saving ? 0.7 : 1 });
 
-      const Editor = (
-        <>
-          <div style={{ marginBottom: 16 }}>
-            <div style={sLbl}>Category</div>
-            <div style={scrollRow}>
-              {categories.map((c) => (
-                <button key={c.id || c.name} onClick={() => pickCat(c)} style={chip(curCat === c.name, c.color)}>
-                  <span style={{ fontSize: 15 }}>{c.icon}</span>{c.name}
-                </button>
-              ))}
-              <button onClick={() => { setNewCatOpen((o) => !o); setNewShopOpen(false); }} style={newChip(newCatOpen)}>＋ New</button>
+      // ── compact entry chips — the grid lives in the bottom sheets below ──
+      const catChipsRow = (
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => { setShopSheetOpen(false); setCatSheetOpen(true); }} style={{ ...chip(!!curCat, accent), flex: 1, justifyContent: "center", minWidth: 0 }}>
+            <span style={{ fontSize: 15 }}>{catObj ? catObj.icon : "📂"}</span>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{curCat || "Category"}</span>
+          </button>
+          <button onClick={() => { if (curCat) setShopSheetOpen(true); else setCatSheetOpen(true); }} style={{ ...chip(!!curShop, accent), flex: 1, justifyContent: "center", minWidth: 0 }}>
+            <span style={{ fontSize: 15 }}>🏪</span>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{curShop || "Shop"}</span>
+          </button>
+        </div>
+      );
+
+      const typeRow = (
+        <div style={{ display: "flex", gap: 8 }}>
+          {Object.entries(EXPENSE_TYPES).map(([key, cfg]) => (
+            <button key={key} onClick={() => setCurType(key)} style={{ ...chip(curType === key, cfg.color !== "transparent" ? cfg.color : theme.primary), flex: 1, justifyContent: "center", padding: "7px 8px", fontSize: 12 }}>{cfg.icon} {cfg.label}</button>
+          ))}
+        </div>
+      );
+
+      const tagsRow = (
+        <div>
+          <button onClick={() => setTagsOpen((o) => !o)} style={{ ...sLbl, marginBottom: tagsOpen ? 7 : 0, background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", alignItems: "center", gap: 6 }}>
+            Tags {(curTags || []).length > 0 && <span style={{ color: accent }}>· {curTags.length}</span>} <span style={{ fontSize: 9 }}>{tagsOpen ? "▴" : "▾"}</span>
+          </button>
+          {tagsOpen && (
+            <div className="cm-slide-in" style={{ marginTop: 4 }}>
+              <TagSelector selectedTags={curTags || []} onChange={setCurTags} />
             </div>
-            {newCatOpen && (
-              <div className="cm-slide-in" style={creatorCard}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-                  <span style={{ width: 38, height: 38, borderRadius: 11, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 19, flexShrink: 0, background: `${newCat.color}22`, boxShadow: `inset 0 0 0 1.5px ${newCat.color}` }}>{newCat.icon}</span>
-                  <input value={newCat.name} onChange={(e) => setNewCat((n) => ({ ...n, name: e.target.value }))} placeholder="Category name" style={fieldInput} />
-                </div>
-                <div style={{ ...sLbl, marginBottom: 7 }}>Icon</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 13 }}>
-                  {ADD_EMOJI.map((em) => <button key={em} onClick={() => setNewCat((n) => ({ ...n, icon: em }))} style={emojiBtn(newCat.icon === em)}>{em}</button>)}
-                </div>
-                <div style={{ ...sLbl, marginBottom: 7 }}>Color</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 15 }}>
-                  {ADD_COLOR.map((col) => <button key={col} onClick={() => setNewCat((n) => ({ ...n, color: col }))} style={swatch(col, newCat.color === col)} />)}
-                </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button onClick={() => setNewCatOpen(false)} style={ghostBtn}>Cancel</button>
-                  <button onClick={addCategory} disabled={!newCat.name.trim()} style={okBtn(!!newCat.name.trim())}>Add category</button>
-                </div>
-              </div>
-            )}
+          )}
+        </div>
+      );
+
+      // ── category bottom sheet (full grid + new-category creator) ──
+      const catSheet = catSheetOpen && (
+        <Modal sheet onClose={() => { setCatSheetOpen(false); setNewCatOpen(false); }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={{ ...sLbl, margin: 0 }}>Category</div>
+            <button onClick={() => { setCatSheetOpen(false); setNewCatOpen(false); }} style={closeBtn}>×</button>
           </div>
-
-          {curCat && (
-            <div className="cm-slide-in" style={{ marginBottom: 16 }}>
-              <div style={sLbl}>{catObj.icon} {curCat} · shops</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                {catShops.map((s) => (
-                  <button key={s.id || s.name} onClick={() => setCurShop(s.name)} style={chip(curShop === s.name, accent)}>{s.is_favorite ? "⭐ " : ""}{s.name}</button>
-                ))}
-                <button onClick={() => { setNewShopOpen((o) => !o); setNewCatOpen(false); }} style={newChip(newShopOpen)}>＋ New shop</button>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {categories.map((c) => (
+              <button key={c.id || c.name} onClick={() => pickCat(c)} style={chip(curCat === c.name, c.color)}>
+                <span style={{ fontSize: 15 }}>{c.icon}</span>{c.name}
+              </button>
+            ))}
+            <button onClick={() => { setNewCatOpen((o) => !o); setNewShopOpen(false); }} style={newChip(newCatOpen)}>＋ New</button>
+          </div>
+          {newCatOpen && (
+            <div className="cm-slide-in" style={creatorCard}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                <span style={{ width: 38, height: 38, borderRadius: 11, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 19, flexShrink: 0, background: `${newCat.color}22`, boxShadow: `inset 0 0 0 1.5px ${newCat.color}` }}>{newCat.icon}</span>
+                <input value={newCat.name} onChange={(e) => setNewCat((n) => ({ ...n, name: e.target.value }))} placeholder="Category name" style={fieldInput} />
               </div>
-              {newShopOpen && (
-                <div className="cm-slide-in" style={creatorCard}>
-                  <input value={newShop.name} onChange={(e) => setNewShop((s) => ({ ...s, name: e.target.value }))} placeholder={`New shop in ${curCat}`} style={fieldInput} />
-                  <label style={{ display: "flex", alignItems: "center", gap: 9, margin: "13px 2px 15px", fontSize: 13.5, color: C.muted, cursor: "pointer" }}>
-                    <input type="checkbox" checked={newShop.fav} onChange={(e) => setNewShop((s) => ({ ...s, fav: e.target.checked }))} style={{ width: 17, height: 17, accentColor: accent }} />
-                    ⭐ Mark as favorite (shows first)
-                  </label>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button onClick={() => setNewShopOpen(false)} style={ghostBtn}>Cancel</button>
-                    <button onClick={addShop} disabled={!newShop.name.trim()} style={okBtn(!!newShop.name.trim())}>Add shop</button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {curCat && curShop && (
-            <div className="cm-slide-in">
-              <div style={{ marginBottom: 16 }}>
-                <div style={sLbl}>Type</div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  {Object.entries(EXPENSE_TYPES).map(([key, cfg]) => (
-                    <button key={key} onClick={() => setCurType(key)} style={{ ...chip(curType === key, cfg.color !== "transparent" ? cfg.color : theme.primary), flex: 1, justifyContent: "center" }}>{cfg.icon} {cfg.label}</button>
-                  ))}
-                </div>
+              <div style={{ ...sLbl, marginBottom: 7 }}>Icon</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 13 }}>
+                {ADD_EMOJI.map((em) => <button key={em} onClick={() => setNewCat((n) => ({ ...n, icon: em }))} style={emojiBtn(newCat.icon === em)}>{em}</button>)}
               </div>
-              <div style={{ marginBottom: 4 }}>
-                <button onClick={() => setTagsOpen((o) => !o)} style={{ ...sLbl, background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", alignItems: "center", gap: 6 }}>
-                  Tags {curTags.length > 0 && <span style={{ color: accent }}>· {curTags.length}</span>} <span style={{ fontSize: 9 }}>{tagsOpen ? "▴" : "▾"}</span>
-                </button>
-                {tagsOpen && (
-                  <div className="cm-slide-in" style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
-                    {tags.map((t) => (
-                      <button key={t.id || t.name} onClick={() => toggleTag(t.name)} style={chip(curTags.includes(t.name), t.color)}>{t.icon} {t.name}</button>
-                    ))}
-                  </div>
-                )}
+              <div style={{ ...sLbl, marginBottom: 7 }}>Color</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 15 }}>
+                {ADD_COLOR.map((col) => <button key={col} onClick={() => setNewCat((n) => ({ ...n, color: col }))} style={swatch(col, newCat.color === col)} />)}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => setNewCatOpen(false)} style={ghostBtn}>Cancel</button>
+                <button onClick={addCategory} disabled={!newCat.name.trim()} style={okBtn(!!newCat.name.trim())}>Add category</button>
               </div>
             </div>
           )}
-        </>
+        </Modal>
+      );
+
+      // ── shop bottom sheet (filtered to the picked category + new-shop creator) ──
+      const shopSheet = shopSheetOpen && (
+        <Modal sheet onClose={() => { setShopSheetOpen(false); setNewShopOpen(false); }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <button onClick={() => { setShopSheetOpen(false); setNewShopOpen(false); setCatSheetOpen(true); }} style={{ border: "none", background: "none", color: C.muted, cursor: "pointer", fontSize: 12.5, fontWeight: 600, padding: 0, fontFamily: "inherit" }}>‹ Categories</button>
+            <button onClick={() => { setShopSheetOpen(false); setNewShopOpen(false); }} style={closeBtn}>×</button>
+          </div>
+          <div style={sLbl}>{catObj ? `${catObj.icon} ${curCat} · shops` : "Pick a category first"}</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {catShops.map((s) => (
+              <button key={s.id || s.name} onClick={() => pickShop(s.name)} style={chip(curShop === s.name, accent)}>{s.is_favorite ? "⭐ " : ""}{s.name}</button>
+            ))}
+            <button onClick={() => { setNewShopOpen((o) => !o); setNewCatOpen(false); }} style={newChip(newShopOpen)}>＋ New shop</button>
+          </div>
+          {newShopOpen && (
+            <div className="cm-slide-in" style={creatorCard}>
+              <input value={newShop.name} onChange={(e) => setNewShop((s) => ({ ...s, name: e.target.value }))} placeholder={`New shop in ${curCat}`} style={fieldInput} />
+              <label style={{ display: "flex", alignItems: "center", gap: 9, margin: "13px 2px 15px", fontSize: 13.5, color: C.muted, cursor: "pointer" }}>
+                <input type="checkbox" checked={newShop.fav} onChange={(e) => setNewShop((s) => ({ ...s, fav: e.target.checked }))} style={{ width: 17, height: 17, accentColor: accent }} />
+                ⭐ Mark as favorite (shows first)
+              </label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => setNewShopOpen(false)} style={ghostBtn}>Cancel</button>
+                <button onClick={addShop} disabled={!newShop.name.trim()} style={okBtn(!!newShop.name.trim())}>Add shop</button>
+              </div>
+            </div>
+          )}
+        </Modal>
       );
 
       const RowsSection = (
@@ -742,7 +762,7 @@
           {isSame && (
             <div style={{ marginBottom: 14 }}>
               <div style={sLbl}>Shop · applies to every day</div>
-              <button onClick={() => setPickerOpen(true)} style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 12, cursor: "pointer", border: "none", background: shop ? `${accent}1a` : C.input, boxShadow: shop ? `inset 0 0 0 1.5px ${accent}` : `inset 0 0 0 1px ${C.border}`, fontFamily: "inherit" }}>
+              <button onClick={() => { if (cat) setShopSheetOpen(true); else setCatSheetOpen(true); }} style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 12, cursor: "pointer", border: "none", background: shop ? `${accent}1a` : C.input, boxShadow: shop ? `inset 0 0 0 1.5px ${accent}` : `inset 0 0 0 1px ${C.border}`, fontFamily: "inherit" }}>
                 <span style={{ width: 30, height: 30, borderRadius: 9, background: `${catObj ? catObj.color : "#888"}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>{catObj ? catObj.icon : "🏪"}</span>
                 <span style={{ flex: 1, textAlign: "left", minWidth: 0 }}>
                   <span style={{ display: "block", fontSize: 14, fontWeight: 600, color: shop ? "#fff" : C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{shop || "Choose a shop"}</span>
@@ -857,30 +877,14 @@
               </div>
             )}
             {isMulti && RowsSection}
-            {mode === "quick" && Editor}
-          </div>
-
-          {/* shop picker sheet (multi) */}
-          {isMulti && pickerOpen && (
-            <>
-              <div onClick={() => setPickerOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(6,8,16,0.62)", zIndex: 200 }} />
-              <div className="cm-sheet-in" style={{ position: "fixed", top: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 460, zIndex: 201, background: theme.bg, borderBottomLeftRadius: 24, borderBottomRightRadius: 24, padding: "22px 20px 20px", maxHeight: "85vh", overflowY: "auto", boxShadow: "0 24px 60px rgba(0,0,0,0.55)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                  <div>
-                    <div style={{ fontSize: 10.5, letterSpacing: 1.4, textTransform: "uppercase", color: C.dim, fontWeight: 600 }}>{isSame ? "Shop · applies to all days" : `Set up entry · ${whenLabel(aRow.date)}`}</div>
-                    <div style={{ fontSize: 19, fontWeight: 700, marginTop: 3, color: "#fff" }}>
-                      {curCat && curShop ? <span style={{ color: catObj.color }}>{catObj.icon} {curShop}</span> : curCat ? <span style={{ color: catObj.color }}>{catObj.icon} {curCat} — pick a shop</span> : "Choose a category"}
-                    </div>
-                  </div>
-                  <button onClick={() => setPickerOpen(false)} style={{ border: "none", background: C.input, color: C.muted, width: 34, height: 34, borderRadius: 17, fontSize: 19, cursor: "pointer", boxShadow: `inset 0 0 0 1px ${C.border}`, flexShrink: 0 }}>×</button>
-                </div>
-                {Editor}
-                <button onClick={() => { setPickerOpen(false); }} style={{ width: "100%", height: 50, marginTop: 18, borderRadius: 14, border: "none", fontFamily: "inherit", fontSize: 15, fontWeight: 700, cursor: "pointer", background: curShop ? `linear-gradient(135deg, ${accent}, ${theme.accent})` : C.input, color: curShop ? "#fff" : C.muted }}>
-                  {curShop ? "Done · enter amount ↓" : "Pick a category & shop above"}
-                </button>
+            {mode === "quick" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {catChipsRow}
+                {typeRow}
+                {tagsRow}
               </div>
-            </>
-          )}
+            )}
+          </div>
 
           {/* row cost modal (multi) */}
           {isMulti && padOpen && (
@@ -895,7 +899,7 @@
                   <div style={{ fontSize: 44, fontWeight: 700, letterSpacing: -2, lineHeight: 1, color: amt > 0 ? "#fff" : C.dim }}>{amt > 0 ? fmt(amt) : "¥0"}</div>
                   <div style={{ fontSize: 12, color: C.muted, marginTop: 6, minHeight: 16 }}>{curShop ? <span style={{ color: catObj.color }}>{catObj.icon} {curShop}</span> : isSame ? "set the shop first" : curCat ? "pick a shop below" : "pick a category below"}</div>
                 </div>
-                {isDiff && <div style={{ marginTop: 4, marginBottom: 6 }}>{Editor}</div>}
+                {isDiff && <div style={{ marginTop: 8, marginBottom: 6, display: "flex", flexDirection: "column", gap: 10 }}>{catChipsRow}{typeRow}{tagsRow}</div>}
                 <div style={{ padding: "8px 0 4px", display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
                   {["7","8","9","4","5","6","1","2","3","00","0","del"].map((k) => (
                     <button key={k} className="cm-chip" onClick={() => press(k)} style={{ height: 46, borderRadius: 12, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: k === "del" ? 18 : 22, fontWeight: 600, color: k === "del" ? C.muted : "#fff", background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${C.border}` }}>{k === "del" ? "⌫" : k}</button>
@@ -934,6 +938,8 @@
           </div>
 
           {recentBlock}
+          {catSheet}
+          {shopSheet}
         </div>
       );
     }
@@ -1270,11 +1276,11 @@
       );
     }
 
-    function Modal({ children, onClose }) {
+    function Modal({ children, onClose, sheet }) {
       const { theme } = useTheme();
       return (
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:20}}>
-          <div style={{background:"#1a1a2e",borderRadius:12,padding:16,width:"100%",maxWidth:360}}>
+        <div onClick={sheet ? onClose : undefined} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",display:"flex",alignItems:sheet?"flex-end":"center",justifyContent:"center",zIndex:sheet?300:100,padding:sheet?0:20}}>
+          <div className={sheet ? "cm-sheet-in" : undefined} onClick={sheet ? (e) => e.stopPropagation() : undefined} style={{background:"#1a1a2e",borderRadius:sheet?"18px 18px 0 0":12,padding:16,width:"100%",maxWidth:sheet?460:360,maxHeight:sheet?"80vh":undefined,overflowY:sheet?"auto":undefined}}>
             {children}
           </div>
         </div>
