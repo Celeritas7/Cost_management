@@ -625,8 +625,10 @@
       const rowCatOf = (r) => (isSame ? cat : r.cat);
       const rowShopOf = (r) => (isSame ? shop : r.shop);
       const isRowFilled = (r) => rowCatOf(r) && rowShopOf(r) && Number(r.amount) > 0;
+      const rowDup = (r) => (isRowFilled(r) ? findDuplicate(r.date, rowShopOf(r), Number(r.amount)) : null);
       const buildRecord = (r) => ({ date: r.date, category: rowCatOf(r), shop: rowShopOf(r), amount: Number(r.amount), notes: "", expense_type: isSame ? etype : (r.type || "normal"), tags: ((isSame ? etags : r.tags) || []).join(",") });
       const filledEntries = rows.map((r, i) => ({ r, i })).filter(({ r }) => isRowFilled(r));
+      const flaggedCount = filledEntries.filter(({ r }) => rowDup(r)).length;
       const rowsTotal = rows.reduce((s, r) => s + Number(r.amount || 0), 0);
 
       const commitMulti = async (entries) => { // entries: [{ record, rowIdx }] — saved rows leave the list, the rest stay editable
@@ -645,7 +647,15 @@
       };
       const saveMulti = () => {
         if (!filledEntries.length || saving) return;
-        commitMulti(filledEntries.map(({ r, i }) => ({ record: buildRecord(r), rowIdx: i })));
+        const flagged = [], clean = [];
+        filledEntries.forEach(({ r, i }) => {
+          const existing = rowDup(r);
+          const entry = { record: buildRecord(r), existing, rowIdx: i };
+          (existing ? flagged : clean).push(entry);
+        });
+        if (!flagged.length) { commitMulti(clean); return; }
+        // confirm flagged rows one by one (Add anyway / Cancel per row, not per batch)
+        setDupDialog({ multi: true, queue: flagged, idx: 0, kept: clean, view: false });
       };
 
       // Add-anyway / Cancel for the entry the duplicate dialog is showing;
@@ -863,13 +873,15 @@
                 const expanded = i === activeIdx;
                 const ringColor = rc ? rc.color : theme.primary;
                 const rType = isSame ? etype : (r.type || "normal");
+                const dup = rowDup(r);
                 return (
-                  <div key={i} style={{ borderRadius: 12, background: expanded ? `${ringColor}14` : C.input, boxShadow: expanded ? `inset 0 0 0 1.5px ${ringColor}` : `inset 0 0 0 1px ${C.border}` }}>
+                  <div key={i} style={{ borderRadius: 12, background: expanded ? `${ringColor}14` : C.input, boxShadow: expanded ? `inset 0 0 0 1.5px ${ringColor}` : `inset 0 0 0 1px ${dup ? `${theme.warning}88` : C.border}` }}>
                     <div onClick={() => setActiveRow(expanded ? -1 : i)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", cursor: "pointer" }}>
                       <span style={{ fontSize: 10.5, fontWeight: 700, color: expanded ? "#fff" : C.muted, minWidth: 56 }}>{whenLabel(r.date)}</span>
                       <span style={{ width: 26, height: 26, borderRadius: 8, background: `${rc ? rc.color : "#888"}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>{rc ? rc.icon : "▫"}</span>
                       <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: rShop ? C.text : C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{rShop || (isSame ? "set the shop above" : "tap to set shop")}</span>
                       {EXPENSE_TYPES[rType]?.icon && <span style={{ fontSize: 12 }}>{EXPENSE_TYPES[rType].icon}</span>}
+                      {dup && <span title={`Possible duplicate — ${fmt(dup.amount)} at ${dup.shop} already logged on ${dup.date}`} style={{ fontSize: 13, color: theme.warning }}>⚠</span>}
                       <span style={{ fontSize: 13.5, fontWeight: 700, color: r.amount ? "#fff" : C.dim }}>{r.amount ? fmt(Number(r.amount)) : "¥–"}</span>
                       <button onClick={(e) => { e.stopPropagation(); removeRow(i); }} style={{ border: "none", background: "none", color: C.dim, cursor: "pointer", fontSize: 17, lineHeight: 1, padding: "0 2px" }}>×</button>
                     </div>
@@ -880,6 +892,9 @@
                         {keypad(42)}
                         {isDiff && typeRow}
                         {isDiff && tagsRow}
+                        {dup && (
+                          <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.warning }}>⚠ {fmt(dup.amount)} at {dup.shop} already logged on {dup.date}</div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -992,7 +1007,7 @@
               </button>
             ) : (
               <button onClick={saveMulti} disabled={!filledEntries.length || saving} style={ctaStyle(!!filledEntries.length)}>
-                {saving ? "Saving…" : saved ? "✓ Saved" : filledEntries.length ? `Save all (${filledEntries.length}) · ${fmt(filledEntries.reduce((s, e) => s + Number(e.r.amount), 0))}` : (isSame ? "Set a shop & amounts" : "Fill in shops & amounts")}
+                {saving ? "Saving…" : saved ? "✓ Saved" : filledEntries.length ? `Save all (${filledEntries.length}) · ${fmt(filledEntries.reduce((s, e) => s + Number(e.r.amount), 0))}${flaggedCount ? ` · ⚠${flaggedCount}` : ""}` : (isSame ? "Set a shop & amounts" : "Fill in shops & amounts")}
               </button>
             )}
           </div>
