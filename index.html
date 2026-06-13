@@ -241,7 +241,7 @@
       useEffect(() => { fetchData(); }, [fetchData]);
 
       // On first load (once both recurring + expenses have settled), compute which
-      // active recurring entries are due. console.log only for now — UI wired later.
+      // active recurring entries are due and open the suggestion modal.
       useEffect(() => {
         if (loading) return;
         const today = new Date();
@@ -250,7 +250,18 @@
           .filter((r) => isRecurringDue(r, today, sessionSnoozed))
           .sort((a, b) => order(a) - order(b) || (a.sort_order ?? 0) - (b.sort_order ?? 0));
         console.log(`[recurring] due on load: ${due.length}`, due.map((r) => `${r.name} → ${computeDueDate(r, today)}`));
+        if (due.length) { setDueList(due); setDueModalOpen(true); }
       }, [loading]); // eslint-disable-line react-hooks/exhaustive-deps
+
+      // drop a resolved entry from the due list; the modal auto-closes once it empties
+      const resolveDue = (id) => setDueList((prev) => prev.filter((r) => r.id !== id));
+      useEffect(() => { if (dueModalOpen && dueList.length === 0) setDueModalOpen(false); }, [dueList, dueModalOpen]);
+
+      // per-row handlers — DB wiring lands in later commits; scaffold no-ops for now
+      const dueAdd = async (rec, due) => ({ ok: true });
+      const dueSkip = async (rec, due) => ({ ok: true });
+      const dueSnooze = (rec) => {};
+      const dueClose = () => setDueModalOpen(false);
 
       const RAW = data;
       const catList = useMemo(() => [...new Set(RAW.map(r => r.category))].sort(), [RAW]);
@@ -390,6 +401,10 @@
                 <SettingsView allExpenses={RAW} />
               )}
             </div>
+
+            {dueModalOpen && dueList.length > 0 && (
+              <RecurringDueModal items={dueList} onAdd={dueAdd} onSkip={dueSkip} onSnooze={dueSnooze} onResolve={resolveDue} onClose={dueClose} />
+            )}
           </div>
         </ThemeContext.Provider>
       );
@@ -2433,6 +2448,79 @@
             </Modal>
           )}
         </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════
+    //  RECURRING DUE MODAL (app-launch suggestions)
+    // ═══════════════════════════════════════════
+    function RecurringDueModal({ items, onAdd, onSkip, onSnooze, onResolve, onClose }) {
+      const { theme, getCatIcon, getCatColor } = useTheme();
+      const [busyId, setBusyId] = useState(null);
+      const today = new Date();
+
+      const finish = (id) => { setBusyId(null); onResolve(id); };
+      const doAdd = async (rec, due) => {
+        if (busyId) return; setBusyId(rec.id);
+        const res = await onAdd(rec, due);
+        if (!res || !res.ok) { setBusyId(null); return; }
+        finish(rec.id);
+      };
+      const doSkip = async (rec, due) => {
+        if (busyId) return; setBusyId(rec.id);
+        const res = await onSkip(rec, due);
+        if (!res || !res.ok) { setBusyId(null); return; }
+        finish(rec.id);
+      };
+      const doSnooze = (rec) => { if (busyId) return; onSnooze(rec); finish(rec.id); };
+
+      const closeBtn = { border: "none", background: theme.inputBg, color: theme.textMuted, width: 30, height: 30, borderRadius: 15, fontSize: 17, cursor: "pointer", boxShadow: `inset 0 0 0 1px ${theme.cardBorder}`, flexShrink: 0 };
+      const addBtn = { flex: 1, padding: "8px 6px", borderRadius: 9, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})` };
+      const skipBtn = { flex: 1, padding: "8px 6px", borderRadius: 9, cursor: "pointer", fontSize: 12, fontWeight: 600, color: theme.textMuted, background: "transparent", border: `1px solid ${theme.cardBorder}`, fontFamily: "inherit" };
+      const snoozeBtn = { flex: 1, padding: "8px 6px", borderRadius: 9, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, color: theme.textDim, background: "transparent", fontFamily: "inherit" };
+
+      return (
+        <Modal sheet onClose={onClose}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#fff" }}>🔁 Recurring payments due</div>
+              <div style={{ fontSize: 11.5, color: theme.textMuted, marginTop: 3 }}>{items.length} entries waiting</div>
+            </div>
+            <button onClick={onClose} style={closeBtn}>×</button>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {items.map((rec) => {
+              const due = computeDueDate(rec, today);
+              const busy = busyId === rec.id;
+              const col = getCatColor(rec.category);
+              return (
+                <div key={rec.id} style={{ borderRadius: 12, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${theme.cardBorder}`, padding: "11px 12px", opacity: busy ? 0.6 : 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 9 }}>
+                    <span style={{ width: 30, height: 30, borderRadius: 9, background: `${col}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>{getCatIcon(rec.category)}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        {EXPENSE_TYPES[rec.expense_type]?.icon && <span style={{ fontSize: 11 }}>{EXPENSE_TYPES[rec.expense_type].icon}</span>}
+                        <span style={{ fontSize: 13.5, fontWeight: 600, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{rec.name}</span>
+                      </div>
+                      <div style={{ fontSize: 10.5, color: theme.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{freqSummary(rec)} · {due ? dueDateLabel(due) : "—"}</div>
+                    </div>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: "#fff", whiteSpace: "nowrap" }}>{fmt(rec.amount)}</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={() => doAdd(rec, due)} disabled={busy} style={addBtn}>Add</button>
+                    <button onClick={() => doSkip(rec, due)} disabled={busy} style={skipBtn}>Skip</button>
+                    <button onClick={() => doSnooze(rec)} disabled={busy} style={snoozeBtn}>Snooze</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <button onClick={onClose} style={{ width: "100%", marginTop: 14, padding: "11px", borderRadius: 11, border: `1px solid ${theme.cardBorder}`, background: theme.inputBg, color: theme.textMuted, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+            Close / Later
+          </button>
+        </Modal>
       );
     }
 
