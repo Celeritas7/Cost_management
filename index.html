@@ -537,6 +537,7 @@
       const [newShopOpen, setNewShopOpen] = useState(false);
       const [newShop, setNewShop] = useState({ name: "", fav: false });
       const [dupDialog, setDupDialog] = useState(null); // { multi, queue: [{ record, existing, rowIdx }], idx, kept, view }
+      const [removingRow, setRemovingRow] = useState(null); // row index fading out before removal
 
       const isDiff = mode === "list";
       const isSame = mode === "same";
@@ -565,6 +566,7 @@
 
       const updRow = (patch) => { if (activeIdx < 0) return; setRows((rs) => rs.map((r, i) => (i === activeIdx ? { ...r, ...patch } : r))); };
       const press = (key) => {
+        vibrate(10);
         setSaved(false);
         const apply = (a) => key === "del" ? a.slice(0, -1) : key === "00" ? (a === "" ? "" : (a.length < 8 ? a + "00" : a)) : (a.length < 9 ? (a === "0" ? key : a + key) : a);
         if (isMulti) { if (activeIdx < 0) return; setRows((rs) => rs.map((r, i) => (i === activeIdx ? { ...r, amount: apply(r.amount) } : r))); } else setAmount((a) => apply(a));
@@ -585,8 +587,13 @@
       };
       const openCal = () => { if (isMulti) setDates([...new Set(rows.map((r) => r.date))].sort()); setCalOpen(true); };
       const removeRow = (i) => {
-        setRows((rs) => rs.filter((_, j) => j !== i));
-        setActiveRow((a) => (a === i ? -1 : i < a ? a - 1 : a));
+        vibrate(10);
+        setRemovingRow(i);
+        setTimeout(() => {
+          setRemovingRow(null);
+          setRows((rs) => rs.filter((_, j) => j !== i));
+          setActiveRow((a) => (a === i ? -1 : i < a ? a - 1 : a));
+        }, 280);
       };
 
       const switchMode = (m) => {
@@ -608,9 +615,12 @@
       const findDuplicate = (date, shopName, amountVal) =>
         allExpenses.find((e) => e.date === date && e.shop === shopName && Number(e.amount) === Number(amountVal)) || null;
 
+      const quickDup = !isMulti && valid ? findDuplicate(dates[0], shop, amt) : null;
+
       const commitQuick = async (records) => {
         const ok = await insertExpenses(records);
         if (!ok) return;
+        vibrate(10);
         setSaved(true); setFlash(fmt(records.reduce((s, r) => s + r.amount, 0)));
         setTimeout(() => { setAmount(""); setShop(null); setCat(null); setEtags([]); setEtype("normal"); setTagsOpen(false); setSaved(false); }, 900);
         setTimeout(() => setFlash(null), 1700);
@@ -635,10 +645,12 @@
         if (!entries.length) return;
         const ok = await insertExpenses(entries.map((e) => e.record));
         if (!ok) return;
+        vibrate(10);
         const savedIdx = new Set(entries.map((e) => e.rowIdx));
         const remaining = rows.filter((_, i) => !savedIdx.has(i));
         setSaved(true);
         setFlash(`${entries.length} item${entries.length > 1 ? "s" : ""} · ${fmt(entries.reduce((s, e) => s + e.record.amount, 0))}`);
+        if (remaining.length) showToast("success", `${entries.length} saved · ${remaining.length} still in the list`);
         setTimeout(() => {
           setRows(remaining); setActiveRow(-1); setSaved(false);
           if (!remaining.length && isSame) { setShop(null); setCat(null); setEtags([]); setEtype("normal"); }
@@ -691,7 +703,12 @@
         setNewShop({ name: "", fav: false });
         pickShop(name);
       };
-      const repeat = (e) => { if (isDiff) updRow({ cat: e.category, shop: e.shop, amount: String(e.amount) }); else if (isSame) { setCat(e.category); setShop(e.shop); updRow({ amount: String(e.amount) }); } else { setCat(e.category); setShop(e.shop); setAmount(String(e.amount)); } };
+      const repeat = (e) => {
+        vibrate(10);
+        if (isDiff) updRow({ cat: e.category, shop: e.shop, amount: String(e.amount), type: e.expense_type || "normal" });
+        else if (isSame) { setCat(e.category); setShop(e.shop); updRow({ amount: String(e.amount) }); }
+        else { setCat(e.category); setShop(e.shop); setAmount(String(e.amount)); setEtype(e.expense_type || "normal"); }
+      };
 
       // styles
       const chip = (active, color) => ({ padding: "9px 13px", borderRadius: 11, border: "none", cursor: "pointer", fontSize: 13, fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0, transition: "all .15s", display: "flex", alignItems: "center", gap: 6, background: active ? `${color}26` : C.input, color: active ? "#fff" : C.muted, boxShadow: active ? `inset 0 0 0 1.5px ${color}` : `inset 0 0 0 1px ${C.border}` });
@@ -875,7 +892,7 @@
                 const rType = isSame ? etype : (r.type || "normal");
                 const dup = rowDup(r);
                 return (
-                  <div key={i} style={{ borderRadius: 12, background: expanded ? `${ringColor}14` : C.input, boxShadow: expanded ? `inset 0 0 0 1.5px ${ringColor}` : `inset 0 0 0 1px ${dup ? `${theme.warning}88` : C.border}` }}>
+                  <div key={i} className={removingRow === i ? "cm-fade-out" : undefined} style={{ borderRadius: 12, background: expanded ? `${ringColor}14` : C.input, boxShadow: expanded ? `inset 0 0 0 1.5px ${ringColor}` : `inset 0 0 0 1px ${dup ? `${theme.warning}88` : C.border}` }}>
                     <div onClick={() => setActiveRow(expanded ? -1 : i)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", cursor: "pointer" }}>
                       <span style={{ fontSize: 10.5, fontWeight: 700, color: expanded ? "#fff" : C.muted, minWidth: 56 }}>{whenLabel(r.date)}</span>
                       <span style={{ width: 26, height: 26, borderRadius: 8, background: `${rc ? rc.color : "#888"}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>{rc ? rc.icon : "▫"}</span>
@@ -979,6 +996,15 @@
                   : curCat ? <span style={{ color: catObj.color }}>{catObj.icon} {curCat} — pick a shop</span>
                   : "Tap ¥ for the keypad · pick a category"}
               </div>
+            </div>
+          )}
+
+          {/* live duplicate hint — date + shop + amount all match an existing entry */}
+          {quickDup && (
+            <div className="cm-fade" style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 12px", borderRadius: 10, fontSize: 11.5, fontWeight: 600, color: theme.warning, background: `${theme.warning}1a`, boxShadow: `inset 0 0 0 1px ${theme.warning}55` }}>
+                ⚠ possible duplicate — {fmt(quickDup.amount)} at {quickDup.shop} already logged
+              </span>
             </div>
           )}
 
