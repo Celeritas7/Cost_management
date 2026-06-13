@@ -112,6 +112,40 @@
     };
     const favSort = (a, b) => (a.is_favorite === b.is_favorite ? a.name.localeCompare(b.name) : a.is_favorite ? -1 : 1);
 
+    // ── Recurring due-date logic (timezone-safe: local date components only) ──
+    // `today` is a Date (pass `new Date()` — local). Returns 'YYYY-MM-DD' or null.
+    function computeDueDate(rec, today) {
+      const y = today.getFullYear(), m = today.getMonth(), dom = today.getDate(), dow = today.getDay();
+      const pad = n => String(n).padStart(2, '0');
+      const ymd = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      switch (rec.frequency) {
+        case 'daily':    return ymd(today);
+        case 'weekdays': return (dow >= 1 && dow <= 5) ? ymd(today) : null;
+        case 'weekly':   return ymd(new Date(y, m, dom - ((dow - rec.day_value + 7) % 7)));
+        case 'monthly': {
+          const daysInMonth = new Date(y, m + 1, 0).getDate();
+          const clampedDay = Math.min(rec.day_value, daysInMonth);
+          return dom < clampedDay ? null : ymd(new Date(y, m, clampedDay));
+        }
+        default: return null;
+      }
+    }
+
+    function isRecurringDue(rec, today, sessionSnoozed) {
+      if (!rec.is_active) return false;
+      if (sessionSnoozed.includes(rec.id)) return false;
+      const due = computeDueDate(rec, today);
+      if (due === null) return false;
+      return rec.last_added_date == null || rec.last_added_date < due; // YYYY-MM-DD compares chronologically
+    }
+
+    // "Due Mon, Jul 27" from a 'YYYY-MM-DD' string (local components, no Date parsing of the string)
+    const dueDateLabel = (ymd) => {
+      const [y, m, d] = ymd.split("-").map(Number);
+      const dt = new Date(y, m - 1, d);
+      return `Due ${DOW_SHORT[dt.getDay()]}, ${MONTHS_SHORT[m]} ${d}`;
+    };
+
     // ── Graph filters (overview charts) ──
     const GRAPH_FILTER_KEY = "cost_management_graph_filters";
     const DEFAULT_GRAPH_FILTERS = { excludeOutliers: false, excludeFixed: false, categories: [], shops: [], tags: [], dateFrom: "", dateTo: "" };
@@ -171,6 +205,10 @@
       const [view, setView] = useState("add");
       const [txPage, setTxPage] = useState(0);
       const [showThemePicker, setShowThemePicker] = useState(false);
+      const [sessionSnoozed, setSessionSnoozed] = useState([]); // recurring ids snoozed this session (clears on reload)
+      const [dueList, setDueList] = useState([]);
+      const [dueModalOpen, setDueModalOpen] = useState(false);
+      const dueShownRef = useRef(false); // open the due modal at most once per session
 
       const changeTheme = (t) => { setThemeName(t); setStoredTheme(t); setShowThemePicker(false); };
 
@@ -201,6 +239,18 @@
       }, []);
 
       useEffect(() => { fetchData(); }, [fetchData]);
+
+      // On first load (once both recurring + expenses have settled), compute which
+      // active recurring entries are due. console.log only for now — UI wired later.
+      useEffect(() => {
+        if (loading) return;
+        const today = new Date();
+        const order = (r) => FREQ_ORDER.indexOf(r.frequency);
+        const due = recurring
+          .filter((r) => isRecurringDue(r, today, sessionSnoozed))
+          .sort((a, b) => order(a) - order(b) || (a.sort_order ?? 0) - (b.sort_order ?? 0));
+        console.log(`[recurring] due on load: ${due.length}`, due.map((r) => `${r.name} → ${computeDueDate(r, today)}`));
+      }, [loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
       const RAW = data;
       const catList = useMemo(() => [...new Set(RAW.map(r => r.category))].sort(), [RAW]);
