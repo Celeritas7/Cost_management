@@ -258,7 +258,18 @@
       useEffect(() => { if (dueModalOpen && dueList.length === 0) setDueModalOpen(false); }, [dueList, dueModalOpen]);
 
       // per-row handlers — DB wiring lands in later commits; scaffold no-ops for now
-      const dueAdd = async (rec, due) => ({ ok: true });
+      // (c) Add: insert the expense at its due date, then stamp the recurring row's
+      // last_added_date so it won't re-suggest this period; refetch to refresh views.
+      const dueAdd = async (rec, due) => {
+        if (!due) return { ok: false };
+        const record = { date: due, category: rec.category, shop: rec.shop, amount: Number(rec.amount), notes: rec.notes || "", expense_type: rec.expense_type || "normal", tags: rec.tags || "" };
+        const { error: insErr } = await supabase.from("cost_management_expenses").insert(record);
+        if (insErr) return { ok: false };
+        const { error: updErr } = await supabase.from("cost_management_recurring").update({ last_added_date: due }).eq("id", rec.id);
+        if (updErr) return { ok: false };
+        await fetchData();
+        return { ok: true };
+      };
       const dueSkip = async (rec, due) => ({ ok: true });
       const dueSnooze = (rec) => {};
       const dueClose = () => setDueModalOpen(false);
