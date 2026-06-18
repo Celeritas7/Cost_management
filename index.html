@@ -209,6 +209,10 @@
       const [dueList, setDueList] = useState([]);
       const [dueModalOpen, setDueModalOpen] = useState(false);
       const dueShownRef = useRef(false); // open the due modal at most once per session
+      const [dueToast, setDueToast] = useState(null);
+
+      // success feedback for the due modal: toast (survives the modal closing) + haptic
+      const flashDue = (msg) => { setDueToast(msg); vibrate(10); setTimeout(() => setDueToast(null), 2500); };
 
       const changeTheme = (t) => { setThemeName(t); setStoredTheme(t); setShowThemePicker(false); };
 
@@ -269,6 +273,7 @@
         const { error: updErr } = await supabase.from("cost_management_recurring").update({ last_added_date: due }).eq("id", rec.id);
         if (updErr) return { ok: false };
         await fetchData();
+        flashDue(`Added ${rec.name}`);
         return { ok: true };
       };
       // (d) Skip: stamp last_added_date with the COMPUTED due date (not today) so it
@@ -278,6 +283,7 @@
         const { error: updErr } = await supabase.from("cost_management_recurring").update({ last_added_date: due }).eq("id", rec.id);
         if (updErr) return { ok: false };
         await fetchData();
+        flashDue(`Skipped ${rec.name}`);
         return { ok: true };
       };
       // (e) Snooze: hide for this session only (no DB write). The row leaves the
@@ -431,6 +437,12 @@
 
             {dueModalOpen && dueList.length > 0 && (
               <RecurringDueModal items={dueList} onAdd={dueAdd} onSkip={dueSkip} onSnooze={dueSnooze} onResolve={resolveDue} onClose={dueClose} />
+            )}
+
+            {dueToast && (
+              <div className="cm-toast" style={{ position: "fixed", top: 16, right: 16, zIndex: 1000, padding: "10px 16px", borderRadius: 10, fontSize: 13, fontWeight: 500, background: theme.primary, color: "#fff", boxShadow: "0 4px 16px rgba(0,0,0,0.3)" }}>
+                {dueToast}
+              </div>
             )}
           </div>
         </ThemeContext.Provider>
@@ -2484,20 +2496,23 @@
     function RecurringDueModal({ items, onAdd, onSkip, onSnooze, onResolve, onClose }) {
       const { theme, getCatIcon, getCatColor } = useTheme();
       const [busyId, setBusyId] = useState(null);
+      const [fadingId, setFadingId] = useState(null);
       const today = new Date();
 
       const finish = (id) => { setBusyId(null); onResolve(id); };
+      // fade the row out (.cm-fade-out) before it leaves the list
+      const fadeThenFinish = (id) => { setFadingId(id); setTimeout(() => { setFadingId(null); finish(id); }, 300); };
       const doAdd = async (rec, due) => {
         if (busyId) return; setBusyId(rec.id);
         const res = await onAdd(rec, due);
         if (!res || !res.ok) { setBusyId(null); return; }
-        finish(rec.id);
+        fadeThenFinish(rec.id);
       };
       const doSkip = async (rec, due) => {
         if (busyId) return; setBusyId(rec.id);
         const res = await onSkip(rec, due);
         if (!res || !res.ok) { setBusyId(null); return; }
-        finish(rec.id);
+        fadeThenFinish(rec.id);
       };
       const doSnooze = (rec) => { if (busyId) return; onSnooze(rec); finish(rec.id); };
 
@@ -2520,9 +2535,10 @@
             {items.map((rec) => {
               const due = computeDueDate(rec, today);
               const busy = busyId === rec.id;
+              const fading = fadingId === rec.id;
               const col = getCatColor(rec.category);
               return (
-                <div key={rec.id} style={{ borderRadius: 12, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${theme.cardBorder}`, padding: "11px 12px", opacity: busy ? 0.6 : 1 }}>
+                <div key={rec.id} className={fading ? "cm-fade-out" : undefined} style={{ borderRadius: 12, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${theme.cardBorder}`, padding: "11px 12px", opacity: busy && !fading ? 0.6 : 1 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 9 }}>
                     <span style={{ width: 30, height: 30, borderRadius: 9, background: `${col}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>{getCatIcon(rec.category)}</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
