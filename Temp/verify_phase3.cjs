@@ -223,15 +223,35 @@ async function newApp(state, opts = {}) {
       { id: 10, name: 'Konbini', category: 'Convenience', shop: 'KonbiniShop', amount: 500, expense_type: 'normal', tags: '', notes: '', frequency: 'daily', day_value: null, is_active: true, last_added_date: ymd(addDays(TODAY, -1)), sort_order: 1 },
     ];
     const state = { recurring: rec, expenses: [], ...baseMeta };
-    const { page, backend } = await newApp(state, { browser });
+    const { page, backend, logs } = await newApp(state, { browser });
+    const dueLog = () => logs.filter((l) => /\[recurring\] due/.test(l));
+    const baseLogs = dueLog().length; // due-set effect ran once on load
     // snooze the first (Gym): first Snooze button in DOM order
     await page.getByRole('button', { name: 'Snooze', exact: true }).first().click();
     await page.waitForTimeout(900);
     ok('no inserts', backend.captures.inserts.length === 0, backend.captures.inserts);
     ok('no updates', backend.captures.updates.length === 0, backend.captures.updates);
-    const bodyText = await page.locator('body').innerText();
-    ok('Gym row removed', !/Gym/.test(bodyText), bodyText.slice(0, 200));
+    let bodyText = await page.locator('body').innerText();
+    // (1) snoozed id absent from the rendered modal
+    ok('Gym row removed from modal', !/Gym/.test(bodyText), bodyText.slice(0, 200));
     ok('Konbini still present', /Konbini/.test(bodyText));
+    // (2) the due-set effect re-ran (sessionSnoozed changed) and must NOT reintroduce
+    //     the snoozed id — a no-op snooze leaves sessionSnoozed unchanged, so the
+    //     effect never re-runs and Gym would still be in the recomputed set.
+    const afterSnooze = dueLog();
+    ok('due-set effect re-ran after snooze', afterSnooze.length > baseLogs, { baseLogs, now: afterSnooze.length });
+    const lastDue = afterSnooze[afterSnooze.length - 1] || '';
+    ok('snoozed Gym excluded from recomputed due-set', !/Gym/.test(lastDue), lastDue);
+    ok('Konbini retained in recomputed due-set', /Konbini/.test(lastDue), lastDue);
+    // (3) snooze the remaining row → list empties → modal closes; dueShownRef must
+    //     keep it from reopening even though the effect re-runs again.
+    await page.getByRole('button', { name: 'Snooze', exact: true }).first().click();
+    await page.waitForTimeout(900);
+    bodyText = await page.locator('body').innerText();
+    ok('modal closed once all snoozed', !/Recurring payments due/.test(bodyText));
+    ok('effect re-ran again after 2nd snooze', dueLog().length > afterSnooze.length, dueLog().length);
+    ok('modal did not reopen (dueShownRef guard)', !/Recurring payments due/.test(bodyText));
+    ok('still no DB writes across snoozes', backend.captures.inserts.length === 0 && backend.captures.updates.length === 0);
     await page.close();
   });
 

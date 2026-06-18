@@ -247,11 +247,12 @@
         const today = new Date();
         const order = (r) => FREQ_ORDER.indexOf(r.frequency);
         const due = recurring
-          .filter((r) => isRecurringDue(r, today, sessionSnoozed))
+          .filter((r) => isRecurringDue(r, today, sessionSnoozed)) // snoozed ids excluded here
           .sort((a, b) => order(a) - order(b) || (a.sort_order ?? 0) - (b.sort_order ?? 0));
-        console.log(`[recurring] due on load: ${due.length}`, due.map((r) => `${r.name} → ${computeDueDate(r, today)}`));
-        if (due.length) { setDueList(due); setDueModalOpen(true); }
-      }, [loading]); // eslint-disable-line react-hooks/exhaustive-deps
+        console.log(`[recurring] due: ${due.length}`, due.map((r) => `${r.name} → ${computeDueDate(r, today)}`));
+        if (dueShownRef.current) return; // modal opens at most once per session — never reopen
+        if (due.length) { dueShownRef.current = true; setDueList(due); setDueModalOpen(true); }
+      }, [loading, sessionSnoozed]); // eslint-disable-line react-hooks/exhaustive-deps
 
       // drop a resolved entry from the due list; the modal auto-closes once it empties
       const resolveDue = (id) => setDueList((prev) => prev.filter((r) => r.id !== id));
@@ -279,8 +280,15 @@
         await fetchData();
         return { ok: true };
       };
-      const dueSnooze = (rec) => {};
-      const dueClose = () => setDueModalOpen(false);
+      // (e) Snooze: hide for this session only (no DB write). The row leaves the
+      // visible list via onResolve; the id in sessionSnoozed keeps the due-set
+      // effect from re-suggesting it until reload.
+      const dueSnooze = (rec) => setSessionSnoozed((prev) => prev.includes(rec.id) ? prev : [...prev, rec.id]);
+      // Close: dismiss + snooze whatever's still visible so it won't reopen this session.
+      const dueClose = () => {
+        setSessionSnoozed((prev) => [...new Set([...prev, ...dueList.map((r) => r.id)])]);
+        setDueModalOpen(false);
+      };
 
       const RAW = data;
       const catList = useMemo(() => [...new Set(RAW.map(r => r.category))].sort(), [RAW]);
