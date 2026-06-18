@@ -270,7 +270,15 @@
         await fetchData();
         return { ok: true };
       };
-      const dueSkip = async (rec, due) => ({ ok: true });
+      // (d) Skip: stamp last_added_date with the COMPUTED due date (not today) so it
+      // won't re-suggest this period; no expense insert; refetch to refresh views.
+      const dueSkip = async (rec, due) => {
+        if (!due) return { ok: false };
+        const { error: updErr } = await supabase.from("cost_management_recurring").update({ last_added_date: due }).eq("id", rec.id);
+        if (updErr) return { ok: false };
+        await fetchData();
+        return { ok: true };
+      };
       const dueSnooze = (rec) => {};
       const dueClose = () => setDueModalOpen(false);
 
