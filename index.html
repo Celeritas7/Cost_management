@@ -265,9 +265,12 @@
       // per-row handlers — DB wiring lands in later commits; scaffold no-ops for now
       // (c) Add: insert the expense at its due date, then stamp the recurring row's
       // last_added_date so it won't re-suggest this period; refetch to refresh views.
-      const dueAdd = async (rec, due) => {
+      const dueAdd = async (rec, due, amountOverride) => {
         if (!due) return { ok: false };
-        const record = { date: due, category: rec.category, shop: rec.shop, amount: Number(rec.amount), notes: rec.notes || "", expense_type: rec.expense_type || "normal", tags: rec.tags || "" };
+        // Variable-amount rules (rec.amount == null) supply the amount at due time via
+        // the modal's inline input; fixed rules use the stored rec.amount.
+        const amount = amountOverride != null ? amountOverride : rec.amount;
+        const record = { date: due, category: rec.category, shop: rec.shop, amount: Number(amount), notes: rec.notes || "", expense_type: rec.expense_type || "normal", tags: rec.tags || "" };
         const { error: insErr } = await supabase.from("cost_management_expenses").insert(record);
         if (insErr) return { ok: false };
         const { error: updErr } = await supabase.from("cost_management_recurring").update({ last_added_date: due }).eq("id", rec.id);
@@ -2499,17 +2502,20 @@
     //  RECURRING DUE MODAL (app-launch suggestions)
     // ═══════════════════════════════════════════
     function RecurringDueModal({ items, onAdd, onSkip, onSnooze, onResolve, onClose }) {
-      const { theme, getCatIcon, getCatColor } = useTheme();
+      const { theme, getCatIcon, getCatColor, inputStyle } = useTheme();
       const [busyId, setBusyId] = useState(null);
       const [fadingId, setFadingId] = useState(null);
+      // per-row inline amount entry for variable (null-amount) rules, keyed by rec.id
+      const [amtInputs, setAmtInputs] = useState({});
+      const setAmt = (id, v) => setAmtInputs((p) => ({ ...p, [id]: v }));
       const today = new Date();
 
       const finish = (id) => { setBusyId(null); onResolve(id); };
       // fade the row out (.cm-fade-out) before it leaves the list
       const fadeThenFinish = (id) => { setFadingId(id); setTimeout(() => { setFadingId(null); finish(id); }, 300); };
-      const doAdd = async (rec, due) => {
+      const doAdd = async (rec, due, amountOverride) => {
         if (busyId) return; setBusyId(rec.id);
-        const res = await onAdd(rec, due);
+        const res = await onAdd(rec, due, amountOverride);
         if (!res || !res.ok) { setBusyId(null); return; }
         fadeThenFinish(rec.id);
       };
@@ -2542,6 +2548,12 @@
               const busy = busyId === rec.id;
               const fading = fadingId === rec.id;
               const col = getCatColor(rec.category);
+              // Variable-amount rule: prompt inline. Confirm stays blocked until a
+              // valid integer > 0 is entered (expenses.amount is NOT NULL).
+              const needsAmount = rec.amount == null;
+              const rawAmt = amtInputs[rec.id];
+              const amtNum = parseInt(rawAmt, 10);
+              const amtValid = rawAmt != null && String(rawAmt).trim() !== "" && Number.isInteger(amtNum) && amtNum > 0;
               return (
                 <div key={rec.id} className={fading ? "cm-fade-out" : undefined} style={{ borderRadius: 12, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${theme.cardBorder}`, padding: "11px 12px", opacity: busy && !fading ? 0.6 : 1 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 9 }}>
@@ -2553,10 +2565,20 @@
                       </div>
                       <div style={{ fontSize: 10.5, color: theme.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{freqSummary(rec)} · {due ? dueDateLabel(due) : "—"}</div>
                     </div>
-                    <span style={{ fontSize: 14, fontWeight: 700, color: "#fff", whiteSpace: "nowrap" }}>{fmt(rec.amount)}</span>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: "#fff", whiteSpace: "nowrap" }}>{needsAmount ? "—" : fmt(rec.amount)}</span>
                   </div>
+                  {needsAmount && (
+                    <input
+                      type="number" inputMode="numeric" autoFocus
+                      value={rawAmt ?? ""}
+                      onChange={(e) => setAmt(rec.id, e.target.value)}
+                      placeholder="¥ Enter amount"
+                      disabled={busy}
+                      style={{ ...inputStyle, fontSize: 14, fontWeight: 600, marginBottom: 6 }}
+                    />
+                  )}
                   <div style={{ display: "flex", gap: 6 }}>
-                    <button onClick={() => doAdd(rec, due)} disabled={busy} style={addBtn}>Add</button>
+                    <button onClick={() => doAdd(rec, due, needsAmount ? amtNum : undefined)} disabled={busy || (needsAmount && !amtValid)} style={{ ...addBtn, opacity: (needsAmount && !amtValid) ? 0.5 : 1, cursor: (needsAmount && !amtValid) ? "not-allowed" : "pointer" }}>Add</button>
                     <button onClick={() => doSkip(rec, due)} disabled={busy} style={skipBtn}>Skip</button>
                     <button onClick={() => doSnooze(rec)} disabled={busy} style={snoozeBtn}>Snooze</button>
                   </div>
