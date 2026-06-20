@@ -2195,6 +2195,12 @@
               <input type="number" inputMode="numeric" min="1" max="31" value={form.day_value ?? ""} onChange={e => set("day_value", e.target.value === "" ? "" : Number(e.target.value))} style={{ ...inputStyle, fontSize: 13 }} />
             </div>
           )}
+          {/* Show after (optional time gate) */}
+          <div style={{ marginBottom: 12 }}>
+            <label style={labelS}>SHOW AFTER</label>
+            <input type="time" value={form.show_after_time ?? ""} onChange={e => set("show_after_time", e.target.value)} style={{ ...inputStyle, fontSize: 13 }} />
+            <div style={{ fontSize: 10.5, color: theme.textDim, marginTop: 5 }}>Optional — only surface this reminder after this local time. Leave blank to show anytime.</div>
+          </div>
           {/* Expense type */}
           <div style={{ marginBottom: 12 }}>
             <label style={labelS}>TYPE</label>
@@ -2257,7 +2263,13 @@
 
       const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2500); };
 
-      const blankForm = { name: "", amount: "", category: "", shop: "", frequency: "monthly", day_value: 1, expense_type: "normal", tags: [], is_active: true, notes: "" };
+      const blankForm = { name: "", amount: "", category: "", shop: "", frequency: "monthly", day_value: 1, expense_type: "normal", tags: [], is_active: true, notes: "", show_after_time: "" };
+      // Blank time → null ("surface anytime"); else normalize "HH:MM" → "HH:MM:SS"
+      // to match the Postgres TIME round-trip (Supabase returns "09:00:00").
+      const normTime = (t) => {
+        const s = String(t ?? "").trim();
+        return s === "" ? null : (s.length === 5 ? s + ":00" : s);
+      };
       const buildRecord = (form) => ({
         name: form.name.trim(),
         category: form.category,
@@ -2270,6 +2282,8 @@
         day_value: (form.frequency === "weekly" || form.frequency === "monthly") ? Number(form.day_value) : null,
         notes: (form.notes || "").trim(),
         is_active: form.is_active,
+        // Optional time gate: blank → null (no gate), else "HH:MM:SS".
+        show_after_time: normTime(form.show_after_time),
       });
 
       const fetchList = useCallback(async () => {
@@ -2314,6 +2328,7 @@
         id: item.id, name: item.name, amount: item.amount ?? "", category: item.category, shop: item.shop,
         frequency: item.frequency, day_value: item.day_value, expense_type: item.expense_type || "normal",
         tags: (item.tags || "").split(",").filter(Boolean), is_active: item.is_active, notes: item.notes || "",
+        show_after_time: item.show_after_time ?? "",
         _origFreq: item.frequency,
       });
 
