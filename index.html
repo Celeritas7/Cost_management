@@ -2110,7 +2110,10 @@
         : form.frequency === "weekly"
         ? (form.day_value != null && form.day_value !== "")
         : true;
-      const valid = form.name.trim() && Number(form.amount) > 0 && form.category && form.shop.trim() && dayOk;
+      // Amount is optional: blank → "ask me each time it's due". If provided, must be > 0.
+      const amountStr = String(form.amount ?? "").trim();
+      const amountOk = amountStr === "" || Number(amountStr) > 0;
+      const valid = form.name.trim() && amountOk && form.category && form.shop.trim() && dayOk;
 
       const labelS = { fontSize: 11, color: theme.textMuted, marginBottom: 6, display: "block" };
       const segBtn = (on, color) => ({
@@ -2130,7 +2133,8 @@
           {/* Amount */}
           <div style={{ marginBottom: 12 }}>
             <label style={labelS}>AMOUNT</label>
-            <input type="number" inputMode="numeric" value={form.amount} onChange={e => set("amount", e.target.value)} placeholder="¥" style={{ ...inputStyle, fontSize: 14, fontWeight: 600 }} />
+            <input type="number" inputMode="numeric" value={form.amount ?? ""} onChange={e => set("amount", e.target.value)} placeholder="¥" style={{ ...inputStyle, fontSize: 14, fontWeight: 600 }} />
+            <div style={{ fontSize: 10.5, color: theme.textDim, marginTop: 5 }}>Leave blank to be asked each time it's due.</div>
           </div>
           {/* Category */}
           <div style={{ marginBottom: 12 }}>
@@ -2255,7 +2259,8 @@
         name: form.name.trim(),
         category: form.category,
         shop: form.shop.trim(),
-        amount: Number(form.amount),
+        // Blank amount → null ("ask at due time"); otherwise a fixed integer.
+        amount: String(form.amount ?? "").trim() === "" ? null : parseInt(form.amount, 10),
         expense_type: form.expense_type,
         tags: (form.tags || []).join(","),
         frequency: form.frequency,
@@ -2303,7 +2308,7 @@
       };
 
       const openEdit = (item) => setEditing({
-        id: item.id, name: item.name, amount: item.amount, category: item.category, shop: item.shop,
+        id: item.id, name: item.name, amount: item.amount ?? "", category: item.category, shop: item.shop,
         frequency: item.frequency, day_value: item.day_value, expense_type: item.expense_type || "normal",
         tags: (item.tags || "").split(",").filter(Boolean), is_active: item.is_active, notes: item.notes || "",
         _origFreq: item.frequency,
