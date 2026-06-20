@@ -309,6 +309,92 @@ async function newApp(state, opts = {}) {
     await page.close();
   });
 
+  // ── Phase 3.5 — variable-amount recurring ──
+
+  // [9] Form saves a blank amount → captured recurring insert has amount === null.
+  await test('9', 'Form: blank amount saves as null', async () => {
+    const state = { recurring: [], expenses: [], ...baseMeta };
+    const { page, backend } = await newApp(state, { browser });
+    // nothing due → no modal; open the Recurring tab and its add form
+    await page.getByRole('button', { name: '🔁 Recurring', exact: true }).click();
+    await page.waitForTimeout(300);
+    await page.getByTitle('Add recurring entry').click();
+    await page.waitForTimeout(300);
+    await page.getByPlaceholder('e.g. Rent, Konbini').fill('VariableBill');
+    // leave AMOUNT blank
+    await page.locator('select').filter({ hasText: 'Select…' }).selectOption({ value: 'Convenience' });
+    await page.getByPlaceholder('Or type a shop name').fill('KonbiniShop');
+    // monthly is the default frequency with day_value=1 → Save should now be enabled
+    const saveBtn = page.getByRole('button', { name: 'Save', exact: true });
+    ok('Save enabled with blank amount', !(await saveBtn.isDisabled()));
+    await saveBtn.click();
+    await page.waitForTimeout(700);
+    const ins = backend.captures.inserts.filter(i => i.table === 'cost_management_recurring');
+    ok('one recurring insert', ins.length === 1, ins);
+    const row = ins[0] && (Array.isArray(ins[0].rows) ? ins[0].rows[0] : ins[0].rows);
+    ok('insert amount is null', row && row.amount === null, row);
+    ok('insert name', row && row.name === 'VariableBill', row);
+    ok('insert category', row && row.category === 'Convenience', row);
+    ok('insert shop', row && row.shop === 'KonbiniShop', row);
+    await page.close();
+  });
+
+  // [10] Due modal: null-amount rule shows inline input, blocks confirm until valid,
+  //      then inserts the typed amount AND patches last_added_date.
+  await test('10', 'Due modal: null rule prompts + inserts typed amount', async () => {
+    const due = ymd(addDays(TODAY, -1));
+    const today = ymd(TODAY);
+    const rec = [
+      { id: 20, name: 'VariableBill', category: 'Convenience', shop: 'KonbiniShop', amount: null, expense_type: 'normal', tags: '', notes: '', frequency: 'daily', day_value: null, is_active: true, last_added_date: due, sort_order: 0 },
+    ];
+    const state = { recurring: rec, expenses: [], ...baseMeta };
+    const { page, backend } = await newApp(state, { browser });
+    const input = page.getByPlaceholder('¥ Enter amount');
+    ok('inline amount input shown for null rule', (await input.count()) === 1);
+    ok('amount placeholder "—" (no stored amount)', /—/.test(await page.locator('body').innerText()));
+    const addBtn = page.getByRole('button', { name: 'Add', exact: true });
+    ok('Add blocked while empty', await addBtn.isDisabled());
+    await input.fill('0');
+    ok('Add blocked on 0', await addBtn.isDisabled());
+    await input.fill('1500');
+    ok('Add enabled on valid amount', !(await addBtn.isDisabled()));
+    await addBtn.click();
+    await page.waitForTimeout(900);
+    const ins = backend.captures.inserts.filter(i => i.table === 'cost_management_expenses');
+    ok('one expense insert', ins.length === 1, ins);
+    const erow = ins[0] && (Array.isArray(ins[0].rows) ? ins[0].rows[0] : ins[0].rows);
+    ok('insert amount = typed 1500', erow && erow.amount === 1500, erow);
+    ok('insert date = computed due (today)', erow && erow.date === today, erow);
+    ok('insert category', erow && erow.category === 'Convenience', erow);
+    const upd = backend.captures.updates.filter(u => u.table === 'cost_management_recurring');
+    ok('recurring patch last_added_date = today', upd.length === 1 && upd[0].body.last_added_date === today, upd);
+    await page.close();
+  });
+
+  // [11] Due modal: fixed-amount rule still one-taps with rec.amount, no input shown.
+  await test('11', 'Due modal: fixed rule one-taps, no input', async () => {
+    const due = ymd(addDays(TODAY, -1));
+    const today = ymd(TODAY);
+    const rec = [
+      { id: 21, name: 'FixedBill', category: 'Convenience', shop: 'KonbiniShop', amount: 777, expense_type: 'normal', tags: '', notes: '', frequency: 'daily', day_value: null, is_active: true, last_added_date: due, sort_order: 0 },
+    ];
+    const state = { recurring: rec, expenses: [], ...baseMeta };
+    const { page, backend } = await newApp(state, { browser });
+    ok('no inline input for fixed rule', (await page.getByPlaceholder('¥ Enter amount').count()) === 0);
+    const addBtn = page.getByRole('button', { name: 'Add', exact: true });
+    ok('Add immediately enabled', !(await addBtn.isDisabled()));
+    await addBtn.click();
+    await page.waitForTimeout(900);
+    const ins = backend.captures.inserts.filter(i => i.table === 'cost_management_expenses');
+    ok('one expense insert', ins.length === 1, ins);
+    const erow = ins[0] && (Array.isArray(ins[0].rows) ? ins[0].rows[0] : ins[0].rows);
+    ok('insert amount = stored 777', erow && erow.amount === 777, erow);
+    ok('insert date = computed due (today)', erow && erow.date === today, erow);
+    const upd = backend.captures.updates.filter(u => u.table === 'cost_management_recurring');
+    ok('recurring patch last_added_date = today', upd.length === 1 && upd[0].body.last_added_date === today, upd);
+    await page.close();
+  });
+
   await browser.close();
 
   // ── summary grid: every test shows regardless of earlier failures ──
