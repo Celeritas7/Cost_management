@@ -395,6 +395,23 @@ async function newApp(state, opts = {}) {
     await page.close();
   });
 
+  // [12] Recurring list renders a null-amount rule without crashing (fmt null-safe).
+  await test('12', 'Recurring list: null-amount rule renders, no crash', async () => {
+    // not due (last_added_date = today) → no modal; lands straight on the list
+    const rec = [
+      { id: 30, name: 'VarRule', category: 'Convenience', shop: 'KonbiniShop', amount: null, expense_type: 'normal', tags: '', notes: '', frequency: 'daily', day_value: null, is_active: true, last_added_date: ymd(TODAY), sort_order: 0 },
+    ];
+    const state = { recurring: rec, expenses: [], ...baseMeta };
+    const { page, logs } = await newApp(state, { browser });
+    await page.getByRole('button', { name: '🔁 Recurring', exact: true }).click();
+    await page.waitForTimeout(400);
+    const bodyText = await page.locator('body').innerText();
+    ok('null-amount row rendered (name shown)', /VarRule/.test(bodyText), bodyText.slice(0, 200));
+    ok('shows "—" not "¥null"', /—/.test(bodyText) && !/¥null/.test(bodyText));
+    ok('no page error from fmt(null)', !logs.some((l) => /PAGEERR/.test(l)), logs.filter((l) => /PAGEERR/.test(l)));
+    await page.close();
+  });
+
   await browser.close();
 
   // ── summary grid: every test shows regardless of earlier failures ──

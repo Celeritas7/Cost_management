@@ -96,7 +96,7 @@
       { id: 5, name: "Travel", icon: "✈️", color: "#06b6d4" },
     ];
 
-    const fmt = (n) => `¥${n.toLocaleString()}`;
+    const fmt = (n) => (n == null ? "—" : `¥${n.toLocaleString()}`);
     const todayStr = () => new Date().toISOString().slice(0, 10);
     const vibrate = (ms) => { try { if (navigator.vibrate) navigator.vibrate(ms); } catch (e) {} };
 
