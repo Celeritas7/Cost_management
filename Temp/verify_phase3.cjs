@@ -91,10 +91,29 @@ function makeBackend(state) {
 
 async function newApp(state, opts = {}) {
   const browser = opts.browser;
-  const page = await browser.newPage();
+  // opts.timezoneId → run in a context pinned to that zone (for the Tokyo todayStr test).
+  // opts.now = [y, monthIdx, d, h, mi, s] → freeze the wall clock to those LOCAL components,
+  //   so the due-check time gate and todayStr are exercised deterministically (no wall-clock).
+  const page = opts.timezoneId
+    ? await (await browser.newContext({ timezoneId: opts.timezoneId })).newPage()
+    : await browser.newPage();
   const logs = [];
   page.on('console', (msg) => logs.push(msg.text()));
   page.on('pageerror', (e) => logs.push('PAGEERR: ' + e.message));
+  if (opts.now) {
+    // Override Date so `new Date()` / Date.now() return the frozen instant, while
+    // `new Date(args)` keeps working. Built from local components → getHours()/
+    // getFullYear() etc. read back exactly what we injected (in the page's tz).
+    await page.addInitScript((c) => {
+      const RealDate = Date;
+      const fixedT = new RealDate(c[0], c[1], c[2], c[3] || 0, c[4] || 0, c[5] || 0, 0).getTime();
+      class FakeDate extends RealDate {
+        constructor(...a) { if (a.length === 0) { super(fixedT); } else { super(...a); } }
+        static now() { return fixedT; }
+      }
+      window.Date = FakeDate;
+    }, opts.now);
+  }
   const backend = makeBackend(state);
   await page.route('**/rest/v1/**', backend.handle);
   await page.goto(INDEX, { waitUntil: 'load', timeout: 30000 });
@@ -409,6 +428,104 @@ async function newApp(state, opts = {}) {
     ok('null-amount row rendered (name shown)', /VarRule/.test(bodyText), bodyText.slice(0, 200));
     ok('shows "—" not "¥null"', /—/.test(bodyText) && !/¥null/.test(bodyText));
     ok('no page error from fmt(null)', !logs.some((l) => /PAGEERR/.test(l)), logs.filter((l) => /PAGEERR/.test(l)));
+    await page.close();
+  });
+
+  // ── Phase 3.6 — time-gated recurring prompts ──
+  // Frozen-clock helpers: drive "now" deterministically rather than wall-clock.
+  // June 20 2026 is the reference day; daily rules with last_added=null are due
+  // by DATE, so the show_after_time gate alone decides whether they surface.
+  const FZ = (h, mi, s) => [2026, 5, 20, h, mi, s || 0]; // [y, monthIdx(June=5), d, h, mi, s]
+  const FROZEN_YMD = '2026-06-20';
+
+  // [13] Time gate: show_after_time in the FUTURE (local) → rule hidden from due set.
+  await test('13', 'Time gate: future show_after_time → hidden', async () => {
+    const rec = [
+      { id: 40, name: 'EveningBill', category: 'Convenience', shop: 'KonbiniShop', amount: 500, expense_type: 'normal', tags: '', notes: '', frequency: 'daily', day_value: null, is_active: true, last_added_date: null, show_after_time: '09:00:00', sort_order: 0 },
+    ];
+    const state = { recurring: rec, expenses: [], ...baseMeta };
+    const { page, logs } = await newApp(state, { browser, now: FZ(8, 0, 0) }); // 08:00 < 09:00 gate
+    const bodyText = await page.locator('body').innerText();
+    ok('modal NOT shown (gated)', !/Recurring payments due/.test(bodyText), bodyText.slice(0, 160));
+    ok('EveningBill NOT in due set', !/EveningBill/.test(bodyText));
+    const lastDue = logs.filter((l) => /\[recurring\] due/.test(l)).pop() || '';
+    ok('due-set log shows 0 / excludes rule', /due: 0/.test(lastDue) && !/EveningBill/.test(lastDue), lastDue);
+    await page.close();
+  });
+
+  // [14] Time gate: same rule, current time now PAST the gate → rule surfaces.
+  await test('14', 'Time gate: past show_after_time → shown', async () => {
+    const rec = [
+      { id: 41, name: 'EveningBill', category: 'Convenience', shop: 'KonbiniShop', amount: 500, expense_type: 'normal', tags: '', notes: '', frequency: 'daily', day_value: null, is_active: true, last_added_date: null, show_after_time: '09:00:00', sort_order: 0 },
+    ];
+    const state = { recurring: rec, expenses: [], ...baseMeta };
+    const { page } = await newApp(state, { browser, now: FZ(10, 0, 0) }); // 10:00 ≥ 09:00 gate
+    const bodyText = await page.locator('body').innerText();
+    ok('modal shown', /Recurring payments due/.test(bodyText));
+    ok('EveningBill in due set', /EveningBill/.test(bodyText));
+    await page.close();
+  });
+
+  // [15] Null show_after_time → always shown (no regression to default behavior),
+  //      even at an early local time that would gate a time-set rule.
+  await test('15', 'Time gate: null show_after_time → always shown', async () => {
+    const rec = [
+      { id: 42, name: 'AnytimeBill', category: 'Convenience', shop: 'KonbiniShop', amount: 500, expense_type: 'normal', tags: '', notes: '', frequency: 'daily', day_value: null, is_active: true, last_added_date: null, show_after_time: null, sort_order: 0 },
+    ];
+    const state = { recurring: rec, expenses: [], ...baseMeta };
+    const { page } = await newApp(state, { browser, now: FZ(8, 0, 0) }); // early, but no gate
+    const bodyText = await page.locator('body').innerText();
+    ok('modal shown for null-gate rule', /Recurring payments due/.test(bodyText));
+    ok('AnytimeBill in due set', /AnytimeBill/.test(bodyText));
+    await page.close();
+  });
+
+  // [16] Recurring LIST renders a time-set rule (coverage beyond form + due modal).
+  //      last_added = today → not due → lands straight on the list, no modal.
+  await test('16', 'Recurring list: time-set rule renders, no crash', async () => {
+    const rec = [
+      { id: 43, name: 'GatedRule', category: 'Convenience', shop: 'KonbiniShop', amount: 1200, expense_type: 'normal', tags: '', notes: '', frequency: 'daily', day_value: null, is_active: true, last_added_date: FROZEN_YMD, show_after_time: '09:00:00', sort_order: 0 },
+    ];
+    const state = { recurring: rec, expenses: [], ...baseMeta };
+    const { page, logs } = await newApp(state, { browser, now: FZ(12, 0, 0) });
+    ok('no modal (not due)', !/Recurring payments due/.test(await page.locator('body').innerText()));
+    await page.getByRole('button', { name: '🔁 Recurring', exact: true }).click();
+    await page.waitForTimeout(400);
+    const bodyText = await page.locator('body').innerText();
+    ok('GatedRule row rendered', /GatedRule/.test(bodyText), bodyText.slice(0, 200));
+    ok('amount shown (¥1,200)', /1,200/.test(bodyText));
+    ok('no page error rendering time-set rule', !logs.some((l) => /PAGEERR/.test(l)), logs.filter((l) => /PAGEERR/.test(l)));
+    // open the edit form (tap the row name) → the SHOW AFTER time field is
+    // populated from the stored value (openEdit null-guard round-trip).
+    await page.getByText('GatedRule', { exact: true }).click();
+    await page.waitForTimeout(400);
+    const timeVal = await page.locator('input[type="time"]').first().inputValue().catch(() => '');
+    ok('edit form time field populated 09:00(:00)', /^09:00(:00)?$/.test(timeVal), timeVal);
+    await page.close();
+  });
+
+  // [17] todayStr local-day fix: frozen clock in the Tokyo midnight→09:00 window.
+  //      The UTC path (old toISOString bug) would resolve to June 19; the local
+  //      fix must resolve to June 20. Observed via the Add view's default date.
+  await test('17', 'todayStr: Tokyo midnight window → correct local day', async () => {
+    const state = { recurring: [], expenses: [], ...baseMeta }; // nothing due → Add view
+    const { page } = await newApp(state, { browser, timezoneId: 'Asia/Tokyo', now: FZ(0, 30, 0) }); // 00:30 JST
+    // open the date picker on the Add screen
+    await page.getByRole('button', { name: /📅/ }).first().click();
+    await page.waitForTimeout(300);
+    // month header should read the LOCAL month/year
+    const bodyText = await page.locator('body').innerText();
+    ok('calendar month is June 2026', /June 2026/.test(bodyText), bodyText.slice(0, 200));
+    // the selected day in the grid (bold / primary bg) must be the 20th, not the 19th
+    const selDay = await page.evaluate(() => {
+      const btns = [...document.querySelectorAll('button')].filter((b) => /^\d{1,2}$/.test(b.textContent.trim()));
+      const sel = btns.find((b) => {
+        const cs = getComputedStyle(b);
+        return Number(cs.fontWeight) >= 700 && cs.backgroundColor !== 'rgba(0, 0, 0, 0)' && cs.backgroundColor !== 'transparent';
+      });
+      return sel ? sel.textContent.trim() : null;
+    });
+    ok('default selected day = 20 (local), not 19 (UTC)', selDay === '20', { selDay });
     await page.close();
   });
 
