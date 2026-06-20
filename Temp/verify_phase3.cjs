@@ -529,6 +529,127 @@ async function newApp(state, opts = {}) {
     await page.close();
   });
 
+  // ── Phase 8 — duplicate-detection coverage ──
+  // findDuplicate matches on date(local key) + shop + amount(numeric both sides),
+  // advisory only (Add anyway proceeds). These tests lock that behavior in and
+  // exercise BOTH the Quick dialog and the multi (same-shop) per-row ⚠ path.
+  const TODAY_YMD = ymd(TODAY);
+  const expenseInserts = (backend) => backend.captures.inserts.filter((i) => i.table === 'cost_management_expenses');
+  const firstRow = (cap) => cap && (Array.isArray(cap.rows) ? cap.rows[0] : cap.rows);
+
+  // Drive Quick mode: open keypad, type amount, pick category → shop.
+  async function quickFill(page, { amount, category, shop }) {
+    await page.getByText('¥0', { exact: true }).first().click(); // amount hero → keypad
+    await page.waitForTimeout(150);
+    for (const ch of String(amount)) await page.getByRole('button', { name: ch, exact: true }).click();
+    await page.getByRole('button', { name: /Category/ }).click(); // cat chip → sheet
+    await page.waitForTimeout(150);
+    // scope picks to the open bottom-sheet so the "Recent · tap to repeat" buttons
+    // (which also contain the category/shop names) don't collide with the chip.
+    await page.locator('.cm-sheet-in').getByRole('button', { name: new RegExp(category) }).click(); // pick cat → shop sheet
+    await page.waitForTimeout(150);
+    await page.locator('.cm-sheet-in').getByRole('button', { name: new RegExp(shop) }).click(); // pick shop
+    await page.waitForTimeout(150);
+  }
+
+  // [18] Quick: exact date+shop+amount dup → flagged, and Save still inserts on
+  //      "Add anyway" (dismissible proven, not just detected).
+  await test('18', 'Quick: exact dup flagged + Add-anyway inserts', async () => {
+    const existing = [{ id: 1, amount: 500, date: TODAY_YMD, category: 'Convenience', shop: 'KonbiniShop', expense_type: 'normal', tags: '', notes: '' }];
+    const state = { recurring: [], expenses: existing, ...baseMeta };
+    const { page, backend } = await newApp(state, { browser });
+    await quickFill(page, { amount: 500, category: 'Convenience', shop: 'KonbiniShop' });
+    const hintText = await page.locator('body').innerText();
+    ok('live duplicate hint shown', /possible duplicate/i.test(hintText), hintText.slice(0, 160));
+    await page.getByRole('button', { name: /Add ¥500/ }).click(); // Save CTA
+    await page.waitForTimeout(300);
+    ok('dup confirm dialog opened', /Possible duplicate/.test(await page.locator('body').innerText()));
+    ok('no insert yet (still advisory)', expenseInserts(backend).length === 0, expenseInserts(backend));
+    await page.getByRole('button', { name: 'Add anyway', exact: true }).click();
+    await page.waitForTimeout(500);
+    const ins = expenseInserts(backend);
+    ok('insert happened after Add anyway', ins.length === 1, ins);
+    const row = firstRow(ins[0]);
+    ok('inserted amount 500', row && row.amount === 500, row);
+    ok('inserted date = today (local)', row && row.date === TODAY_YMD, row);
+    ok('inserted shop', row && row.shop === 'KonbiniShop', row);
+    await page.close();
+  });
+
+  // [19] Multi (Same-shop): a row matching an existing entry → per-row ⚠, and the
+  //      dialog's Add-anyway still inserts. Exercises the second surface.
+  await test('19', 'Multi: per-row ⚠ flagged + Add-anyway inserts', async () => {
+    const existing = [{ id: 1, amount: 500, date: TODAY_YMD, category: 'Convenience', shop: 'KonbiniShop', expense_type: 'normal', tags: '', notes: '' }];
+    const state = { recurring: [], expenses: existing, ...baseMeta };
+    const { page, backend } = await newApp(state, { browser });
+    await page.getByRole('button', { name: /Same shop/ }).click(); // multi mode
+    await page.waitForTimeout(200);
+    await page.getByRole('button', { name: /Category/ }).click();
+    await page.waitForTimeout(150);
+    await page.locator('.cm-sheet-in').getByRole('button', { name: /Convenience/ }).click();
+    await page.waitForTimeout(150);
+    await page.locator('.cm-sheet-in').getByRole('button', { name: /KonbiniShop/ }).click();
+    await page.waitForTimeout(150);
+    await page.getByRole('button', { name: /📅/ }).first().click(); // date picker
+    await page.waitForTimeout(200);
+    await page.getByRole('button', { name: 'Today', exact: true }).click();
+    await page.waitForTimeout(150);
+    await page.getByRole('button', { name: /Use these days/ }).click();
+    await page.waitForTimeout(250);
+    await page.getByText('Today', { exact: true }).first().click(); // expand the row
+    await page.waitForTimeout(200);
+    for (const ch of '500') await page.getByRole('button', { name: ch, exact: true }).click();
+    await page.waitForTimeout(200);
+    ok('per-row ⚠ duplicate shown', /already logged/.test(await page.locator('body').innerText()));
+    await page.getByRole('button', { name: /Save all/ }).click();
+    await page.waitForTimeout(300);
+    ok('dup confirm dialog opened (multi)', /Possible duplicate/.test(await page.locator('body').innerText()));
+    ok('no insert yet (advisory)', expenseInserts(backend).length === 0, expenseInserts(backend));
+    await page.getByRole('button', { name: 'Add anyway', exact: true }).click();
+    await page.waitForTimeout(500);
+    const ins = expenseInserts(backend);
+    ok('insert happened after Add anyway', ins.length === 1, ins);
+    const row = firstRow(ins[0]);
+    ok('inserted amount 500', row && row.amount === 500, row);
+    ok('inserted date = today (local)', row && row.date === TODAY_YMD, row);
+    ok('inserted shop', row && row.shop === 'KonbiniShop', row);
+    await page.close();
+  });
+
+  // [20] Same date+shop but DIFFERENT amount → not flagged; Save inserts directly
+  //      (no dialog), proving the amount field is part of the predicate.
+  await test('20', 'Different amount → not flagged, direct insert', async () => {
+    const existing = [{ id: 1, amount: 500, date: TODAY_YMD, category: 'Convenience', shop: 'KonbiniShop', expense_type: 'normal', tags: '', notes: '' }];
+    const state = { recurring: [], expenses: existing, ...baseMeta };
+    const { page, backend } = await newApp(state, { browser });
+    await quickFill(page, { amount: 700, category: 'Convenience', shop: 'KonbiniShop' });
+    ok('no live duplicate hint (amount differs)', !/possible duplicate/i.test(await page.locator('body').innerText()));
+    await page.getByRole('button', { name: /Add ¥700/ }).click(); // Save CTA
+    await page.waitForTimeout(500);
+    ok('no dup dialog appeared', !/Possible duplicate/.test(await page.locator('body').innerText()));
+    const ins = expenseInserts(backend);
+    ok('inserted directly (1 expense)', ins.length === 1, ins);
+    ok('inserted amount 700', firstRow(ins[0]) && firstRow(ins[0]).amount === 700, ins);
+    await page.close();
+  });
+
+  // [21] Amount type coercion: existing amount stored as a STRING "500" vs entered
+  //      numeric 500 → still flagged (Number() coercion on both sides).
+  await test('21', 'Amount string vs number → treated equal', async () => {
+    const existing = [{ id: 1, amount: '500', date: TODAY_YMD, category: 'Convenience', shop: 'KonbiniShop', expense_type: 'normal', tags: '', notes: '' }];
+    const state = { recurring: [], expenses: existing, ...baseMeta };
+    const { page, backend } = await newApp(state, { browser });
+    await quickFill(page, { amount: 500, category: 'Convenience', shop: 'KonbiniShop' });
+    ok('string "500" vs number 500 flagged', /possible duplicate/i.test(await page.locator('body').innerText()));
+    await page.getByRole('button', { name: /Add ¥500/ }).click();
+    await page.waitForTimeout(300);
+    ok('dup dialog opened on coerced match', /Possible duplicate/.test(await page.locator('body').innerText()));
+    await page.getByRole('button', { name: 'Add anyway', exact: true }).click();
+    await page.waitForTimeout(500);
+    ok('insert after Add anyway', expenseInserts(backend).length === 1, expenseInserts(backend));
+    await page.close();
+  });
+
   await browser.close();
 
   // ── summary grid: every test shows regardless of earlier failures ──
