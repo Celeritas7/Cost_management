@@ -97,7 +97,12 @@
     ];
 
     const fmt = (n) => (n == null ? "—" : `¥${n.toLocaleString()}`);
-    const todayStr = () => new Date().toISOString().slice(0, 10);
+    // Local-date key 'YYYY-MM-DD' from a Date's LOCAL components (never UTC).
+    // toISOString() returns the UTC date, which rolls back a day in east-of-UTC
+    // zones during the local-midnight→UTC-offset window (e.g. 00:00–09:00 Tokyo).
+    const pad2 = (n) => String(n).padStart(2, "0");
+    const ymdLocal = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    const todayStr = () => ymdLocal(new Date());
     const vibrate = (ms) => { try { if (navigator.vibrate) navigator.vibrate(ms); } catch (e) {} };
 
     // ── Recurring (templates) ──
@@ -136,6 +141,16 @@
       if (sessionSnoozed.includes(rec.id)) return false;
       const due = computeDueDate(rec, today);
       if (due === null) return false;
+      // Time gate: a rule with show_after_time only *surfaces now* once the LOCAL
+      // clock has passed that time-of-day. Null = no gate (surface anytime). This
+      // gates surfacing only — it does not change the computed due date above.
+      // Compare seconds-since-midnight from local components (never a UTC path).
+      if (rec.show_after_time != null) {
+        const nowSecs = today.getHours() * 3600 + today.getMinutes() * 60 + today.getSeconds();
+        const [gh, gm, gs] = String(rec.show_after_time).split(":").map(Number);
+        const gateSecs = (gh || 0) * 3600 + (gm || 0) * 60 + (gs || 0);
+        if (nowSecs < gateSecs) return false;
+      }
       return rec.last_added_date == null || rec.last_added_date < due; // YYYY-MM-DD compares chronologically
     }
 
@@ -618,7 +633,7 @@
       const ADD_EMOJI = ["🛒","🏪","🍜","🌏","☕","🧹","🚗","🏠","📦","🍕","💊","🎮","📚","👕","💡","✈️","🎁","💰","🍎","🛍️"];
       const ADD_COLOR = ["#2563eb","#f59e0b","#10b981","#ef4444","#8b5cf6","#ec4899","#06b6d4","#f97316","#14b8a6","#a78bfa","#64748b","#84cc16"];
       const today = new Date(); const yest = new Date(Date.now() - 86400000);
-      const isoOfDate = (d) => d.toISOString().slice(0, 10);
+      const isoOfDate = (d) => ymdLocal(d);
       const blankRow = (d) => ({ date: d, cat: null, shop: null, type: "normal", tags: [], amount: "" });
 
       const [mode, setMode] = useState("quick"); // quick | same | list
@@ -1164,12 +1179,12 @@
         if (single) { setDates([s]); onClose(); return; }
         setDates((p) => p.includes(s) ? p.filter((x) => x !== s) : [...p, s].sort());
       };
-      const quick = (d) => { const s = d.toISOString().slice(0, 10); setDates([s]); if (single) onClose(); };
+      const quick = (d) => { const s = ymdLocal(d); setDates([s]); if (single) onClose(); };
       return (
         <div style={{ background: C.card, borderRadius: 16, padding: 14, boxShadow: `inset 0 0 0 1px ${C.border}` }}>
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-            <button onClick={() => quick(today)} style={{ ...chip(dates.length === 1 && dates[0] === today.toISOString().slice(0, 10), theme.primary), flex: 1, justifyContent: "center" }}>Today</button>
-            <button onClick={() => quick(yest)} style={{ ...chip(dates.length === 1 && dates[0] === yest.toISOString().slice(0, 10), theme.primary), flex: 1, justifyContent: "center" }}>Yesterday</button>
+            <button onClick={() => quick(today)} style={{ ...chip(dates.length === 1 && dates[0] === ymdLocal(today), theme.primary), flex: 1, justifyContent: "center" }}>Today</button>
+            <button onClick={() => quick(yest)} style={{ ...chip(dates.length === 1 && dates[0] === ymdLocal(yest), theme.primary), flex: 1, justifyContent: "center" }}>Yesterday</button>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
             <button onClick={() => setView((v) => v.m === 0 ? { y: v.y - 1, m: 11 } : { ...v, m: v.m - 1 })} style={{ background: C.input, border: "none", color: C.muted, width: 28, height: 28, borderRadius: 8, cursor: "pointer" }}>◀</button>
