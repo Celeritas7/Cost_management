@@ -1542,77 +1542,45 @@
     }
 
     // ═══════════════════════════════════════════
-    //  TRANSACTIONS VIEW
+    //  SHARED EXPENSE MUTATIONS HOOK (edit + delete)
+    //  Single source of truth for editing/deleting an expense. Owns its own
+    //  edit/delete modals + toast and pulls everything it needs from context,
+    //  so any view (History, Calendar day panel) can reuse it by dropping
+    //  {modals} into its render. onChange() fires after a successful write.
     // ═══════════════════════════════════════════
-    function TransactionsView({ pageTx, txPage, setTxPage, txPages }) {
-      const { theme, inputStyle, supabase, fetchData, categories, tags, getCatIcon, getCatColor, getTagIcon, getTagColor } = useTheme();
+    function useExpenseMutations({ onChange }) {
+      const { theme, inputStyle, supabase, categories, tags, getCatIcon } = useTheme();
       const [editingTx, setEditingTx] = useState(null);
       const [editForm, setEditForm] = useState({});
       const [deletingTx, setDeletingTx] = useState(null);
       const [toast, setToast] = useState(null);
 
       const openEdit = (tx) => { setEditForm({ ...tx, tagsArray: (tx.tags||"").split(",").filter(Boolean) }); setEditingTx(tx); };
+      const requestDelete = (tx) => setDeletingTx(tx);
 
       const handleUpdate = async () => {
         const { error } = await supabase.from("cost_management_expenses")
           .update({ amount: Number(editForm.amount), date: editForm.date, category: editForm.category, shop: editForm.shop, notes: editForm.notes, expense_type: editForm.expense_type, tags: (editForm.tagsArray||[]).join(",") })
           .eq("id", editForm.id);
         if (error) { setToast({ type: "error", msg: error.message }); }
-        else { setToast({ type: "success", msg: "Updated" }); setEditingTx(null); fetchData(); }
+        else { setToast({ type: "success", msg: "Updated" }); setEditingTx(null); onChange(); }
         setTimeout(() => setToast(null), 3000);
       };
 
       const handleDelete = async () => {
         const { error } = await supabase.from("cost_management_expenses").delete().eq("id", deletingTx.id);
         if (error) { setToast({ type: "error", msg: error.message }); }
-        else { setToast({ type: "success", msg: "Deleted" }); setDeletingTx(null); fetchData(); }
+        else { setToast({ type: "success", msg: "Deleted" }); setDeletingTx(null); onChange(); }
         setTimeout(() => setToast(null), 3000);
       };
 
-      return (
-        <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:12,overflow:"hidden"}}>
+      const modals = (
+        <>
           {toast && (
             <div style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:999,padding:"10px 20px",borderRadius:10,fontSize:12,fontWeight:500,background:toast.type==="success"?theme.success:theme.danger,color:"#fff"}}>
               {toast.type==="success"?"✅":"❌"} {toast.msg}
             </div>
           )}
-
-          <div style={{overflowX:"auto",scrollbarWidth:"thin"}} className="tx-scroll">
-            <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-              <thead>
-                <tr style={{borderBottom:`1px solid ${theme.cardBorder}`}}>
-                  {["","Date","Shop","Cat","Tags","Amount",""].map((h,i) => (
-                    <th key={i} style={{padding:"10px 8px",textAlign:"left",color:theme.textMuted,fontWeight:600,fontSize:9,textTransform:"uppercase"}}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {pageTx.map(tx => (
-                  <tr key={tx.id} style={{borderBottom:`1px solid ${theme.cardBorder}`}}>
-                    <td style={{padding:"8px 6px",width:20}}>{EXPENSE_TYPES[tx.expense_type]?.icon}</td>
-                    <td style={{padding:"8px 6px",color:theme.textMuted,whiteSpace:"nowrap"}}>{tx.date}</td>
-                    <td style={{padding:"8px 6px",color:theme.text,fontWeight:500,maxWidth:100,overflow:"hidden",textOverflow:"ellipsis"}}>{tx.shop}</td>
-                    <td style={{padding:"8px 6px"}}><span style={{fontSize:14,cursor:"default"}} title={tx.category}>{getCatIcon(tx.category)}</span></td>
-                    <td style={{padding:"8px 6px"}}>
-                      {(tx.tags||"").split(",").filter(Boolean).slice(0,2).map(t => (
-                        <span key={t} title={t} style={{fontSize:12,marginRight:3,cursor:"default"}}>{getTagIcon(t)}</span>
-                      ))}
-                    </td>
-                    <td style={{padding:"8px 6px",color:"#fff",fontWeight:600}}>{fmt(tx.amount)}</td>
-                    <td style={{padding:"8px 6px"}}>
-                      <button title="Edit" onClick={() => openEdit(tx)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,opacity:0.8,padding:"2px 4px"}}>✏️</button>
-                      <button title="Delete" onClick={() => setDeletingTx(tx)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,opacity:0.8,padding:"2px 4px"}}>🗑️</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div style={{display:"flex",justifyContent:"center",gap:8,padding:"12px"}}>
-            <button onClick={() => setTxPage(p => Math.max(0,p-1))} disabled={txPage===0} style={{padding:"5px 12px",borderRadius:6,border:"none",cursor:txPage===0?"default":"pointer",background:txPage===0?theme.cardBg:theme.inputBg,color:theme.textMuted,fontSize:11}}>←</button>
-            <span style={{fontSize:11,color:theme.textDim,alignSelf:"center"}}>Page {txPage+1} of {txPages||1}</span>
-            <button onClick={() => setTxPage(p => Math.min(txPages-1,p+1))} disabled={txPage>=txPages-1} style={{padding:"5px 12px",borderRadius:6,border:"none",cursor:txPage>=txPages-1?"default":"pointer",background:txPage>=txPages-1?theme.cardBg:theme.inputBg,color:theme.textMuted,fontSize:11}}>→</button>
-          </div>
 
           {/* Edit Modal */}
           {editingTx && (
@@ -1659,6 +1627,59 @@
               </div>
             </Modal>
           )}
+        </>
+      );
+
+      return { openEdit, requestDelete, modals };
+    }
+
+    // ═══════════════════════════════════════════
+    //  TRANSACTIONS VIEW
+    // ═══════════════════════════════════════════
+    function TransactionsView({ pageTx, txPage, setTxPage, txPages }) {
+      const { theme, fetchData, getCatIcon, getTagIcon } = useTheme();
+      const { openEdit, requestDelete, modals } = useExpenseMutations({ onChange: fetchData });
+
+      return (
+        <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:12,overflow:"hidden"}}>
+          <div style={{overflowX:"auto",scrollbarWidth:"thin"}} className="tx-scroll">
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+              <thead>
+                <tr style={{borderBottom:`1px solid ${theme.cardBorder}`}}>
+                  {["","Date","Shop","Cat","Tags","Amount",""].map((h,i) => (
+                    <th key={i} style={{padding:"10px 8px",textAlign:"left",color:theme.textMuted,fontWeight:600,fontSize:9,textTransform:"uppercase"}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {pageTx.map(tx => (
+                  <tr key={tx.id} style={{borderBottom:`1px solid ${theme.cardBorder}`}}>
+                    <td style={{padding:"8px 6px",width:20}}>{EXPENSE_TYPES[tx.expense_type]?.icon}</td>
+                    <td style={{padding:"8px 6px",color:theme.textMuted,whiteSpace:"nowrap"}}>{tx.date}</td>
+                    <td style={{padding:"8px 6px",color:theme.text,fontWeight:500,maxWidth:100,overflow:"hidden",textOverflow:"ellipsis"}}>{tx.shop}</td>
+                    <td style={{padding:"8px 6px"}}><span style={{fontSize:14,cursor:"default"}} title={tx.category}>{getCatIcon(tx.category)}</span></td>
+                    <td style={{padding:"8px 6px"}}>
+                      {(tx.tags||"").split(",").filter(Boolean).slice(0,2).map(t => (
+                        <span key={t} title={t} style={{fontSize:12,marginRight:3,cursor:"default"}}>{getTagIcon(t)}</span>
+                      ))}
+                    </td>
+                    <td style={{padding:"8px 6px",color:"#fff",fontWeight:600}}>{fmt(tx.amount)}</td>
+                    <td style={{padding:"8px 6px"}}>
+                      <button title="Edit" onClick={() => openEdit(tx)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,opacity:0.8,padding:"2px 4px"}}>✏️</button>
+                      <button title="Delete" onClick={() => requestDelete(tx)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,opacity:0.8,padding:"2px 4px"}}>🗑️</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{display:"flex",justifyContent:"center",gap:8,padding:"12px"}}>
+            <button onClick={() => setTxPage(p => Math.max(0,p-1))} disabled={txPage===0} style={{padding:"5px 12px",borderRadius:6,border:"none",cursor:txPage===0?"default":"pointer",background:txPage===0?theme.cardBg:theme.inputBg,color:theme.textMuted,fontSize:11}}>←</button>
+            <span style={{fontSize:11,color:theme.textDim,alignSelf:"center"}}>Page {txPage+1} of {txPages||1}</span>
+            <button onClick={() => setTxPage(p => Math.min(txPages-1,p+1))} disabled={txPage>=txPages-1} style={{padding:"5px 12px",borderRadius:6,border:"none",cursor:txPage>=txPages-1?"default":"pointer",background:txPage>=txPages-1?theme.cardBg:theme.inputBg,color:theme.textMuted,fontSize:11}}>→</button>
+          </div>
+
+          {modals}
         </div>
       );
     }
