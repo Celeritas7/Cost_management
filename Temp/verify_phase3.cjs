@@ -510,8 +510,10 @@ async function newApp(state, opts = {}) {
   await test('17', 'todayStr: Tokyo midnight window → correct local day', async () => {
     const state = { recurring: [], expenses: [], ...baseMeta }; // nothing due → Add view
     const { page } = await newApp(state, { browser, timezoneId: 'Asia/Tokyo', now: FZ(0, 30, 0) }); // 00:30 JST
-    // open the date picker on the Add screen
-    await page.getByRole('button', { name: /📅/ }).first().click();
+    // open the date picker on the Add screen. Scope to the date-control button —
+    // its name carries the date label (e.g. "📅 Today"); a negative lookahead
+    // excludes the "📅 Calendar" nav tab added in 7a so we don't grab the tab.
+    await page.getByRole('button', { name: /📅 (?!Calendar)/ }).click();
     await page.waitForTimeout(300);
     // month header should read the LOCAL month/year
     const bodyText = await page.locator('body').innerText();
@@ -590,7 +592,7 @@ async function newApp(state, opts = {}) {
     await page.waitForTimeout(150);
     await page.locator('.cm-sheet-in').getByRole('button', { name: /KonbiniShop/ }).click();
     await page.waitForTimeout(150);
-    await page.getByRole('button', { name: /📅/ }).first().click(); // date picker
+    await page.getByRole('button', { name: /📅 (?!Calendar)/ }).click(); // date picker (exclude 📅 Calendar nav tab)
     await page.waitForTimeout(200);
     await page.getByRole('button', { name: 'Today', exact: true }).click();
     await page.waitForTimeout(150);
