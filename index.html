@@ -376,6 +376,7 @@
       const navTabs = [
         { id: "add", label: "➕ Add" },
         { id: "overview", label: "📊 Overview" },
+        { id: "calendar", label: "📅 Calendar" },
         { id: "transactions", label: "📋 History" },
         { id: "recurring", label: "🔁 Recurring" },
         { id: "settings", label: "⚙️ Settings" },
@@ -444,6 +445,8 @@
                 <AddEntryView recentEntries={recentEntries} allExpenses={RAW} />
               ) : view === "overview" ? (
                 <OverviewView {...{filtered,totalSpend,monthlyAvg,dailyAvg,monthlyData,catData,topShops}} allExpenses={RAW} />
+              ) : view === "calendar" ? (
+                <CalendarView allExpenses={RAW} />
               ) : view === "transactions" ? (
                 <TransactionsView pageTx={pageTx} txPage={txPage} setTxPage={setTxPage} txPages={txPages} />
               ) : view === "recurring" ? (
@@ -468,41 +471,32 @@
     }
 
     // ═══════════════════════════════════════════
-    //  MULTI-DATE CALENDAR
+    //  CALENDAR VIEW (read-only dot calendar + day panel)
     // ═══════════════════════════════════════════
-    function MultiDateCalendar({ selectedDates, setSelectedDates, onDone, expenses = [] }) {
-      const { theme } = useTheme();
-      const [isOpen, setIsOpen] = useState(false);
+    function CalendarView({ allExpenses = [] }) {
+      const { theme, getCatIcon, getTagIcon } = useTheme();
       const [viewDate, setViewDate] = useState(() => {
         const d = new Date();
         return { year: d.getFullYear(), month: d.getMonth() };
       });
+      const [panelDate, setPanelDate] = useState(null); // ISO date string of the open day panel, or null
 
-      const openCalendar = () => { setIsOpen(true); setSelectedDates([]); };
       const daysInMonth = new Date(viewDate.year, viewDate.month + 1, 0).getDate();
       const firstDayJS = new Date(viewDate.year, viewDate.month, 1).getDay();
       const firstDayOfWeek = firstDayJS === 0 ? 6 : firstDayJS - 1;
 
-      const toggleDate = (day) => {
-        const dateStr = `${viewDate.year}-${String(viewDate.month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-        setSelectedDates(prev => prev.includes(dateStr) ? prev.filter(d => d !== dateStr) : [...prev, dateStr].sort());
-      };
-      const isSelected = (day) => {
-        const dateStr = `${viewDate.year}-${String(viewDate.month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-        return selectedDates.includes(dateStr);
-      };
+      const isoOf = (day) => `${viewDate.year}-${String(viewDate.month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
       const isToday = (day) => {
-        const today = new Date();
-        return viewDate.year === today.getFullYear() && viewDate.month === today.getMonth() && day === today.getDate();
+        const t = new Date();
+        return viewDate.year === t.getFullYear() && viewDate.month === t.getMonth() && day === t.getDate();
       };
 
-      // Get expense indicators for a date
+      // Expense-type indicators for a date
       const getDateIndicators = (day) => {
-        const dateStr = `${viewDate.year}-${String(viewDate.month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-        const dateExpenses = expenses.filter(e => e.date === dateStr);
-        if (dateExpenses.length === 0) return null;
-        
-        const types = new Set(dateExpenses.map(e => e.expense_type || "normal"));
+        const dateStr = isoOf(day);
+        const dayExp = allExpenses.filter(e => e.date === dateStr);
+        if (dayExp.length === 0) return null;
+        const types = new Set(dayExp.map(e => e.expense_type || "normal"));
         const indicators = [];
         if (types.has("fixed")) indicators.push("📌");
         if (types.has("outlier")) indicators.push("⚡");
@@ -510,81 +504,90 @@
         return indicators;
       };
 
-      const confirmDates = () => {
-        if (selectedDates.length === 0) setSelectedDates([todayStr()]);
-        setIsOpen(false);
-        if (onDone) onDone();
-      };
-
-      const displayText = selectedDates.length === 0 ? "Select dates" : selectedDates.length === 1 ? selectedDates[0] : `${selectedDates.length} dates`;
+      // Entries for the currently open day panel
+      const panelExpenses = panelDate ? allExpenses.filter(e => e.date === panelDate) : [];
+      const panelTotal = panelExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
 
       return (
-        <div style={{marginBottom:16}}>
-          {!isOpen && (
-            <button onClick={openCalendar} style={{display:"flex",alignItems:"center",gap:10,padding:"12px 16px",background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:10,cursor:"pointer",width:"100%",justifyContent:"space-between"}}>
-              <div style={{display:"flex",alignItems:"center",gap:10}}>
-                <span style={{fontSize:20}}>📅</span>
-                <span style={{fontSize:14,fontWeight:600,color:"#fff"}}>{displayText}</span>
-              </div>
-              <span style={{color:theme.textMuted,fontSize:12}}>Change ▼</span>
-            </button>
-          )}
-          {isOpen && (
-            <div style={{background:theme.cardBg,borderRadius:12,padding:16,border:`1px solid ${theme.cardBorder}`}}>
+        <div>
+          <div style={{background:theme.cardBg,borderRadius:12,padding:16,border:`1px solid ${theme.cardBorder}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+              <button onClick={() => setViewDate(v => v.month===0?{year:v.year-1,month:11}:{...v,month:v.month-1})} style={{background:theme.inputBg,border:"none",borderRadius:6,width:30,height:30,cursor:"pointer",color:theme.textMuted}}>◀</button>
+              <div style={{fontSize:14,fontWeight:600,color:"#fff"}}>{MONTHS_FULL[viewDate.month]} {viewDate.year}</div>
+              <button onClick={() => setViewDate(v => v.month===11?{year:v.year+1,month:0}:{...v,month:v.month+1})} style={{background:theme.inputBg,border:"none",borderRadius:6,width:30,height:30,cursor:"pointer",color:theme.textMuted}}>▶</button>
+            </div>
+            {/* Legend */}
+            <div style={{display:"flex",gap:12,justifyContent:"center",marginBottom:10,fontSize:10,color:theme.textDim}}>
+              <span><span style={{color:"#22c55e"}}>●</span> Normal</span>
+              <span>📌 Fixed</span>
+              <span>⚡ Outlier</span>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(7, 1fr)",gap:4,marginBottom:8}}>
+              {["Mo","Tu","We","Th","Fr","Sa","Su"].map(d => <div key={d} style={{textAlign:"center",fontSize:10,color:theme.textDim,fontWeight:600,padding:4}}>{d}</div>)}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(7, 1fr)",gap:4}}>
+              {Array.from({length:firstDayOfWeek}).map((_,i) => <div key={`e-${i}`}/>)}
+              {Array.from({length:daysInMonth}).map((_,i) => {
+                const day = i+1;
+                const tod = isToday(day);
+                const indicators = getDateIndicators(day);
+                return (
+                  <button key={day} onClick={() => setPanelDate(isoOf(day))} style={{
+                    aspectRatio:"1",borderRadius:8,border:"none",cursor:"pointer",fontSize:12,fontWeight:400,
+                    background:tod?theme.inputBg:"transparent",
+                    color:tod?theme.primary:theme.text,
+                    position:"relative",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+                  }}>
+                    <span>{day}</span>
+                    {indicators && (
+                      <span style={{fontSize:7,lineHeight:1,marginTop:1,display:"flex",gap:1}}>
+                        {indicators.map((ind, idx) => (
+                          <span key={idx} style={{color: ind === "●" ? "#22c55e" : undefined}}>{ind}</span>
+                        ))}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Day panel — bottom sheet (read-only) */}
+          {panelDate && (
+            <Modal sheet onClose={() => setPanelDate(null)}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-                <button onClick={() => setViewDate(v => v.month===0?{year:v.year-1,month:11}:{...v,month:v.month-1})} style={{background:theme.inputBg,border:"none",borderRadius:6,width:30,height:30,cursor:"pointer",color:theme.textMuted}}>◀</button>
-                <div style={{fontSize:14,fontWeight:600,color:"#fff"}}>{MONTHS_FULL[viewDate.month]} {viewDate.year}</div>
-                <button onClick={() => setViewDate(v => v.month===11?{year:v.year+1,month:0}:{...v,month:v.month+1})} style={{background:theme.inputBg,border:"none",borderRadius:6,width:30,height:30,cursor:"pointer",color:theme.textMuted}}>▶</button>
+                <div>
+                  <div style={{fontSize:15,fontWeight:700,color:"#fff"}}>{panelDate}</div>
+                  <div style={{fontSize:11,color:theme.textMuted}}>{panelExpenses.length} {panelExpenses.length===1?"entry":"entries"} · {fmt(panelTotal)}</div>
+                </div>
+                <button onClick={() => setPanelDate(null)} style={{background:theme.inputBg,border:"none",borderRadius:8,width:30,height:30,cursor:"pointer",color:theme.textMuted,fontSize:16,lineHeight:1}}>×</button>
               </div>
-              {/* Legend */}
-              <div style={{display:"flex",gap:12,justifyContent:"center",marginBottom:10,fontSize:10,color:theme.textDim}}>
-                <span><span style={{color:"#22c55e"}}>●</span> Normal</span>
-                <span>📌 Fixed</span>
-                <span>⚡ Outlier</span>
-              </div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(7, 1fr)",gap:4,marginBottom:8}}>
-                {["Mo","Tu","We","Th","Fr","Sa","Su"].map(d => <div key={d} style={{textAlign:"center",fontSize:10,color:theme.textDim,fontWeight:600,padding:4}}>{d}</div>)}
-              </div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(7, 1fr)",gap:4}}>
-                {Array.from({length:firstDayOfWeek}).map((_,i) => <div key={`e-${i}`}/>)}
-                {Array.from({length:daysInMonth}).map((_,i) => {
-                  const day = i+1;
-                  const sel = isSelected(day);
-                  const tod = isToday(day);
-                  const indicators = getDateIndicators(day);
-                  return (
-                    <button key={day} onClick={() => toggleDate(day)} style={{
-                      aspectRatio:"1",borderRadius:8,border:"none",cursor:"pointer",fontSize:12,fontWeight:sel?600:400,
-                      background:sel?theme.primary:tod?theme.inputBg:"transparent",
-                      color:sel?"#fff":tod?theme.primary:theme.text,
-                      position:"relative",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
-                    }}>
-                      <span>{day}</span>
-                      {indicators && (
-                        <span style={{fontSize:7,lineHeight:1,marginTop:1,display:"flex",gap:1}}>
-                          {indicators.map((ind, idx) => (
-                            <span key={idx} style={{color: ind === "●" ? "#22c55e" : undefined}}>{ind}</span>
-                          ))}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-              {selectedDates.length > 0 && (
-                <div style={{marginTop:10,display:"flex",flexWrap:"wrap",gap:4}}>
-                  {selectedDates.map(d => (
-                    <span key={d} style={{background:theme.primaryGlow,color:theme.accent,padding:"3px 8px",borderRadius:6,fontSize:11,display:"flex",alignItems:"center",gap:4}}>
-                      {d}<button onClick={() => setSelectedDates(prev => prev.filter(x => x !== d))} style={{background:"none",border:"none",color:theme.accent,cursor:"pointer",fontSize:12,padding:0}}>×</button>
-                    </span>
+              {panelExpenses.length === 0 ? (
+                <div style={{textAlign:"center",padding:"24px 0",color:theme.textMuted,fontSize:13}}>No entries for this day.</div>
+              ) : (
+                <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                  {panelExpenses.map(e => (
+                    <div key={e.id} style={{display:"flex",alignItems:"center",gap:10,background:theme.inputBg,borderRadius:10,padding:"10px 12px"}}>
+                      <span style={{fontSize:18}} title={e.category}>{getCatIcon(e.category)}</span>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{display:"flex",alignItems:"center",gap:6}}>
+                          <span style={{fontSize:13,fontWeight:600,color:"#fff",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.shop}</span>
+                          {EXPENSE_TYPES[e.expense_type]?.icon && <span style={{fontSize:11}}>{EXPENSE_TYPES[e.expense_type].icon}</span>}
+                        </div>
+                        {(e.tags||"").split(",").filter(Boolean).length > 0 && (
+                          <div style={{display:"flex",gap:3,marginTop:2}}>
+                            {(e.tags||"").split(",").filter(Boolean).map(t => (
+                              <span key={t} title={t} style={{fontSize:11}}>{getTagIcon(t)}</span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <span style={{fontSize:14,fontWeight:700,color:"#fff",whiteSpace:"nowrap"}}>{fmt(e.amount)}</span>
+                    </div>
                   ))}
                 </div>
               )}
-              <div style={{display:"flex",gap:8,marginTop:12}}>
-                <button onClick={() => { setSelectedDates([todayStr()]); setIsOpen(false); if(onDone)onDone(); }} style={{flex:1,background:theme.inputBg,border:`1px solid ${theme.cardBorder}`,borderRadius:8,padding:"10px",fontSize:12,color:theme.textMuted,cursor:"pointer"}}>Today</button>
-                <button onClick={confirmDates} style={{flex:1,background:theme.primary,border:"none",borderRadius:8,padding:"10px",fontSize:12,color:"#fff",cursor:"pointer",fontWeight:600}}>Done ({selectedDates.length || 1})</button>
-              </div>
-            </div>
+            </Modal>
           )}
         </div>
       );
