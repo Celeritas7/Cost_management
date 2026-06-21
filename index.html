@@ -218,6 +218,7 @@
       const [typeFilter, setTypeFilter] = useState("All");
       const [tagFilter, setTagFilter] = useState("All");
       const [view, setView] = useState("add");
+      const [presetDate, setPresetDate] = useState(null); // ISO date handed from the Calendar day panel to a fresh AddEntryView
       const [txPage, setTxPage] = useState(0);
       const [showThemePicker, setShowThemePicker] = useState(false);
       const [sessionSnoozed, setSessionSnoozed] = useState([]); // recurring ids snoozed this session (clears on reload)
@@ -383,7 +384,7 @@
       ];
 
       return (
-        <ThemeContext.Provider value={{ theme, themeName, inputStyle, labelStyle, pillStyle, supabase, fetchData, categories, tags, getCatIcon, getCatColor, getTagIcon, getTagColor, shops, recurring, changeTheme }}>
+        <ThemeContext.Provider value={{ theme, themeName, inputStyle, labelStyle, pillStyle, supabase, fetchData, categories, tags, getCatIcon, getCatColor, getTagIcon, getTagColor, shops, recurring, changeTheme, setView, presetDate, setPresetDate }}>
           <div style={{minHeight:"100vh",background:theme.bg,color:theme.text,fontFamily:"'Noto Sans JP', system-ui, sans-serif"}}>
             {/* Header */}
             <div style={{background:theme.headerBg,borderBottom:`1px solid ${theme.cardBorder}`,padding:"14px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
@@ -474,7 +475,7 @@
     //  CALENDAR VIEW (read-only dot calendar + day panel)
     // ═══════════════════════════════════════════
     function CalendarView({ allExpenses = [] }) {
-      const { theme, fetchData, getCatIcon, getTagIcon } = useTheme();
+      const { theme, fetchData, getCatIcon, getTagIcon, setView, setPresetDate } = useTheme();
       const { openEdit, requestDelete, modals } = useExpenseMutations({ onChange: fetchData });
       const [viewDate, setViewDate] = useState(() => {
         const d = new Date();
@@ -592,6 +593,11 @@
                   ))}
                 </div>
               )}
+              {/* Jump to the Add tab pre-dated to this day, for same-day stacking */}
+              <button onClick={() => { setPresetDate(panelDate); setView("add"); setPanelDate(null); }}
+                style={{marginTop:12,width:"100%",padding:"10px",borderRadius:10,border:`1px dashed ${theme.cardBorder}`,background:theme.inputBg,color:theme.primary,cursor:"pointer",fontWeight:600,fontSize:12}}>
+                + Add entry
+              </button>
             </Modal>
           )}
 
@@ -638,7 +644,7 @@
     //  ADD ENTRY VIEW  (redesigned: Quick / Same shop / Different)
     // ═══════════════════════════════════════════
     function AddEntryView({ recentEntries, allExpenses }) {
-      const { theme, supabase, fetchData, categories, shops, tags } = useTheme();
+      const { theme, supabase, fetchData, categories, shops, tags, presetDate, setPresetDate } = useTheme();
       const C = {
         text: theme.text, muted: theme.textMuted, dim: theme.textDim,
         card: theme.cardBg, border: theme.cardBorder, input: theme.inputBg, primary: theme.primary,
@@ -651,7 +657,8 @@
 
       const [mode, setMode] = useState("quick"); // quick | same | list
       const [amount, setAmount] = useState("");
-      const [dates, setDates] = useState([isoOfDate(today)]);
+      // A pre-set date from the Calendar day panel seeds quick-mode for same-day stacking.
+      const [dates, setDates] = useState(() => presetDate ? [presetDate] : [isoOfDate(today)]);
       const [cat, setCat] = useState(null);
       const [shop, setShop] = useState(null);
       const [etype, setEtype] = useState("normal");
@@ -673,6 +680,10 @@
       const [newShop, setNewShop] = useState({ name: "", fav: false });
       const [dupDialog, setDupDialog] = useState(null); // { multi, queue: [{ record, existing, rowIdx }], idx, kept, view }
       const [removingRow, setRemovingRow] = useState(null); // row index fading out before removal
+
+      // presetDate is consumed once (into `dates` above); clear it so a later
+      // normal visit to the Add tab doesn't carry a stale preset date.
+      useEffect(() => { if (presetDate) setPresetDate(null); }, []);
 
       const isDiff = mode === "list";
       const isSame = mode === "same";
