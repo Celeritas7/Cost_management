@@ -1,7 +1,9 @@
-// Phase 7b verification harness — headless chromium + mocked Supabase.
-// Standing guard for the shared useExpenseMutations hook (regression on the
-// EXISTING TransactionsView edit + delete flow). Kept committed through 7c–7e.
-// Run: node Temp/verify_7b.cjs   (optional: node Temp/verify_7b.cjs --mutate)
+// Phase 7c verification harness — headless chromium + mocked Supabase.
+// Exercises the CalendarView day-panel edit + delete flow, now wired to the
+// shared useExpenseMutations hook. Confirms: the panel stays open on the same
+// day across the re-fetch, the right UPDATE/DELETE fires, siblings are retained,
+// and deleting the day's LAST entry falls through to the empty-state.
+// Run: node Temp/verify_7c.cjs   (optional: node Temp/verify_7c.cjs --mutate)
 //   --mutate flips one assertion to expect the broken (string-amount) payload,
 //   so a correct app makes that test go RED — proving the assertion has teeth.
 const path = require('path');
@@ -110,9 +112,18 @@ async function newApp(state, opts = {}) {
   return { page, backend, logs };
 }
 
-// open the History (transactions) tab
-async function gotoHistory(page) {
-  await page.getByRole('button', { name: '📋 History', exact: true }).click();
+// open the Calendar tab
+async function gotoCalendar(page) {
+  await page.getByRole('button', { name: '📅 Calendar', exact: true }).click();
+  await page.waitForTimeout(300);
+}
+
+// open a given day cell's panel. `day` is the day-of-month number (the calendar
+// defaults to the current month; tests use dates in 2026-06 == today's month).
+async function openDay(page, day) {
+  // Day cells are buttons whose accessible name starts with the day number
+  // (followed by expense-type indicators). Anchor with \b to avoid 1 ⊂ 10 etc.
+  await page.getByRole('button', { name: new RegExp('^' + day + '\\b') }).first().click();
   await page.waitForTimeout(300);
 }
 
@@ -132,18 +143,22 @@ async function gotoHistory(page) {
       { id: 2, name: 'Work', icon: '💼', color: '#2563eb' },
     ],
   };
+  // dates land in 2026-06 so they show on the calendar's default (current) month.
   const mkExpense = (over) => ({ id: 1, date: '2026-06-10', amount: 500, category: 'Convenience', shop: 'KonbiniShop', notes: 'lunch', expense_type: 'normal', tags: 'Food', ...over });
 
-  // ── Test 1: edit a row through the shared hook → correct UPDATE payload ──
-  await test('1', 'Edit via hook: UPDATE payload, modal closes, list reflects change', async () => {
+  // ── Test 1: edit a panel row → correct UPDATE, panel stays open same day ──
+  await test('1', 'Panel edit via hook: UPDATE payload, modal closes, panel stays on same day, list reflects change', async () => {
     const state = { ...baseMeta, expenses: [mkExpense({ id: 42, amount: 500 })] };
     const { page, backend } = await newApp(state, { browser });
-    await gotoHistory(page);
-    // open this row's edit (row buttons render an emoji; target by title attr)
+    await gotoCalendar(page);
+    await openDay(page, 10);
+    ok('day panel open on 2026-06-10', /2026-06-10/.test(await page.locator('body').innerText()));
+
+    // open this row's edit (panel row buttons carry title="Edit")
     await page.locator('button[title="Edit"]').first().click();
     await page.waitForTimeout(300);
-    ok('edit modal open', /Edit Entry/.test(await page.locator('body').innerText()));
-    // change the amount 500 -> 750
+    ok('edit modal open (layers over panel sheet)', /Edit Entry/.test(await page.locator('body').innerText()));
+    // change amount 500 -> 750
     const amountInput = page.locator('input[type="number"]').first();
     await amountInput.fill('750');
     await page.getByRole('button', { name: 'Save', exact: true }).click();
@@ -160,36 +175,31 @@ async function gotoHistory(page) {
     } else {
       ok('amount Number-coerced to 750', u.body && u.body.amount === 750 && typeof u.body.amount === 'number', u.body);
     }
-    ok('tags joined from tagsArray', u.body && u.body.tags === 'Food', u.body);
-    ok('date preserved', u.body && u.body.date === '2026-06-10', u.body);
-    ok('category preserved', u.body && u.body.category === 'Convenience', u.body);
-    ok('shop preserved', u.body && u.body.shop === 'KonbiniShop', u.body);
-    ok('expense_type preserved', u.body && u.body.expense_type === 'normal', u.body);
-    ok('notes preserved', u.body && u.body.notes === 'lunch', u.body);
 
     const body = await page.locator('body').innerText();
     ok('edit modal closed after save', !/Edit Entry/.test(body));
-    ok('toast shown (Updated)', /Updated/.test(body), body.slice(0, 120));
-    ok('list reflects new amount 750', /750/.test(body) && !/\b500\b/.test(body), body.slice(0, 200));
+    ok('panel still open on same day (2026-06-10)', /2026-06-10/.test(body), body.slice(0, 200));
+    ok('panel list reflects new amount ¥750', /¥750/.test(body) && !/¥500/.test(body), body.slice(0, 250));
     await page.close();
   });
 
-  // ── Test 2: delete a row through the shared hook → correct DELETE, row gone ──
-  await test('2', 'Delete via hook: DELETE on right id, row gone, toast shown', async () => {
-    // sortedTx orders by date desc, then id desc. KonbiniShop (newer date) renders
-    // first; SuperMart (older) renders second → nth(1) deterministically = id 8.
+  // ── Test 2: delete one of two panel rows → DELETE right id, sibling retained, panel open ──
+  await test('2', 'Panel delete via hook: DELETE on right id, row gone, sibling kept, panel stays open', async () => {
+    // Two entries on the SAME day → same panel. panelExpenses preserves the
+    // fetch order [id 7, id 8], so nth(1) deterministically targets id 8.
     const state = { ...baseMeta, expenses: [
-      mkExpense({ id: 7, shop: 'KonbiniShop', amount: 300, date: '2026-06-11' }),
+      mkExpense({ id: 7, shop: 'KonbiniShop', amount: 300, date: '2026-06-10' }),
       mkExpense({ id: 8, shop: 'SuperMart', amount: 1200, date: '2026-06-10' }),
     ] };
     const { page, backend } = await newApp(state, { browser });
-    await gotoHistory(page);
-    ok('both rows present pre-delete', /SuperMart/.test(await page.locator('body').innerText()));
-    // delete the SuperMart row (2nd row delete button; target by title attr)
+    await gotoCalendar(page);
+    await openDay(page, 10);
+    ok('both rows present pre-delete', /SuperMart/.test(await page.locator('body').innerText()) && /KonbiniShop/.test(await page.locator('body').innerText()));
+
+    // delete the SuperMart row (2nd panel delete button)
     await page.locator('button[title="Delete"]').nth(1).click();
     await page.waitForTimeout(300);
-    ok('confirm modal open', /Delete\?/.test(await page.locator('body').innerText()));
-    // confirm (modal button text is exactly "Delete")
+    ok('confirm modal open (layers over panel sheet)', /Delete\?/.test(await page.locator('body').innerText()));
     await page.getByRole('button', { name: 'Delete', exact: true }).click();
     await page.waitForTimeout(700);
 
@@ -198,9 +208,34 @@ async function gotoHistory(page) {
     ok('DELETE targets the right id (8)', del[0] && del[0].id === 8, del);
     const body = await page.locator('body').innerText();
     ok('confirm modal closed', !/Delete\?/.test(body));
-    ok('toast shown (Deleted)', /Deleted/.test(body), body.slice(0, 120));
-    ok('SuperMart row gone', !/SuperMart/.test(body), body.slice(0, 200));
-    ok('other row retained (KonbiniShop)', /KonbiniShop/.test(body));
+    ok('panel still open on same day (2026-06-10)', /2026-06-10/.test(body), body.slice(0, 200));
+    ok('SuperMart row gone', !/SuperMart/.test(body), body.slice(0, 250));
+    ok('sibling row retained (KonbiniShop)', /KonbiniShop/.test(body));
+    await page.close();
+  });
+
+  // ── Test 3: delete the day's LAST entry → empty-state, panel still open ──
+  await test('3', "Delete last entry: panel falls through to 'No entries for this day' empty-state", async () => {
+    const state = { ...baseMeta, expenses: [mkExpense({ id: 55, shop: 'SoloShop', amount: 900, date: '2026-06-10' })] };
+    const { page, backend } = await newApp(state, { browser });
+    await gotoCalendar(page);
+    await openDay(page, 10);
+    ok('single row present pre-delete', /SoloShop/.test(await page.locator('body').innerText()));
+
+    await page.locator('button[title="Delete"]').first().click();
+    await page.waitForTimeout(300);
+    ok('confirm modal open', /Delete\?/.test(await page.locator('body').innerText()));
+    await page.getByRole('button', { name: 'Delete', exact: true }).click();
+    await page.waitForTimeout(700);
+
+    const del = backend.captures.deletes.filter(d => d.table === 'cost_management_expenses');
+    ok('one expense DELETE fired', del.length === 1, del);
+    ok('DELETE targets the right id (55)', del[0] && del[0].id === 55, del);
+    const body = await page.locator('body').innerText();
+    ok('confirm modal closed', !/Delete\?/.test(body));
+    ok('panel still open on same day (2026-06-10)', /2026-06-10/.test(body), body.slice(0, 200));
+    ok('empty-state shown (No entries for this day)', /No entries for this day/.test(body), body.slice(0, 250));
+    ok('deleted row gone (SoloShop)', !/SoloShop/.test(body));
     await page.close();
   });
 
