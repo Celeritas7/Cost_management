@@ -728,12 +728,18 @@
 
       // the multi-date selection drives the review list: one editable row per picked day,
       // keeping whatever was already entered for days that stay selected
-      const applyDates = (ds) => {
-        const uniq = [...new Set(ds)].sort();
-        setRows((prev) => uniq.map((d) => prev.find((r) => r.date === d) || blankRow(d)));
+      const applyDates = (counts) => {
+        setRows((prev) => {
+          const out = [];
+          Object.keys(counts).sort().forEach((d) => {
+            const existing = prev.filter((r) => r.date === d);
+            for (let k = 0; k < counts[d]; k++) out.push(existing[k] || blankRow(d));
+          });
+          return out;
+        });
         setActiveRow(-1);
       };
-      const openCal = () => { if (isMulti) setDates([...new Set(rows.map((r) => r.date))].sort()); setCalOpen(true); };
+      const openCal = () => setCalOpen(true);
       const removeRow = (i) => {
         vibrate(10);
         setRemovingRow(i);
@@ -743,6 +749,7 @@
           setActiveRow((a) => (a === i ? -1 : i < a ? a - 1 : a));
         }, 280);
       };
+      const addDayRow = (d) => { vibrate(10); setRows((rs) => [...rs, blankRow(d)]); setActiveRow(rows.length); };
 
       const switchMode = (m) => {
         setMode(m); setCalOpen(false); setNewCatOpen(false); setNewShopOpen(false); setCatSheetOpen(false); setShopSheetOpen(false); setPadOpen(false); setActiveRow(-1); setDupDialog(null);
@@ -1032,39 +1039,57 @@
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {rows.map((r, i) => {
-                const rCat = rowCatOf(r), rShop = rowShopOf(r);
-                const rc = categories.find((c) => c.name === rCat);
-                const expanded = i === activeIdx;
-                const ringColor = rc ? rc.color : theme.primary;
-                const rType = isSame ? etype : (r.type || "normal");
-                const dup = rowDup(r);
-                return (
-                  <div key={i} className={removingRow === i ? "cm-fade-out" : undefined} style={{ borderRadius: 12, background: expanded ? `${ringColor}14` : C.input, boxShadow: expanded ? `inset 0 0 0 1.5px ${ringColor}` : `inset 0 0 0 1px ${dup ? `${theme.warning}88` : C.border}` }}>
-                    <div onClick={() => setActiveRow(expanded ? -1 : i)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", cursor: "pointer" }}>
-                      <span style={{ fontSize: 10.5, fontWeight: 700, color: expanded ? "#fff" : C.muted, minWidth: 56 }}>{whenLabel(r.date)}</span>
-                      <span style={{ width: 26, height: 26, borderRadius: 8, background: `${rc ? rc.color : "#888"}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>{rc ? rc.icon : "▫"}</span>
-                      <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: rShop ? C.text : C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{rShop || (isSame ? "set the shop above" : "tap to set shop")}</span>
-                      {EXPENSE_TYPES[rType]?.icon && <span style={{ fontSize: 12 }}>{EXPENSE_TYPES[rType].icon}</span>}
-                      {dup && <span title={`Possible duplicate — ${fmt(dup.amount)} at ${dup.shop} already logged on ${dup.date}`} style={{ fontSize: 13, color: theme.warning }}>⚠</span>}
-                      <span style={{ fontSize: 13.5, fontWeight: 700, color: r.amount ? "#fff" : C.dim }}>{r.amount ? fmt(Number(r.amount)) : "¥–"}</span>
-                      <button onClick={(e) => { e.stopPropagation(); removeRow(i); }} style={{ border: "none", background: "none", color: C.dim, cursor: "pointer", fontSize: 17, lineHeight: 1, padding: "0 2px" }}>×</button>
+              {(() => {
+                const groups = [];
+                rows.forEach((r, i) => {
+                  let g = groups.find((g) => g.date === r.date);
+                  if (!g) { g = { date: r.date, items: [] }; groups.push(g); }
+                  g.items.push({ r, i });
+                });
+                return groups.map((g) => (
+                  <div key={g.date} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 2px 0" }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: C.muted }}>{whenLabel(g.date)}</span>
+                      {g.items.length > 1 && <span style={{ fontSize: 10, fontWeight: 700, color: C.dim, background: C.input, borderRadius: 6, padding: "1px 6px" }}>{g.items.length} entries</span>}
+                      <span style={{ flex: 1 }} />
+                      <button onClick={() => addDayRow(g.date)} style={{ border: "none", background: "none", color: theme.primary, cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "2px 4px" }}>＋ another</button>
                     </div>
-                    {expanded && (
-                      <div className="cm-slide-in" style={{ padding: "2px 12px 12px", display: "flex", flexDirection: "column", gap: 10 }}>
-                        <input type="date" value={r.date} onChange={(e) => e.target.value && updRow({ date: e.target.value })} style={{ ...fieldInput, colorScheme: "dark" }} />
-                        {isDiff && catChipsRow}
-                        {keypad(42)}
-                        {isDiff && typeRow}
-                        {isDiff && tagsRow}
-                        {dup && (
-                          <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.warning }}>⚠ {fmt(dup.amount)} at {dup.shop} already logged on {dup.date}</div>
-                        )}
-                      </div>
-                    )}
+                    {g.items.map(({ r, i }) => {
+                      const rCat = rowCatOf(r), rShop = rowShopOf(r);
+                      const rc = categories.find((c) => c.name === rCat);
+                      const expanded = i === activeIdx;
+                      const ringColor = rc ? rc.color : theme.primary;
+                      const rType = isSame ? etype : (r.type || "normal");
+                      const dup = rowDup(r);
+                      return (
+                        <div key={r.id} className={removingRow === i ? "cm-fade-out" : undefined} style={{ borderRadius: 12, background: expanded ? `${ringColor}14` : C.input, boxShadow: expanded ? `inset 0 0 0 1.5px ${ringColor}` : `inset 0 0 0 1px ${dup ? `${theme.warning}88` : C.border}` }}>
+                          <div onClick={() => setActiveRow(expanded ? -1 : i)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", cursor: "pointer" }}>
+                            <span style={{ fontSize: 10.5, fontWeight: 700, color: expanded ? "#fff" : C.muted, minWidth: 56 }}>{whenLabel(r.date)}</span>
+                            <span style={{ width: 26, height: 26, borderRadius: 8, background: `${rc ? rc.color : "#888"}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>{rc ? rc.icon : "▫"}</span>
+                            <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: rShop ? C.text : C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{rShop || (isSame ? "set the shop above" : "tap to set shop")}</span>
+                            {EXPENSE_TYPES[rType]?.icon && <span style={{ fontSize: 12 }}>{EXPENSE_TYPES[rType].icon}</span>}
+                            {dup && <span title={`Possible duplicate — ${fmt(dup.amount)} at ${dup.shop} already logged on ${dup.date}`} style={{ fontSize: 13, color: theme.warning }}>⚠</span>}
+                            <span style={{ fontSize: 13.5, fontWeight: 700, color: r.amount ? "#fff" : C.dim }}>{r.amount ? fmt(Number(r.amount)) : "¥–"}</span>
+                            <button onClick={(e) => { e.stopPropagation(); removeRow(i); }} style={{ border: "none", background: "none", color: C.dim, cursor: "pointer", fontSize: 17, lineHeight: 1, padding: "0 2px" }}>×</button>
+                          </div>
+                          {expanded && (
+                            <div className="cm-slide-in" style={{ padding: "2px 12px 12px", display: "flex", flexDirection: "column", gap: 10 }}>
+                              <input type="date" value={r.date} onChange={(e) => e.target.value && updRow({ date: e.target.value })} style={{ ...fieldInput, colorScheme: "dark" }} />
+                              {isDiff && catChipsRow}
+                              {keypad(42)}
+                              {isDiff && typeRow}
+                              {isDiff && tagsRow}
+                              {dup && (
+                                <div style={{ fontSize: 11.5, fontWeight: 600, color: theme.warning }}>⚠ {fmt(dup.amount)} at {dup.shop} already logged on {dup.date}</div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
-                );
-              })}
+                ));
+              })()}
             </div>
           )}
           {rows.length > 0 && (
@@ -1130,7 +1155,9 @@
               <div className="cm-slide-in" style={{ marginTop: 8 }}>
                 <AddCalSheet dates={dates} setDates={setDates} today={today} yest={yest} C={C} chip={chip} theme={theme}
                   single={!isMulti} confirmLabel={isMulti ? "Use these days" : "Done"}
-                  onClose={() => { if (isMulti) applyDates(dates); setCalOpen(false); }} />
+                  initialCounts={rows.reduce((m, r) => { m[r.date] = (m[r.date] || 0) + 1; return m; }, {})}
+                  onConfirm={(counts) => applyDates(counts)}
+                  onClose={() => setCalOpen(false)} />
               </div>
             )}
           </div>
@@ -1195,22 +1222,33 @@
     }
 
     // compact multi-date picker sheet for the Add screen
-    function AddCalSheet({ dates, setDates, today, yest, C, chip, theme, onClose, confirmLabel = "Done", single = false }) {
+    function AddCalSheet({ dates, setDates, today, yest, C, chip, theme, onClose, onConfirm = () => {}, initialCounts = {}, confirmLabel = "Done", single = false }) {
       const [view, setView] = useState({ y: today.getFullYear(), m: today.getMonth() });
+      const [counts, setCounts] = useState(initialCounts);
       const dim = new Date(view.y, view.m + 1, 0).getDate();
       const fd = (new Date(view.y, view.m, 1).getDay() + 6) % 7;
       const isoOf = (day) => `${view.y}-${String(view.m + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      const total = Object.values(counts).reduce((a, b) => a + b, 0);
+      const fmtDay = (s) => `${MONTHS_SHORT[Number(s.slice(5, 7))]} ${Number(s.slice(8, 10))}`;
+      const bump = (s, delta) => setCounts((c) => {
+        const n = (c[s] || 0) + delta;
+        const next = { ...c };
+        if (n <= 0) delete next[s]; else next[s] = n;
+        return next;
+      });
       const toggle = (day) => {
         const s = isoOf(day);
         if (single) { setDates([s]); onClose(); return; }
-        setDates((p) => p.includes(s) ? p.filter((x) => x !== s) : [...p, s].sort());
+        bump(s, +1);
       };
-      const quick = (d) => { const s = ymdLocal(d); setDates([s]); if (single) onClose(); };
+      const quick = (d) => { const s = ymdLocal(d); if (single) { setDates([s]); onClose(); return; } bump(s, +1); };
+      const confirm = () => { if (!single) onConfirm(counts); onClose(); };
+      const stepBtn = { width: 26, height: 26, borderRadius: 8, border: "none", background: C.input, color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", lineHeight: 1 };
       return (
         <div style={{ background: C.card, borderRadius: 16, padding: 14, boxShadow: `inset 0 0 0 1px ${C.border}` }}>
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-            <button onClick={() => quick(today)} style={{ ...chip(dates.length === 1 && dates[0] === ymdLocal(today), theme.primary), flex: 1, justifyContent: "center" }}>Today</button>
-            <button onClick={() => quick(yest)} style={{ ...chip(dates.length === 1 && dates[0] === ymdLocal(yest), theme.primary), flex: 1, justifyContent: "center" }}>Yesterday</button>
+            <button onClick={() => quick(today)} style={{ ...chip(single ? (dates.length === 1 && dates[0] === ymdLocal(today)) : (counts[ymdLocal(today)] > 0), theme.primary), flex: 1, justifyContent: "center" }}>Today</button>
+            <button onClick={() => quick(yest)} style={{ ...chip(single ? (dates.length === 1 && dates[0] === ymdLocal(yest)) : (counts[ymdLocal(yest)] > 0), theme.primary), flex: 1, justifyContent: "center" }}>Yesterday</button>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
             <button onClick={() => setView((v) => v.m === 0 ? { y: v.y - 1, m: 11 } : { ...v, m: v.m - 1 })} style={{ background: C.input, border: "none", color: C.muted, width: 28, height: 28, borderRadius: 8, cursor: "pointer" }}>◀</button>
@@ -1221,14 +1259,31 @@
             {["M","T","W","T","F","S","S"].map((d, i) => <div key={i} style={{ textAlign: "center", fontSize: 9, color: C.dim, padding: 2 }}>{d}</div>)}
             {Array.from({ length: fd }).map((_, i) => <div key={"e" + i} />)}
             {Array.from({ length: dim }).map((_, i) => {
-              const day = i + 1; const sel = dates.includes(isoOf(day));
+              const day = i + 1; const s = isoOf(day);
+              const cnt = single ? 0 : (counts[s] || 0);
+              const sel = single ? dates.includes(s) : cnt > 0;
               return (
-                <button key={day} onClick={() => toggle(day)} style={{ aspectRatio: "1", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, background: sel ? theme.primary : "transparent", color: sel ? "#fff" : C.text, fontWeight: sel ? 700 : 400 }}>{day}</button>
+                <button key={day} onClick={() => toggle(day)} style={{ position: "relative", aspectRatio: "1", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, background: sel ? theme.primary : "transparent", color: sel ? "#fff" : C.text, fontWeight: sel ? 700 : 400 }}>
+                  {day}
+                  {cnt > 1 && <span style={{ position: "absolute", top: 1, right: 2, minWidth: 13, height: 13, borderRadius: 7, background: "#fff", color: theme.primary, fontSize: 8.5, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 2px" }}>{cnt}</span>}
+                </button>
               );
             })}
           </div>
-          <button onClick={onClose} style={{ width: "100%", marginTop: 10, height: 38, borderRadius: 11, border: "none", background: dates.length ? theme.primary : C.input, color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-            {confirmLabel}{dates.length > 1 ? ` · ${dates.length} days` : ""}
+          {!single && total > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12 }}>
+              {Object.keys(counts).sort().map((s) => (
+                <div key={s} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ flex: 1, fontSize: 12.5, color: C.text }}>{fmtDay(s)}</span>
+                  <button onClick={() => bump(s, -1)} style={stepBtn}>−</button>
+                  <span style={{ minWidth: 20, textAlign: "center", fontSize: 13.5, fontWeight: 700, color: "#fff" }}>{counts[s]}</span>
+                  <button onClick={() => bump(s, 1)} style={stepBtn}>＋</button>
+                </div>
+              ))}
+            </div>
+          )}
+          <button onClick={confirm} disabled={!single && total === 0} style={{ width: "100%", marginTop: 10, height: 38, borderRadius: 11, border: "none", background: (single ? dates.length : total) ? theme.primary : C.input, color: "#fff", fontSize: 13, fontWeight: 600, cursor: (!single && total === 0) ? "default" : "pointer", opacity: (!single && total === 0) ? 0.55 : 1, fontFamily: "inherit" }}>
+            {confirmLabel}{single ? (dates.length > 1 ? ` · ${dates.length} days` : "") : (total > 0 ? ` · ${total} entr${total !== 1 ? "ies" : "y"}` : "")}
           </button>
         </div>
       );
