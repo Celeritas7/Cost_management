@@ -643,6 +643,7 @@
     // ═══════════════════════════════════════════
     //  ADD ENTRY VIEW  (redesigned: Quick / Same shop / Different)
     // ═══════════════════════════════════════════
+    let _rid = 0; // module-scoped so row ids stay stable across re-renders
     function AddEntryView({ recentEntries, allExpenses }) {
       const { theme, supabase, fetchData, categories, shops, tags, presetDate, setPresetDate } = useTheme();
       const C = {
@@ -653,7 +654,7 @@
       const ADD_COLOR = ["#2563eb","#f59e0b","#10b981","#ef4444","#8b5cf6","#ec4899","#06b6d4","#f97316","#14b8a6","#a78bfa","#64748b","#84cc16"];
       const today = new Date(); const yest = new Date(Date.now() - 86400000);
       const isoOfDate = (d) => ymdLocal(d);
-      const blankRow = (d) => ({ date: d, cat: null, shop: null, type: "normal", tags: [], amount: "" });
+      const blankRow = (d) => ({ id: ++_rid, date: d, cat: null, shop: null, type: "normal", tags: [], amount: "" });
 
       const [mode, setMode] = useState("quick"); // quick | same | list
       const [amount, setAmount] = useState("");
@@ -706,8 +707,9 @@
 
       const whenLabel = (s) => s === isoOfDate(today) ? "Today" : s === isoOfDate(yest) ? "Yesterday"
         : `${MONTHS_SHORT[Number(s.slice(5, 7))]} ${Number(s.slice(8, 10))}`;
+      const dayCount = new Set(rows.map((r) => r.date)).size;
       const dateLabel = isMulti
-        ? (rows.length === 0 ? "Select days" : rows.length === 1 ? whenLabel(rows[0].date) : `${rows.length} days`)
+        ? (rows.length === 0 ? "Select days" : `${dayCount} day${dayCount !== 1 ? "s" : ""} · ${rows.length} entr${rows.length !== 1 ? "ies" : "y"}`)
         : whenLabel(dates[0]);
 
       const updRow = (patch) => { if (activeIdx < 0) return; setRows((rs) => rs.map((r, i) => (i === activeIdx ? { ...r, ...patch } : r))); };
