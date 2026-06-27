@@ -254,10 +254,20 @@
     const ymdToday = () => { const d = new Date(), p = (n) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
     // A trigger is "due now" when active, in range, in its time window, not
     // dismissed this session, and not already logged/skipped today.
+    function dayMatches(freq, monthDay, date) {
+      const dow = date.getDay();
+      switch (freq) {
+        case "weekdays": return dow >= 1 && dow <= 5;
+        case "weekend": return dow === 0 || dow === 6;
+        case "monthly": return date.getDate() === Number(monthDay || 1);
+        default: return true; // daily / unset
+      }
+    }
     function isLocationDue(t, pos, now, sessionDismissed, opts = {}) {
       if (!t.is_active) return false;
       if (sessionDismissed.includes(t.id)) return false;
       if (!opts.ignoreDay && t.last_fired_date === ymdToday()) return false;
+      if (!opts.ignoreTime && !dayMatches(t.freq, t.monthDay, now)) return false;
       const hasTime = !!(t.startTime && t.endTime);
       const hasLoc = t.lat != null && t.lng != null;
       if (!hasTime && !hasLoc) return false;
@@ -516,6 +526,7 @@
             const hasLoc = tg.lat != null && tg.lng != null;
             if (!hasTime && !hasLoc) return;
             const timeOk = !hasTime || inTimeWindow(now, tg.startTime, tg.endTime);
+            const dayOk = dayMatches(tg.freq, tg.monthDay, now);
             let locOk = true, dist = null;
             if (hasLoc) {
               if (!pos) { dwellRef.current[tg.id] = null; locOk = false; }
@@ -527,7 +538,7 @@
                 } else { dwellRef.current[tg.id] = null; locOk = false; }
               }
             }
-            if (timeOk && locOk) fire.push(hasLoc ? { ...tg, _distance: Math.round(dist) } : { ...tg, _timeOnly: true });
+            if (timeOk && locOk && dayOk) fire.push(hasLoc ? { ...tg, _distance: Math.round(dist) } : { ...tg, _timeOnly: true });
           });
           if (fire.length) {
             setLocDueList((prev) => { const ids = new Set(prev.map((x) => x.id)); return [...prev, ...fire.filter((f) => !ids.has(f.id))]; });
@@ -3070,9 +3081,9 @@
       const flash = (m) => { setToast(m); setTimeout(() => setToast(null), 2200); };
 
       const newId = () => "lt_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-      const blank = () => ({ id: newId(), name: "", category: categories[0]?.name || "", shop: "", amount: "", cond: "both", radius: 150, dwellMinutes: 2, startTime: "08:00", endTime: "10:00", lat: null, lng: null, expense_type: "normal", tags: "", is_active: true });
+      const blank = () => ({ id: newId(), name: "", category: categories[0]?.name || "", shop: "", amount: "", cond: "both", freq: "daily", monthDay: new Date().getDate(), radius: 150, dwellMinutes: 2, startTime: "08:00", endTime: "10:00", lat: null, lng: null, expense_type: "normal", tags: "", is_active: true });
       const startNew = () => { setEditing(blank()); setCoordRaw(""); setShowForm(true); };
-      const startEdit = (t) => { setEditing({ ...t, amount: t.amount == null ? "" : String(t.amount), cond: t.cond || (t.lat != null && t.startTime ? "both" : t.lat != null ? "location" : "time"), dwellMinutes: t.dwellMinutes != null ? t.dwellMinutes : 0 }); setCoordRaw(t.lat != null ? `${t.lat}, ${t.lng}` : ""); setShowForm(true); };
+      const startEdit = (t) => { setEditing({ ...t, amount: t.amount == null ? "" : String(t.amount), cond: t.cond || (t.lat != null && t.startTime ? "both" : t.lat != null ? "location" : "time"), dwellMinutes: t.dwellMinutes != null ? t.dwellMinutes : 0, freq: t.freq || "daily", monthDay: t.monthDay || new Date().getDate() }); setCoordRaw(t.lat != null ? `${t.lat}, ${t.lng}` : ""); setShowForm(true); };
       const cancel = () => { setShowForm(false); setEditing(null); };
       const set = (k, v) => setEditing((e) => ({ ...e, [k]: v }));
 
@@ -3127,6 +3138,18 @@
             <div style={{ ...card, padding: 14, marginTop: 6, marginBottom: 14, boxShadow: `inset 0 0 0 1px ${theme.primary}55` }}>
               <label style={lbl}>Name</label>
               <input value={editing.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Morning konbini run" style={{ ...inputStyle, marginBottom: 10 }} />
+              <label style={lbl}>Repeat on</label>
+              <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+                {[["daily", "Daily"], ["weekdays", "Weekdays"], ["weekend", "Weekend"], ["monthly", "Day of month"]].map(([val, lt]) => (
+                  <button key={val} onClick={() => set("freq", val)} style={{ flex: "1 1 auto", minWidth: 72, padding: "8px 6px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 11.5, fontWeight: 600, fontFamily: "inherit", background: (editing.freq || "daily") === val ? theme.primary : theme.inputBg, color: (editing.freq || "daily") === val ? "#fff" : theme.textMuted }}>{lt}</button>
+                ))}
+              </div>
+              {editing.freq === "monthly" && (
+                <div style={{ marginBottom: 10 }}>
+                  <label style={lbl}>Day of month (1–31)</label>
+                  <input type="number" min="1" max="31" value={editing.monthDay || 1} onChange={(e) => set("monthDay", Math.max(1, Math.min(31, Number(e.target.value) || 1)))} style={{ ...inputStyle, width: 120 }} />
+                </div>
+              )}
               <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
                 <div style={{ flex: 1 }}>
                   <label style={lbl}>Category</label>
@@ -3199,7 +3222,7 @@
           {locTriggers.map((t) => {
             const col = getCatColor(t.category);
             const hasTime = !!(t.startTime && t.endTime), hasLoc = t.lat != null;
-            const bits = [];
+            const bits = []; bits.push(t.freq === "monthly" ? `Day ${t.monthDay || 1}` : ({ weekdays: "Weekdays", weekend: "Weekend" }[t.freq] || "Daily"));
             if (hasTime) bits.push(`${t.startTime}–${t.endTime}`);
             if (hasLoc) bits.push(`${t.radius || 150}m` + (Number(t.dwellMinutes) > 0 ? ` · stay ${t.dwellMinutes}m` : ""));
             return (
