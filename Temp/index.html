@@ -61,40 +61,6 @@
       outlier: { label: "Outlier", icon: "⚡", color: "#8b5cf6" },
     };
 
-    // ── Monoline SVG icon set (consistent chrome iconography; inherits currentColor) ──
-    const ICONS = {
-      add: <><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></>,
-      chart: <><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></>,
-      calendar: <><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></>,
-      list: <><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></>,
-      repeat: <><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></>,
-      settings: <><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></>,
-      palette: <><circle cx="13.5" cy="6.5" r=".6" fill="currentColor" stroke="none"/><circle cx="17" cy="11" r=".6" fill="currentColor" stroke="none"/><circle cx="8" cy="6.5" r=".6" fill="currentColor" stroke="none"/><circle cx="6.5" cy="11.5" r=".6" fill="currentColor" stroke="none"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.65-.75 1.65-1.69 0-.44-.18-.83-.44-1.12-.29-.29-.44-.65-.44-1.13a1.64 1.64 0 0 1 1.67-1.67h2C19.49 15.39 22 12.88 22 9.83 22 5.5 17.5 2 12 2z"/></>,
-      pencil: <><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></>,
-      trash: <><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></>,
-      pin: <><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></>,
-      thumbtack: <><line x1="12" y1="17" x2="12" y2="22"/><path d="M9 2h6l-1 7 3 3v2H7v-2l3-3-1-7z"/></>,
-      zap: <><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></>,
-      folder: <><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></>,
-      store: <><path d="M3 9l1-4h16l1 4"/><path d="M4 9v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9"/><path d="M9 20v-6h6v6"/></>,
-      tag: <><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></>,
-      chevronDown: <polyline points="6 9 12 15 18 9"/>,
-      chevronLeft: <polyline points="15 18 9 12 15 6"/>,
-      chevronRight: <polyline points="9 18 15 12 9 6"/>,
-      close: <><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></>,
-      check: <polyline points="20 6 9 17 4 12"/>,
-      grip: <><circle cx="9" cy="6" r="1.1" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1.1" fill="currentColor" stroke="none"/><circle cx="9" cy="18" r="1.1" fill="currentColor" stroke="none"/><circle cx="15" cy="6" r="1.1" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.1" fill="currentColor" stroke="none"/><circle cx="15" cy="18" r="1.1" fill="currentColor" stroke="none"/></>,
-    };
-    function Icon({ name, size = 16, sw = 2, style }) {
-      const path = ICONS[name];
-      if (!path) return null;
-      return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" style={{ display: "inline-block", verticalAlign: "-0.14em", flexShrink: 0, ...style }} aria-hidden="true">
-          {path}
-        </svg>
-      );
-    }
-
     function getStoredTheme() {
       try {
         const stored = localStorage.getItem("cost_mgmt_theme");
@@ -188,48 +154,6 @@
       return rec.last_added_date == null || rec.last_added_date < due; // YYYY-MM-DD compares chronologically
     }
 
-    // ═════════════════════════════════════════════════════════════
-    //  LOCATION-BASED PAYMENT TRIGGERS  (geofence + time-of-day window)
-    //  Stored locally (no DB changes). A trigger fires when you are within
-    //  `radius` metres of (lat,lng) AND the local clock is inside its
-    //  [startTime,endTime] window — then it surfaces in a pile-up panel.
-    // ═════════════════════════════════════════════════════════════
-    const LOC_TRIGGER_KEY = "cost_management_location_triggers";
-    function getStoredTriggers() {
-      try { const v = JSON.parse(localStorage.getItem(LOC_TRIGGER_KEY)); return Array.isArray(v) ? v : []; }
-      catch (e) { return []; }
-    }
-    function setStoredTriggers(list) {
-      try { localStorage.setItem(LOC_TRIGGER_KEY, JSON.stringify(list)); } catch (e) {}
-    }
-    // metres between two {lat,lng} points (haversine)
-    function distanceMeters(a, b) {
-      if (!a || !b || a.lat == null || b.lat == null) return Infinity;
-      const R = 6371000, toRad = (d) => (d * Math.PI) / 180;
-      const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
-      const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
-      return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
-    }
-    // is the local clock within [start,end] "HH:MM"? (supports overnight wrap)
-    function inTimeWindow(now, start, end) {
-      if (!start || !end) return true;
-      const mins = now.getHours() * 60 + now.getMinutes();
-      const [sh, sm] = start.split(":").map(Number), [eh, em] = end.split(":").map(Number);
-      const s = sh * 60 + sm, e = eh * 60 + em;
-      return s <= e ? (mins >= s && mins <= e) : (mins >= s || mins <= e);
-    }
-    const ymdToday = () => { const d = new Date(), p = (n) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
-    // A trigger is "due now" when active, in range, in its time window, not
-    // dismissed this session, and not already logged/skipped today.
-    function isLocationDue(t, pos, now, sessionDismissed, opts = {}) {
-      if (!t.is_active) return false;
-      if (sessionDismissed.includes(t.id)) return false;
-      if (!opts.ignoreDay && t.last_fired_date === ymdToday()) return false;
-      if (!opts.ignoreTime && !inTimeWindow(now, t.startTime, t.endTime)) return false;
-      if (opts.ignoreDistance) return true;
-      return distanceMeters(pos, { lat: t.lat, lng: t.lng }) <= (t.radius || 150);
-    }
-
     // "Due Mon, Jul 27" from a 'YYYY-MM-DD' string (local components, no Date parsing of the string)
     const dueDateLabel = (ymd) => {
       const [y, m, d] = ymd.split("-").map(Number);
@@ -301,14 +225,6 @@
       const [dueList, setDueList] = useState([]);
       const [dueModalOpen, setDueModalOpen] = useState(false);
       const dueShownRef = useRef(false); // open the due modal at most once per session
-      // ── Location triggers (geofence + time-of-day window) ──
-      const [locTriggers, setLocTriggers] = useState(() => getStoredTriggers());
-      const reloadTriggers = useCallback(() => setLocTriggers(getStoredTriggers()), []);
-      const [locDueList, setLocDueList] = useState([]);
-      const [locDueOpen, setLocDueOpen] = useState(false);
-      const [locDismissed, setLocDismissed] = useState([]); // trigger ids dismissed this session
-      const [locStatus, setLocStatus] = useState(""); // transient status for the check-in flow
-      const locShownRef = useRef(false); // auto-check fires at most once per session
       const [dueToast, setDueToast] = useState(null);
 
       // success feedback for the due modal: toast (survives the modal closing) + haptic
@@ -399,55 +315,6 @@
         setDueModalOpen(false);
       };
 
-      // ── Location triggers: detect which fire for the current / simulated spot ──
-      const resolveLoc = (id) => setLocDueList((prev) => prev.filter((t) => t.id !== id));
-      const stampLocFired = (id) => {
-        const next = getStoredTriggers().map((x) => x.id === id ? { ...x, last_fired_date: ymdToday() } : x);
-        setStoredTriggers(next); setLocTriggers(next);
-      };
-      // simTriggerId: pretend you're standing at that trigger's pin (ignores GPS,
-      // day-stamp and time window) so it can be demoed without moving / real GPS.
-      const checkLocation = useCallback((opts = {}) => {
-        const { simTriggerId = null, silent = false } = opts;
-        const now = new Date();
-        const fresh = getStoredTriggers(); setLocTriggers(fresh);
-        const run = (pos, simMode) => {
-          const matched = fresh
-            .filter((t) => isLocationDue(t, pos, now, locDismissed, { ignoreDistance: simMode, ignoreDay: simMode, ignoreTime: simMode }))
-            .map((t) => simMode ? { ...t, _simulated: true } : { ...t, _distance: Math.round(distanceMeters(pos, { lat: t.lat, lng: t.lng })) });
-          if (matched.length) { setLocStatus(""); setLocDueList(matched); setLocDueOpen(true); }
-          else { const m = "No payment triggers here right now."; setLocStatus(m); if (!silent) flashDue(m); }
-        };
-        if (simTriggerId) { const t = fresh.find((x) => x.id === simTriggerId); run(t ? { lat: t.lat, lng: t.lng } : null, true); return; }
-        if (!("geolocation" in navigator)) { const m = "Location isn't available here — use a trigger's Test button."; setLocStatus(m); if (!silent) flashDue(m); return; }
-        setLocStatus("Locating…");
-        navigator.geolocation.getCurrentPosition(
-          (p) => run({ lat: p.coords.latitude, lng: p.coords.longitude }, false),
-          (err) => { const m = err.code === 1 ? "Location permission denied — use a trigger's Test button." : "Couldn't get your location."; setLocStatus(m); if (!silent) flashDue(m); },
-          { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
-        );
-      }, [locDismissed]); // eslint-disable-line react-hooks/exhaustive-deps
-      useEffect(() => { if (locDueOpen && locDueList.length === 0) setLocDueOpen(false); }, [locDueList, locDueOpen]);
-      // Auto check once after data settles (GPS is often blocked in embedded
-      // previews; when it is, the Triggers tab's Test button simulates a spot).
-      useEffect(() => {
-        if (loading || locShownRef.current) return;
-        locShownRef.current = true;
-        if (getStoredTriggers().length) checkLocation({ silent: true });
-      }, [loading]); // eslint-disable-line react-hooks/exhaustive-deps
-
-      const locAdd = async (t, amountOverride) => {
-        const amount = amountOverride != null ? amountOverride : t.amount;
-        if (amount == null || !(Number(amount) > 0)) return { ok: false };
-        const record = { date: ymdToday(), category: t.category, shop: t.shop, amount: Number(amount), notes: t.notes || "", expense_type: t.expense_type || "normal", tags: t.tags || "" };
-        const { error } = await supabase.from("cost_management_expenses").insert(record);
-        if (error) return { ok: false };
-        stampLocFired(t.id); await fetchData(); flashDue(`Added ${t.name}`); return { ok: true };
-      };
-      const locSkip = (t) => { stampLocFired(t.id); flashDue(`Skipped ${t.name}`); return { ok: true }; };
-      const locSnooze = (t) => setLocDismissed((prev) => prev.includes(t.id) ? prev : [...prev, t.id]);
-      const locClose = () => { setLocDismissed((prev) => [...new Set([...prev, ...locDueList.map((t) => t.id)])]); setLocDueOpen(false); };
-
       const RAW = data;
       const catList = useMemo(() => [...new Set(RAW.map(r => r.category))].sort(), [RAW]);
       const years = useMemo(() => [...new Set(RAW.map(r => String(r.year)))].sort(), [RAW]);
@@ -508,38 +375,36 @@
       const labelStyle = { fontSize:11,fontWeight:500,color:theme.textMuted,textTransform:"uppercase",letterSpacing:0.5,marginBottom:6,display:"block" };
 
       const navTabs = [
-        { id: "add", label: "Add", icon: "add" },
-        { id: "overview", label: "Overview", icon: "chart" },
-        { id: "calendar", label: "Calendar", icon: "calendar" },
-        { id: "transactions", label: "History", icon: "list" },
-        { id: "recurring", label: "Recurring", icon: "repeat" },
-        { id: "settings", label: "Settings", icon: "settings" },
+        { id: "add", label: "➕ Add" },
+        { id: "overview", label: "📊 Overview" },
+        { id: "calendar", label: "📅 Calendar" },
+        { id: "transactions", label: "📋 History" },
+        { id: "recurring", label: "🔁 Recurring" },
+        { id: "settings", label: "⚙️ Settings" },
       ];
 
       return (
-        <ThemeContext.Provider value={{ theme, themeName, inputStyle, labelStyle, pillStyle, supabase, fetchData, categories, tags, getCatIcon, getCatColor, getTagIcon, getTagColor, shops, recurring, changeTheme, setView, presetDate, setPresetDate, locTriggers, reloadTriggers, checkLocation, locStatus }}>
+        <ThemeContext.Provider value={{ theme, themeName, inputStyle, labelStyle, pillStyle, supabase, fetchData, categories, tags, getCatIcon, getCatColor, getTagIcon, getTagColor, shops, recurring, changeTheme, setView, presetDate, setPresetDate }}>
           <div style={{minHeight:"100vh",background:theme.bg,color:theme.text,fontFamily:"'Noto Sans JP', system-ui, sans-serif"}}>
             {/* Header */}
-            <div style={{background:theme.headerBg,borderBottom:`1px solid ${theme.cardBorder}`,padding:"14px 16px"}}>
-             <div style={{maxWidth:1080,margin:"0 auto",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
+            <div style={{background:theme.headerBg,borderBottom:`1px solid ${theme.cardBorder}`,padding:"14px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
               <div>
-                <div style={{fontSize:10.5,letterSpacing:2.5,textTransform:"uppercase",color:theme.textMuted,fontWeight:700}}>家計簿</div>
+                <div style={{fontSize:9,letterSpacing:2,textTransform:"uppercase",color:theme.textDim}}>家計簿</div>
                 <h1 style={{fontSize:18,fontWeight:700,color:"#fff",margin:0}}>Cost Management</h1>
               </div>
               <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>
                 {navTabs.map(tab => (
-                  <button key={tab.id} onClick={() => { setView(tab.id); setTxPage(0); }} style={{...pillStyle(view===tab.id),padding:"5px 11px",fontSize:11,display:"inline-flex",alignItems:"center",gap:6}}><Icon name={tab.icon} size={15}/>{tab.label}</button>
+                  <button key={tab.id} onClick={() => { setView(tab.id); setTxPage(0); }} style={{...pillStyle(view===tab.id),padding:"5px 10px",fontSize:11}}>{tab.label}</button>
                 ))}
                 <div style={{position:"relative"}}>
-                  <button onClick={() => checkLocation()} title="Check in — nearby payment triggers" style={{...pillStyle(false),padding:"6px 9px",display:"inline-flex",alignItems:"center"}}><Icon name="pin" size={16}/></button>
-                  <button onClick={() => setShowThemePicker(!showThemePicker)} title="Theme" style={{...pillStyle(false),padding:"6px 9px",display:"inline-flex",alignItems:"center",color:theme.primary}}><Icon name="palette" size={16}/></button>
+                  <button onClick={() => setShowThemePicker(!showThemePicker)} style={{...pillStyle(false),padding:"5px 8px",fontSize:14}}>{theme.icon}</button>
                   {showThemePicker && (
                     <>
                       <div style={{position:"fixed",inset:0,zIndex:90}} onClick={() => setShowThemePicker(false)}/>
                       <div style={{position:"absolute",top:"100%",right:0,marginTop:6,background:"#1a1a2e",border:`1px solid ${theme.cardBorder}`,borderRadius:10,padding:6,zIndex:100,minWidth:130}}>
                         {THEME_KEYS.map(key => (
                           <button key={key} onClick={() => changeTheme(key)} style={{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"6px 8px",background:themeName===key?`${THEMES[key].primary}20`:"transparent",border:"none",borderRadius:6,cursor:"pointer"}}>
-                            <span style={{width:12,height:12,borderRadius:"50%",background:THEMES[key].primary,boxShadow:`0 0 0 2px ${THEMES[key].accent}55`,flexShrink:0}}/>
+                            <span style={{fontSize:12}}>{THEMES[key].icon}</span>
                             <span style={{color:themeName===key?THEMES[key].primary:"#ccc",fontSize:11}}>{THEMES[key].name}</span>
                           </button>
                         ))}
@@ -548,12 +413,11 @@
                   )}
                 </div>
               </div>
-             </div>
             </div>
 
             {/* Filters */}
             {(view === "overview" || view === "transactions") && (
-              <div style={{padding:"10px 16px",maxWidth:1080,margin:"0 auto",boxSizing:"border-box",display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+              <div style={{padding:"10px 16px",display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
                 <select value={yearFilter} onChange={e => setYearFilter(e.target.value)} style={{background:theme.inputBg,border:`1px solid ${theme.inputBorder}`,color:theme.text,padding:"4px 8px",borderRadius:6,fontSize:11}}>
                   <option value="All">All Years</option>
                   {years.map(y => <option key={y} value={y}>{y}</option>)}
@@ -575,9 +439,9 @@
               </div>
             )}
 
-            <div style={{padding:"0 16px 20px",maxWidth:1080,margin:"0 auto",boxSizing:"border-box"}}>
+            <div style={{padding:"0 16px 20px"}}>
               {loading ? (
-                <div style={{textAlign:"center",padding:50,color:theme.textMuted}}>Loading…</div>
+                <div style={{textAlign:"center",padding:50,color:theme.textMuted}}>⏳ Loading…</div>
               ) : view === "add" ? (
                 <AddEntryView recentEntries={recentEntries} allExpenses={RAW} />
               ) : view === "overview" ? (
@@ -595,10 +459,6 @@
 
             {dueModalOpen && dueList.length > 0 && (
               <RecurringDueModal items={dueList} onAdd={dueAdd} onSkip={dueSkip} onSnooze={dueSnooze} onResolve={resolveDue} onClose={dueClose} />
-            )}
-
-            {locDueOpen && locDueList.length > 0 && (
-              <LocationDueModal items={locDueList} onAdd={locAdd} onSkip={locSkip} onSnooze={locSnooze} onResolve={resolveLoc} onClose={locClose} />
             )}
 
             {dueToast && (
@@ -654,9 +514,9 @@
         <div>
           <div style={{background:theme.cardBg,borderRadius:12,padding:16,border:`1px solid ${theme.cardBorder}`}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-              <button onClick={() => setViewDate(v => v.month===0?{year:v.year-1,month:11}:{...v,month:v.month-1})} style={{background:theme.inputBg,border:"none",borderRadius:6,width:30,height:30,cursor:"pointer",color:theme.textMuted,display:"inline-flex",alignItems:"center",justifyContent:"center"}}><Icon name="chevronLeft" size={16}/></button>
+              <button onClick={() => setViewDate(v => v.month===0?{year:v.year-1,month:11}:{...v,month:v.month-1})} style={{background:theme.inputBg,border:"none",borderRadius:6,width:30,height:30,cursor:"pointer",color:theme.textMuted}}>◀</button>
               <div style={{fontSize:14,fontWeight:600,color:"#fff"}}>{MONTHS_FULL[viewDate.month]} {viewDate.year}</div>
-              <button onClick={() => setViewDate(v => v.month===11?{year:v.year+1,month:0}:{...v,month:v.month+1})} style={{background:theme.inputBg,border:"none",borderRadius:6,width:30,height:30,cursor:"pointer",color:theme.textMuted,display:"inline-flex",alignItems:"center",justifyContent:"center"}}><Icon name="chevronRight" size={16}/></button>
+              <button onClick={() => setViewDate(v => v.month===11?{year:v.year+1,month:0}:{...v,month:v.month+1})} style={{background:theme.inputBg,border:"none",borderRadius:6,width:30,height:30,cursor:"pointer",color:theme.textMuted}}>▶</button>
             </div>
             {/* Legend */}
             <div style={{display:"flex",gap:12,justifyContent:"center",marginBottom:10,fontSize:10,color:theme.textDim}}>
@@ -726,8 +586,8 @@
                       </div>
                       <span style={{fontSize:14,fontWeight:700,color:"#fff",whiteSpace:"nowrap"}}>{fmt(e.amount)}</span>
                       <div style={{display:"flex",alignItems:"center",flexShrink:0}}>
-                        <button title="Edit" onClick={() => openEdit(e)} style={{background:"none",border:"none",cursor:"pointer",opacity:0.85,padding:"3px 5px",color:theme.textMuted,display:"inline-flex"}}><Icon name="pencil" size={15}/></button>
-                        <button title="Delete" onClick={() => requestDelete(e)} style={{background:"none",border:"none",cursor:"pointer",opacity:0.85,padding:"3px 5px",color:theme.danger,display:"inline-flex"}}><Icon name="trash" size={15}/></button>
+                        <button title="Edit" onClick={() => openEdit(e)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,opacity:0.8,padding:"2px 4px"}}>✏️</button>
+                        <button title="Delete" onClick={() => requestDelete(e)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,opacity:0.8,padding:"2px 4px"}}>🗑️</button>
                       </div>
                     </div>
                   ))}
@@ -1288,8 +1148,8 @@
           {/* date control — on top, all modes; single date for Quick, multi-date otherwise */}
           <div style={{ marginTop: 12 }}>
             <button onClick={() => (calOpen ? setCalOpen(false) : openCal())} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 14px", borderRadius: 12, border: "none", cursor: "pointer", fontFamily: "inherit", background: C.input, boxShadow: `inset 0 0 0 1px ${C.border}` }}>
-              <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, fontWeight: 600, color: "#fff" }}><Icon name="calendar" size={15}/>{dateLabel}</span>
-              <span style={{ color: C.muted, fontSize: 11, display: "inline-flex", alignItems: "center" }}><Icon name="chevronDown" size={14} style={{ transform: calOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }}/></span>
+              <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, fontWeight: 600, color: "#fff" }}>📅 {dateLabel}</span>
+              <span style={{ color: C.muted, fontSize: 11 }}>{calOpen ? "▴" : "▾"}</span>
             </button>
             {calOpen && (
               <div className="cm-slide-in" style={{ marginTop: 8 }}>
@@ -1391,9 +1251,9 @@
             <button onClick={() => quick(yest)} style={{ ...chip(single ? (dates.length === 1 && dates[0] === ymdLocal(yest)) : (counts[ymdLocal(yest)] > 0), theme.primary), flex: 1, justifyContent: "center" }}>Yesterday</button>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-            <button onClick={() => setView((v) => v.m === 0 ? { y: v.y - 1, m: 11 } : { ...v, m: v.m - 1 })} style={{ background: C.input, border: "none", color: C.muted, width: 28, height: 28, borderRadius: 8, cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Icon name="chevronLeft" size={15}/></button>
+            <button onClick={() => setView((v) => v.m === 0 ? { y: v.y - 1, m: 11 } : { ...v, m: v.m - 1 })} style={{ background: C.input, border: "none", color: C.muted, width: 28, height: 28, borderRadius: 8, cursor: "pointer" }}>◀</button>
             <span style={{ fontSize: 13, fontWeight: 600, color: "#fff" }}>{MONTHS_FULL[view.m]} {view.y}</span>
-            <button onClick={() => setView((v) => v.m === 11 ? { y: v.y + 1, m: 0 } : { ...v, m: v.m + 1 })} style={{ background: C.input, border: "none", color: C.muted, width: 28, height: 28, borderRadius: 8, cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Icon name="chevronRight" size={15}/></button>
+            <button onClick={() => setView((v) => v.m === 11 ? { y: v.y + 1, m: 0 } : { ...v, m: v.m + 1 })} style={{ background: C.input, border: "none", color: C.muted, width: 28, height: 28, borderRadius: 8, cursor: "pointer" }}>▶</button>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 3 }}>
             {["M","T","W","T","F","S","S"].map((d, i) => <div key={i} style={{ textAlign: "center", fontSize: 9, color: C.dim, padding: 2 }}>{d}</div>)}
@@ -1549,7 +1409,7 @@
       });
 
       return (
-        <div style={{maxWidth:680,margin:"0 auto"}}>
+        <div style={{maxWidth:560,margin:"0 auto"}}>
           {toast && (
             <div style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:999,padding:"10px 20px",borderRadius:10,fontSize:12,fontWeight:500,background:toast.type==="success"?theme.success:theme.danger,color:"#fff"}}>
               {toast.type==="success"?"✅":"❌"} {toast.msg}
@@ -1557,28 +1417,25 @@
           )}
 
           <div style={{display:"flex",borderBottom:`1px solid ${theme.cardBorder}`,marginBottom:16,marginTop:8}}>
-            <button onClick={() => setActiveTab("categories")} style={tabStyle(activeTab==="categories")}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="folder" size={14}/>Categories</span></button>
-            <button onClick={() => setActiveTab("shops")} style={tabStyle(activeTab==="shops")}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="store" size={14}/>Shops</span></button>
-            <button onClick={() => setActiveTab("tags")} style={tabStyle(activeTab==="tags")}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="tag" size={14}/>Tags</span></button>
-            <button onClick={() => setActiveTab("triggers")} style={tabStyle(activeTab==="triggers")}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="pin" size={14}/>Triggers</span></button>
+            <button onClick={() => setActiveTab("categories")} style={tabStyle(activeTab==="categories")}>📂 Categories</button>
+            <button onClick={() => setActiveTab("shops")} style={tabStyle(activeTab==="shops")}>🏪 Shops</button>
+            <button onClick={() => setActiveTab("tags")} style={tabStyle(activeTab==="tags")}>🏷️ Tags</button>
           </div>
-
-          {activeTab === "triggers" && <LocationTriggersView />}
 
           {/* CATEGORIES TAB */}
           {activeTab === "categories" && (
             <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:14,padding:"16px"}}>
               {categories.map(cat => (
                 <div key={cat.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 12px",background:theme.inputBg,borderRadius:8,marginBottom:8}}>
-                  <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0,flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
                     <span style={{fontSize:20}}>{cat.icon}</span>
-                    <div style={{minWidth:0}}>
+                    <div>
                       <div style={{color:theme.text,fontSize:13,fontWeight:500,display:"flex",alignItems:"center",gap:7}}>{cat.name}<span style={{width:9,height:9,borderRadius:3,background:cat.color,display:"inline-block",flexShrink:0}}/></div>
                       <div style={{color:theme.textDim,fontSize:10,whiteSpace:"nowrap"}}>{getCategoryUsage(cat.name)} expenses</div>
                     </div>
                     <div style={{width:0,height:0,display:"none"}}/>
                   </div>
-                  <button onClick={() => setEditingCat({ ...cat, originalName: cat.name })} style={{background:"none",border:"none",cursor:"pointer",padding:"3px 5px",color:theme.textMuted,display:"inline-flex"}}><Icon name="pencil" size={15}/></button>
+                  <button onClick={() => setEditingCat({ ...cat, originalName: cat.name })} style={{background:"none",border:"none",cursor:"pointer",fontSize:12}}>✏️</button>
                 </div>
               ))}
               {!showAddCat ? (
@@ -1618,8 +1475,8 @@
                         </div>
                       </div>
                       <div style={{display:"flex",gap:6}}>
-                        <button onClick={() => setEditingShop({ ...shop, originalName: shop.name })} style={{background:"none",border:"none",cursor:"pointer",padding:"3px 5px",color:theme.textMuted,display:"inline-flex"}}><Icon name="pencil" size={15}/></button>
-                        <button onClick={() => handleDeleteShop(shop.id)} style={{background:"none",border:"none",cursor:"pointer",padding:"3px 5px",color:theme.danger,display:"inline-flex"}}><Icon name="trash" size={15}/></button>
+                        <button onClick={() => setEditingShop({ ...shop, originalName: shop.name })} style={{background:"none",border:"none",cursor:"pointer",fontSize:12}}>✏️</button>
+                        <button onClick={() => handleDeleteShop(shop.id)} style={{background:"none",border:"none",cursor:"pointer",fontSize:12,color:theme.danger}}>🗑️</button>
                       </div>
                     </div>
                   ))}
@@ -1673,8 +1530,8 @@
                     <div style={{width:0,height:0,display:"none"}}/>
                   </div>
                   <div style={{display:"flex",gap:6}}>
-                    <button onClick={() => setEditingTag({ ...tag, originalName: tag.name })} style={{background:"none",border:"none",cursor:"pointer",padding:"3px 5px",color:theme.textMuted,display:"inline-flex"}}><Icon name="pencil" size={15}/></button>
-                    <button onClick={() => handleDeleteTag(tag.id)} style={{background:"none",border:"none",cursor:"pointer",padding:"3px 5px",color:theme.danger,display:"inline-flex"}}><Icon name="trash" size={15}/></button>
+                    <button onClick={() => setEditingTag({ ...tag, originalName: tag.name })} style={{background:"none",border:"none",cursor:"pointer",fontSize:12}}>✏️</button>
+                    <button onClick={() => handleDeleteTag(tag.id)} style={{background:"none",border:"none",cursor:"pointer",fontSize:12,color:theme.danger}}>🗑️</button>
                   </div>
                 </div>
               ))}
@@ -1886,8 +1743,8 @@
                     </td>
                     <td style={{padding:"8px 6px",color:"#fff",fontWeight:600}}>{fmt(tx.amount)}</td>
                     <td style={{padding:"8px 6px"}}>
-                      <button title="Edit" onClick={() => openEdit(tx)} style={{background:"none",border:"none",cursor:"pointer",opacity:0.85,padding:"3px 5px",color:theme.textMuted,display:"inline-flex"}}><Icon name="pencil" size={15}/></button>
-                      <button title="Delete" onClick={() => requestDelete(tx)} style={{background:"none",border:"none",cursor:"pointer",opacity:0.85,padding:"3px 5px",color:theme.danger,display:"inline-flex"}}><Icon name="trash" size={15}/></button>
+                      <button title="Edit" onClick={() => openEdit(tx)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,opacity:0.8,padding:"2px 4px"}}>✏️</button>
+                      <button title="Delete" onClick={() => requestDelete(tx)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,opacity:0.8,padding:"2px 4px"}}>🗑️</button>
                     </td>
                   </tr>
                 ))}
@@ -2496,7 +2353,7 @@
             }}>{saving ? "Saving…" : "Save"}</button>
           </div>
           {onDelete && (
-            <button onClick={onDelete} style={{ width: "100%", marginTop: 10, padding: "9px", borderRadius: 8, border: `1px solid ${theme.danger}40`, background: "transparent", color: theme.danger, cursor: "pointer", fontSize: 12, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}><Icon name="trash" size={14}/>Delete this recurring entry</button>
+            <button onClick={onDelete} style={{ width: "100%", marginTop: 10, padding: "9px", borderRadius: 8, border: `1px solid ${theme.danger}40`, background: "transparent", color: theme.danger, cursor: "pointer", fontSize: 12 }}>🗑️ Delete this recurring entry</button>
           )}
         </div>
       );
@@ -2689,12 +2546,12 @@
             onTouchStart={() => setDragEnabledId(item.id)}
             title="Drag to reorder"
             style={{ cursor: "grab", color: theme.textDim, fontSize: 16, padding: "0 2px", userSelect: "none", touchAction: "none" }}
-          ><Icon name="grip" size={16}/></span>
+          >⠿</span>
         </div>
       );
 
       return (
-        <div style={{ maxWidth: 680, margin: "0 auto", paddingBottom: 80 }}>
+        <div style={{ maxWidth: 560, margin: "0 auto", paddingBottom: 80 }}>
           {toast && (
             <div className="cm-toast" style={{ position: "fixed", top: 16, right: 16, zIndex: 999, padding: "10px 16px", borderRadius: 10, fontSize: 13, fontWeight: 500, background: theme.primary, color: "#fff", boxShadow: "0 4px 16px rgba(0,0,0,0.3)" }}>
               {toast}
@@ -2702,12 +2559,12 @@
           )}
 
           <div style={{ marginTop: 8, marginBottom: 12 }}>
-            <h3 style={{ fontSize: 15, fontWeight: 700, color: "#fff", margin: 0, display: "flex", alignItems: "center", gap: 8 }}><Icon name="repeat" size={16}/>Recurring</h3>
+            <h3 style={{ fontSize: 15, fontWeight: 700, color: "#fff", margin: 0 }}>🔁 Recurring</h3>
             <p style={{ fontSize: 11, color: theme.textDim, margin: "4px 0 0" }}>Templates for expenses you log regularly.</p>
           </div>
 
           {loading ? (
-            <div style={{ textAlign: "center", padding: 40, color: theme.textMuted }}>Loading…</div>
+            <div style={{ textAlign: "center", padding: 40, color: theme.textMuted }}>⏳ Loading…</div>
           ) : (
             FREQ_ORDER.map(freq => (
               <div key={freq} style={{ marginBottom: 18 }}>
@@ -2728,10 +2585,10 @@
           {/* Floating add button */}
           <button onClick={() => { vibrate(10); setShowAdd(true); }} title="Add recurring entry" style={{
             position: "fixed", right: 20, bottom: 20, zIndex: 80, width: 54, height: 54, borderRadius: "50%",
-            border: "none", cursor: "pointer", color: "#fff", lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
+            border: "none", cursor: "pointer", fontSize: 26, color: "#fff", lineHeight: 1,
             background: `linear-gradient(135deg,${theme.primary},${theme.accent})`,
             boxShadow: `0 6px 20px ${theme.primaryGlow}`,
-          }}><Icon name="add" size={26} sw={2.2}/></button>
+          }}>+</button>
 
           {/* Add modal */}
           {showAdd && (
@@ -2744,7 +2601,7 @@
           {/* Edit modal */}
           {editing && (
             <Modal onClose={() => setEditing(null)}>
-              <h4 style={{ color: "#fff", fontSize: 14, margin: "0 0 12px 0", display: "flex", alignItems: "center", gap: 7 }}><Icon name="pencil" size={15}/>Edit Recurring Entry</h4>
+              <h4 style={{ color: "#fff", fontSize: 14, margin: "0 0 12px 0" }}>✏️ Edit Recurring Entry</h4>
               <RecurringForm
                 initial={editing}
                 saving={saving}
@@ -2811,7 +2668,7 @@
         <Modal sheet onClose={onClose}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
             <div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", gap: 8 }}><Icon name="repeat" size={16}/>Recurring payments due</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#fff" }}>🔁 Recurring payments due</div>
               <div style={{ fontSize: 11.5, color: theme.textMuted, marginTop: 3 }}>{items.length} entries waiting</div>
             </div>
             <button onClick={onClose} style={closeBtn}>×</button>
@@ -2866,226 +2723,6 @@
             Close / Later
           </button>
         </Modal>
-      );
-    }
-
-    // ═══════════════════════════════════════════
-    //  LOCATION DUE MODAL  (geofence triggers — piled up, entered one by one)
-    // ═══════════════════════════════════════════
-    function LocationDueModal({ items, onAdd, onSkip, onSnooze, onResolve, onClose }) {
-      const { theme, getCatIcon, getCatColor, inputStyle } = useTheme();
-      const [busyId, setBusyId] = useState(null);
-      const [fadingId, setFadingId] = useState(null);
-      const [amtInputs, setAmtInputs] = useState({});
-      const setAmt = (id, v) => setAmtInputs((p) => ({ ...p, [id]: v }));
-
-      const finish = (id) => { setBusyId(null); onResolve(id); };
-      const fadeThenFinish = (id) => { setFadingId(id); setTimeout(() => { setFadingId(null); finish(id); }, 300); };
-      const doAdd = async (t, amountOverride) => {
-        if (busyId) return; setBusyId(t.id);
-        const res = await onAdd(t, amountOverride);
-        if (!res || !res.ok) { setBusyId(null); return; }
-        fadeThenFinish(t.id);
-      };
-      const doSkip = async (t) => {
-        if (busyId) return; setBusyId(t.id);
-        const res = await onSkip(t);
-        if (!res || !res.ok) { setBusyId(null); return; }
-        fadeThenFinish(t.id);
-      };
-      const doSnooze = (t) => { if (busyId) return; onSnooze(t); finish(t.id); };
-
-      const closeBtn = { border: "none", background: theme.inputBg, color: theme.textMuted, width: 30, height: 30, borderRadius: 15, fontSize: 17, cursor: "pointer", boxShadow: `inset 0 0 0 1px ${theme.cardBorder}`, flexShrink: 0 };
-      const addBtn = { flex: 1, padding: "8px 6px", borderRadius: 9, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})` };
-      const skipBtn = { flex: 1, padding: "8px 6px", borderRadius: 9, cursor: "pointer", fontSize: 12, fontWeight: 600, color: theme.textMuted, background: "transparent", border: `1px solid ${theme.cardBorder}`, fontFamily: "inherit" };
-      const snoozeBtn = { flex: 1, padding: "8px 6px", borderRadius: 9, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, color: theme.textDim, background: "transparent", fontFamily: "inherit" };
-
-      return (
-        <Modal sheet onClose={onClose}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
-            <div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", gap: 8 }}><Icon name="pin" size={16}/>Nearby payments</div>
-              <div style={{ fontSize: 11.5, color: theme.textMuted, marginTop: 3 }}>{items.length} {items.length === 1 ? "trigger" : "triggers"} at this spot</div>
-            </div>
-            <button onClick={onClose} style={closeBtn}>×</button>
-          </div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {items.map((t) => {
-              const busy = busyId === t.id;
-              const fading = fadingId === t.id;
-              const col = getCatColor(t.category);
-              const needsAmount = t.amount == null;
-              const rawAmt = amtInputs[t.id];
-              const amtNum = parseInt(rawAmt, 10);
-              const amtValid = rawAmt != null && String(rawAmt).trim() !== "" && Number.isInteger(amtNum) && amtNum > 0;
-              const place = t._simulated ? "simulated here" : (t._distance != null ? `within ${t._distance}m` : "nearby");
-              const win = (t.startTime && t.endTime) ? `${t.startTime}–${t.endTime}` : "any time";
-              return (
-                <div key={t.id} className={fading ? "cm-fade-out" : undefined} style={{ borderRadius: 12, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${theme.cardBorder}`, padding: "11px 12px", opacity: busy && !fading ? 0.6 : 1 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 9 }}>
-                    <span style={{ width: 30, height: 30, borderRadius: 9, background: `${col}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>{getCatIcon(t.category)}</span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13.5, fontWeight: 600, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.name}</div>
-                      <div style={{ fontSize: 10.5, color: theme.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.shop} · {place} · {win}</div>
-                    </div>
-                    <span style={{ fontSize: 14, fontWeight: 700, color: "#fff", whiteSpace: "nowrap" }}>{needsAmount ? "—" : fmt(t.amount)}</span>
-                  </div>
-                  {needsAmount && (
-                    <input type="number" inputMode="numeric" autoFocus value={rawAmt ?? ""} onChange={(e) => setAmt(t.id, e.target.value)} placeholder="¥ Enter amount" disabled={busy} style={{ ...inputStyle, fontSize: 14, fontWeight: 600, marginBottom: 6 }} />
-                  )}
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <button onClick={() => doAdd(t, needsAmount ? amtNum : undefined)} disabled={busy || (needsAmount && !amtValid)} style={{ ...addBtn, opacity: (needsAmount && !amtValid) ? 0.5 : 1, cursor: (needsAmount && !amtValid) ? "not-allowed" : "pointer" }}>Add</button>
-                    <button onClick={() => doSkip(t)} disabled={busy} style={skipBtn}>Skip</button>
-                    <button onClick={() => doSnooze(t)} disabled={busy} style={snoozeBtn}>Snooze</button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          <button onClick={onClose} style={{ width: "100%", marginTop: 14, padding: "11px", borderRadius: 11, border: `1px solid ${theme.cardBorder}`, background: theme.inputBg, color: theme.textMuted, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-            Close / Later
-          </button>
-        </Modal>
-      );
-    }
-
-    // ═══════════════════════════════════════════
-    //  LOCATION TRIGGERS SETTINGS  (manage geofence + time-window rules)
-    // ═══════════════════════════════════════════
-    function LocationTriggersView() {
-      const { theme, inputStyle, categories, shops, getCatIcon, getCatColor, locTriggers, reloadTriggers, checkLocation, locStatus } = useTheme();
-      const [editing, setEditing] = useState(null);
-      const [showForm, setShowForm] = useState(false);
-      const [capturing, setCapturing] = useState(false);
-      const [toast, setToast] = useState(null);
-      const flash = (m) => { setToast(m); setTimeout(() => setToast(null), 2200); };
-
-      const newId = () => "lt_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-      const blank = () => ({ id: newId(), name: "", category: categories[0]?.name || "", shop: "", amount: "", radius: 150, startTime: "08:00", endTime: "10:00", lat: null, lng: null, expense_type: "normal", tags: "", is_active: true });
-      const startNew = () => { setEditing(blank()); setShowForm(true); };
-      const startEdit = (t) => { setEditing({ ...t, amount: t.amount == null ? "" : String(t.amount) }); setShowForm(true); };
-      const cancel = () => { setShowForm(false); setEditing(null); };
-      const set = (k, v) => setEditing((e) => ({ ...e, [k]: v }));
-
-      const captureGPS = () => {
-        if (!("geolocation" in navigator)) { flash("Location not available here"); return; }
-        setCapturing(true);
-        navigator.geolocation.getCurrentPosition(
-          (p) => { setEditing((e) => ({ ...e, lat: +p.coords.latitude.toFixed(6), lng: +p.coords.longitude.toFixed(6) })); setCapturing(false); flash("Pinned your location"); },
-          (err) => { setCapturing(false); flash(err.code === 1 ? "Permission denied — use sample spot" : "Couldn't locate — use sample spot"); },
-          { enableHighAccuracy: true, timeout: 8000 }
-        );
-      };
-      const useSample = () => { setEditing((e) => ({ ...e, lat: 35.6762, lng: 139.6503 })); flash("Sample spot pinned (Tokyo)"); };
-
-      const save = () => {
-        const e = editing;
-        if (!e.name.trim()) { flash("Name required"); return; }
-        if (!e.category || !e.shop.trim()) { flash("Category + shop required"); return; }
-        if (e.lat == null || e.lng == null) { flash("Pin a location first"); return; }
-        const rec = { ...e, name: e.name.trim(), shop: e.shop.trim(), amount: e.amount === "" ? null : Number(e.amount), radius: Number(e.radius) || 150 };
-        const list = getStoredTriggers();
-        const i = list.findIndex((x) => x.id === rec.id);
-        if (i >= 0) list[i] = rec; else list.push(rec);
-        setStoredTriggers(list); reloadTriggers(); cancel(); flash("Saved");
-      };
-      const remove = (id) => { setStoredTriggers(getStoredTriggers().filter((x) => x.id !== id)); reloadTriggers(); };
-      const toggle = (t) => { setStoredTriggers(getStoredTriggers().map((x) => x.id === t.id ? { ...x, is_active: !x.is_active } : x)); reloadTriggers(); };
-
-      const formShops = editing ? shops.filter((s) => s.category === editing.category) : [];
-      const card = { background: theme.inputBg, borderRadius: 10, padding: "11px 12px", marginBottom: 8 };
-      const lbl = { fontSize: 10, fontWeight: 600, letterSpacing: 0.6, textTransform: "uppercase", color: theme.textDim, display: "block", marginBottom: 5 };
-      const miniBtn = (bg, fg) => ({ padding: "7px 11px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit", background: bg, color: fg });
-
-      return (
-        <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 14, padding: 16 }}>
-          {toast && <div style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 1000, padding: "9px 16px", borderRadius: 9, fontSize: 12, fontWeight: 600, background: theme.primary, color: "#fff" }}>{toast}</div>}
-
-          <p style={{ fontSize: 11.5, color: theme.textDim, margin: "0 0 12px", lineHeight: 1.5 }}>
-            Fire a payment prompt when you reach a place during a time window. Matches pile up and you enter them one by one.
-          </p>
-
-          <div style={{ display: "flex", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
-            <button onClick={() => checkLocation()} style={{ ...miniBtn(theme.primary, "#fff"), display: "inline-flex", alignItems: "center", gap: 6 }}><Icon name="pin" size={14}/>Check in now</button>
-            <button onClick={startNew} style={miniBtn(theme.inputBg, theme.text)}>+ New trigger</button>
-          </div>
-          {locStatus && <div style={{ fontSize: 11, color: theme.textMuted, marginBottom: 10 }}>{locStatus}</div>}
-
-          {showForm && editing && (
-            <div style={{ ...card, padding: 14, marginTop: 6, marginBottom: 14, boxShadow: `inset 0 0 0 1px ${theme.primary}55` }}>
-              <label style={lbl}>Name</label>
-              <input value={editing.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Morning konbini run" style={{ ...inputStyle, marginBottom: 10 }} />
-              <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={lbl}>Category</label>
-                  <select value={editing.category} onChange={(e) => { set("category", e.target.value); set("shop", ""); }} style={{ ...inputStyle, cursor: "pointer" }}>
-                    {categories.map((c) => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
-                  </select>
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label style={lbl}>Amount (optional)</label>
-                  <input type="number" inputMode="numeric" value={editing.amount} onChange={(e) => set("amount", e.target.value)} placeholder="ask each time" style={inputStyle} />
-                </div>
-              </div>
-              <label style={lbl}>Shop</label>
-              {formShops.length > 0 && (
-                <select value={formShops.some((s) => s.name === editing.shop) ? editing.shop : ""} onChange={(e) => e.target.value && set("shop", e.target.value)} style={{ ...inputStyle, cursor: "pointer", marginBottom: 6 }}>
-                  <option value="">Pick a shop…</option>
-                  {formShops.map((s) => <option key={s.id} value={s.name}>{s.is_favorite ? "⭐ " : ""}{s.name}</option>)}
-                </select>
-              )}
-              <input value={editing.shop} onChange={(e) => set("shop", e.target.value)} placeholder="Or type a shop name" style={{ ...inputStyle, marginBottom: 10 }} />
-              <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={lbl}>From</label>
-                  <input type="time" value={editing.startTime} onChange={(e) => set("startTime", e.target.value)} style={{ ...inputStyle, cursor: "pointer" }} />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label style={lbl}>To</label>
-                  <input type="time" value={editing.endTime} onChange={(e) => set("endTime", e.target.value)} style={{ ...inputStyle, cursor: "pointer" }} />
-                </div>
-                <div style={{ width: 92 }}>
-                  <label style={lbl}>Radius m</label>
-                  <input type="number" value={editing.radius} onChange={(e) => set("radius", e.target.value)} style={inputStyle} />
-                </div>
-              </div>
-              <label style={lbl}>Location</label>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
-                <button onClick={captureGPS} disabled={capturing} style={{ ...miniBtn(theme.primary, "#fff"), display: "inline-flex", alignItems: "center", gap: 6 }}>{capturing ? "Locating…" : <><Icon name="pin" size={14}/>Use my location</>}</button>
-                <button onClick={useSample} style={miniBtn(theme.inputBg, theme.text)}>Use sample spot</button>
-                <span style={{ fontSize: 11, color: editing.lat != null ? theme.success : theme.textDim }}>{editing.lat != null ? `${editing.lat}, ${editing.lng}` : "no location pinned"}</span>
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={save} style={{ ...miniBtn(theme.primary, "#fff"), flex: 1, padding: "10px" }}>Save trigger</button>
-                <button onClick={cancel} style={{ ...miniBtn("transparent", theme.textMuted), flex: 1, padding: "10px", boxShadow: `inset 0 0 0 1px ${theme.cardBorder}` }}>Cancel</button>
-              </div>
-            </div>
-          )}
-
-          {locTriggers.length === 0 && !showForm && (
-            <div style={{ textAlign: "center", padding: "26px 10px", color: theme.textDim, fontSize: 12 }}>No location triggers yet — tap "+ New trigger".</div>
-          )}
-
-          {locTriggers.map((t) => {
-            const col = getCatColor(t.category);
-            const win = (t.startTime && t.endTime) ? `${t.startTime}–${t.endTime}` : "any time";
-            return (
-              <div key={t.id} style={{ ...card, display: "flex", alignItems: "center", gap: 8, opacity: t.is_active ? 1 : 0.5 }}>
-                <span style={{ width: 30, height: 30, borderRadius: 9, background: `${col}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>{getCatIcon(t.category)}</span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.name || "Untitled"}</div>
-                  <div style={{ fontSize: 10.5, color: theme.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.shop} · {win} · {t.radius || 150}m{t.amount != null ? ` · ${fmt(t.amount)}` : ""}</div>
-                </div>
-                <button onClick={() => checkLocation({ simTriggerId: t.id })} title="Simulate being here" style={miniBtn(`${theme.primary}22`, theme.primary)}>Test</button>
-                <button onClick={() => toggle(t)} style={{ ...miniBtn(t.is_active ? `${theme.success}22` : theme.inputBg, t.is_active ? theme.success : theme.textDim), minWidth: 42 }}>{t.is_active ? "On" : "Off"}</button>
-                <button onClick={() => startEdit(t)} style={{ background: "none", border: "none", cursor: "pointer", padding: "3px 5px", color: theme.textMuted, display: "inline-flex" }}><Icon name="pencil" size={15}/></button>
-                <button onClick={() => remove(t.id)} style={{ background: "none", border: "none", cursor: "pointer", padding: "3px 5px", color: theme.danger, opacity: 0.85, display: "inline-flex" }}><Icon name="trash" size={15}/></button>
-              </div>
-            );
-          })}
-        </div>
       );
     }
 
