@@ -225,9 +225,12 @@
       if (!t.is_active) return false;
       if (sessionDismissed.includes(t.id)) return false;
       if (!opts.ignoreDay && t.last_fired_date === ymdToday()) return false;
-      if (!opts.ignoreTime && !inTimeWindow(now, t.startTime, t.endTime)) return false;
-      if (opts.ignoreDistance) return true;
-      return distanceMeters(pos, { lat: t.lat, lng: t.lng }) <= (t.radius || 150);
+      const hasTime = !!(t.startTime && t.endTime);
+      const hasLoc = t.lat != null && t.lng != null;
+      if (!hasTime && !hasLoc) return false;
+      if (hasTime && !opts.ignoreTime && !inTimeWindow(now, t.startTime, t.endTime)) return false;
+      if (hasLoc && !opts.ignoreDistance && distanceMeters(pos, { lat: t.lat, lng: t.lng }) > (t.radius || 150)) return false;
+      return true;
     }
 
     // "Due Mon, Jul 27" from a 'YYYY-MM-DD' string (local components, no Date parsing of the string)
@@ -414,7 +417,7 @@
         const run = (pos, simMode) => {
           const matched = fresh
             .filter((t) => isLocationDue(t, pos, now, locDismissed, { ignoreDistance: simMode, ignoreDay: simMode, ignoreTime: simMode }))
-            .map((t) => simMode ? { ...t, _simulated: true } : { ...t, _distance: Math.round(distanceMeters(pos, { lat: t.lat, lng: t.lng })) });
+            .map((t) => simMode ? { ...t, _simulated: true } : (t.lat != null ? { ...t, _distance: Math.round(distanceMeters(pos, { lat: t.lat, lng: t.lng })) } : { ...t, _timeOnly: true }));
           if (matched.length) { setLocStatus(""); setLocDueList(matched); setLocDueOpen(true); }
           else { const m = "No payment triggers here right now."; setLocStatus(m); if (!silent) flashDue(m); }
         };
@@ -428,13 +431,53 @@
         );
       }, [locDismissed]); // eslint-disable-line react-hooks/exhaustive-deps
       useEffect(() => { if (locDueOpen && locDueList.length === 0) setLocDueOpen(false); }, [locDueList, locDueOpen]);
-      // Auto check once after data settles (GPS is often blocked in embedded
-      // previews; when it is, the Triggers tab's Test button simulates a spot).
+      // Continuous location watch + dwell evaluator. A location rule fires only
+      // after the configured dwell time INSIDE its radius (not just passing by);
+      // a time rule fires when the clock enters its window. GPS is usually blocked
+      // in embedded previews — use a trigger Test button to simulate there.
+      const posRef = useRef(null);
+      const dwellRef = useRef({});
       useEffect(() => {
-        if (loading || locShownRef.current) return;
-        locShownRef.current = true;
-        if (getStoredTriggers().length) checkLocation({ silent: true });
-      }, [loading]); // eslint-disable-line react-hooks/exhaustive-deps
+        if (loading) return;
+        let watchId = null;
+        if ("geolocation" in navigator) {
+          watchId = navigator.geolocation.watchPosition(
+            (p) => { posRef.current = { lat: p.coords.latitude, lng: p.coords.longitude }; },
+            () => {}, { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 }
+          );
+        }
+        const tick = () => {
+          const now = new Date();
+          const pos = posRef.current;
+          const fire = [];
+          getStoredTriggers().forEach((tg) => {
+            if (!tg.is_active || locDismissed.includes(tg.id) || tg.last_fired_date === ymdToday()) return;
+            const hasTime = !!(tg.startTime && tg.endTime);
+            const hasLoc = tg.lat != null && tg.lng != null;
+            if (!hasTime && !hasLoc) return;
+            const timeOk = !hasTime || inTimeWindow(now, tg.startTime, tg.endTime);
+            let locOk = true, dist = null;
+            if (hasLoc) {
+              if (!pos) { dwellRef.current[tg.id] = null; locOk = false; }
+              else {
+                dist = distanceMeters(pos, { lat: tg.lat, lng: tg.lng });
+                if (dist <= (tg.radius || 150)) {
+                  if (dwellRef.current[tg.id] == null) dwellRef.current[tg.id] = Date.now();
+                  locOk = (Date.now() - dwellRef.current[tg.id]) >= (Number(tg.dwellMinutes) || 0) * 60000;
+                } else { dwellRef.current[tg.id] = null; locOk = false; }
+              }
+            }
+            if (timeOk && locOk) fire.push(hasLoc ? { ...tg, _distance: Math.round(dist) } : { ...tg, _timeOnly: true });
+          });
+          if (fire.length) {
+            setLocDueList((prev) => { const ids = new Set(prev.map((x) => x.id)); return [...prev, ...fire.filter((f) => !ids.has(f.id))]; });
+            setLocDueOpen(true);
+          }
+        };
+        tick();
+        const iv = setInterval(tick, 15000);
+        return () => { if (watchId != null) navigator.geolocation.clearWatch(watchId); clearInterval(iv); };
+      }, [loading, locDismissed]); // eslint-disable-line react-hooks/exhaustive-deps
 
       const locAdd = async (t, amountOverride) => {
         const amount = amountOverride != null ? amountOverride : t.amount;
@@ -2919,7 +2962,7 @@
               const rawAmt = amtInputs[t.id];
               const amtNum = parseInt(rawAmt, 10);
               const amtValid = rawAmt != null && String(rawAmt).trim() !== "" && Number.isInteger(amtNum) && amtNum > 0;
-              const place = t._simulated ? "simulated here" : (t._distance != null ? `within ${t._distance}m` : "nearby");
+              const place = t._simulated ? "simulated here" : t._timeOnly ? "time window" : (t._distance != null ? `within ${t._distance}m` : "nearby");
               const win = (t.startTime && t.endTime) ? `${t.startTime}–${t.endTime}` : "any time";
               return (
                 <div key={t.id} className={fading ? "cm-fade-out" : undefined} style={{ borderRadius: 12, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${theme.cardBorder}`, padding: "11px 12px", opacity: busy && !fading ? 0.6 : 1 }}>
@@ -2963,9 +3006,9 @@
       const flash = (m) => { setToast(m); setTimeout(() => setToast(null), 2200); };
 
       const newId = () => "lt_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-      const blank = () => ({ id: newId(), name: "", category: categories[0]?.name || "", shop: "", amount: "", radius: 150, startTime: "08:00", endTime: "10:00", lat: null, lng: null, expense_type: "normal", tags: "", is_active: true });
+      const blank = () => ({ id: newId(), name: "", category: categories[0]?.name || "", shop: "", amount: "", cond: "both", radius: 150, dwellMinutes: 2, startTime: "08:00", endTime: "10:00", lat: null, lng: null, expense_type: "normal", tags: "", is_active: true });
       const startNew = () => { setEditing(blank()); setShowForm(true); };
-      const startEdit = (t) => { setEditing({ ...t, amount: t.amount == null ? "" : String(t.amount) }); setShowForm(true); };
+      const startEdit = (t) => { setEditing({ ...t, amount: t.amount == null ? "" : String(t.amount), cond: t.cond || (t.lat != null && t.startTime ? "both" : t.lat != null ? "location" : "time"), dwellMinutes: t.dwellMinutes != null ? t.dwellMinutes : 0 }); setShowForm(true); };
       const cancel = () => { setShowForm(false); setEditing(null); };
       const set = (k, v) => setEditing((e) => ({ ...e, [k]: v }));
 
@@ -2984,8 +3027,11 @@
         const e = editing;
         if (!e.name.trim()) { flash("Name required"); return; }
         if (!e.category || !e.shop.trim()) { flash("Category + shop required"); return; }
-        if (e.lat == null || e.lng == null) { flash("Pin a location first"); return; }
-        const rec = { ...e, name: e.name.trim(), shop: e.shop.trim(), amount: e.amount === "" ? null : Number(e.amount), radius: Number(e.radius) || 150 };
+        const wantTime = e.cond === "time" || e.cond === "both";
+        const wantLoc = e.cond === "location" || e.cond === "both";
+        if (wantTime && (!e.startTime || !e.endTime)) { flash("Set a time window"); return; }
+        if (wantLoc && (e.lat == null || e.lng == null)) { flash("Pin a location first"); return; }
+        const rec = { ...e, name: e.name.trim(), shop: e.shop.trim(), amount: e.amount === "" ? null : Number(e.amount), radius: Number(e.radius) || 150, dwellMinutes: Math.max(0, Number(e.dwellMinutes) || 0), startTime: wantTime ? e.startTime : null, endTime: wantTime ? e.endTime : null, lat: wantLoc ? e.lat : null, lng: wantLoc ? e.lng : null };
         const list = getStoredTriggers();
         const i = list.findIndex((x) => x.id === rec.id);
         if (i >= 0) list[i] = rec; else list.push(rec);
@@ -3004,7 +3050,7 @@
           {toast && <div style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 1000, padding: "9px 16px", borderRadius: 9, fontSize: 12, fontWeight: 600, background: theme.primary, color: "#fff" }}>{toast}</div>}
 
           <p style={{ fontSize: 11.5, color: theme.textDim, margin: "0 0 12px", lineHeight: 1.5 }}>
-            Fire a payment prompt when you reach a place during a time window. Matches pile up and you enter them one by one.
+            Fire a payment prompt by time of day, by staying at a place, or both. For a place you must stay inside the radius for the set minutes — not just pass by. Matches pile up; enter them one by one.
           </p>
 
           <div style={{ display: "flex", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
@@ -3037,26 +3083,44 @@
                 </select>
               )}
               <input value={editing.shop} onChange={(e) => set("shop", e.target.value)} placeholder="Or type a shop name" style={{ ...inputStyle, marginBottom: 10 }} />
-              <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={lbl}>From</label>
-                  <input type="time" value={editing.startTime} onChange={(e) => set("startTime", e.target.value)} style={{ ...inputStyle, cursor: "pointer" }} />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label style={lbl}>To</label>
-                  <input type="time" value={editing.endTime} onChange={(e) => set("endTime", e.target.value)} style={{ ...inputStyle, cursor: "pointer" }} />
-                </div>
-                <div style={{ width: 92 }}>
-                  <label style={lbl}>Radius m</label>
-                  <input type="number" value={editing.radius} onChange={(e) => set("radius", e.target.value)} style={inputStyle} />
-                </div>
+              <label style={lbl}>Trigger when</label>
+              <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+                {[["time", "Time of day"], ["location", "At a place"], ["both", "Both"]].map(([val, lt]) => (
+                  <button key={val} onClick={() => set("cond", val)} style={{ flex: 1, padding: "8px 6px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 11.5, fontWeight: 600, fontFamily: "inherit", background: editing.cond === val ? theme.primary : theme.inputBg, color: editing.cond === val ? "#fff" : theme.textMuted }}>{lt}</button>
+                ))}
               </div>
-              <label style={lbl}>Location</label>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
-                <button onClick={captureGPS} disabled={capturing} style={{ ...miniBtn(theme.primary, "#fff"), display: "inline-flex", alignItems: "center", gap: 6 }}>{capturing ? "Locating…" : <><Icon name="pin" size={14}/>Use my location</>}</button>
-                <button onClick={useSample} style={miniBtn(theme.inputBg, theme.text)}>Use sample spot</button>
-                <span style={{ fontSize: 11, color: editing.lat != null ? theme.success : theme.textDim }}>{editing.lat != null ? `${editing.lat}, ${editing.lng}` : "no location pinned"}</span>
-              </div>
+              {(editing.cond === "time" || editing.cond === "both") && (
+                <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={lbl}>From</label>
+                    <input type="time" value={editing.startTime || ""} onChange={(e) => set("startTime", e.target.value)} style={{ ...inputStyle, cursor: "pointer" }} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={lbl}>To</label>
+                    <input type="time" value={editing.endTime || ""} onChange={(e) => set("endTime", e.target.value)} style={{ ...inputStyle, cursor: "pointer" }} />
+                  </div>
+                </div>
+              )}
+              {(editing.cond === "location" || editing.cond === "both") && (
+                <>
+                  <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                    <div style={{ flex: 1 }}>
+                      <label style={lbl}>Radius m</label>
+                      <input type="number" value={editing.radius} onChange={(e) => set("radius", e.target.value)} style={inputStyle} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label style={lbl}>Stay for (min)</label>
+                      <input type="number" value={editing.dwellMinutes} onChange={(e) => set("dwellMinutes", e.target.value)} style={inputStyle} />
+                    </div>
+                  </div>
+                  <label style={lbl}>Location</label>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+                    <button onClick={captureGPS} disabled={capturing} style={{ ...miniBtn(theme.primary, "#fff"), display: "inline-flex", alignItems: "center", gap: 6 }}>{capturing ? "Locating…" : <><Icon name="pin" size={14}/>Use my location</>}</button>
+                    <button onClick={useSample} style={miniBtn(theme.inputBg, theme.text)}>Use sample spot</button>
+                    <span style={{ fontSize: 11, color: editing.lat != null ? theme.success : theme.textDim }}>{editing.lat != null ? `${editing.lat}, ${editing.lng}` : "no location pinned"}</span>
+                  </div>
+                </>
+              )}
               <div style={{ display: "flex", gap: 8 }}>
                 <button onClick={save} style={{ ...miniBtn(theme.primary, "#fff"), flex: 1, padding: "10px" }}>Save trigger</button>
                 <button onClick={cancel} style={{ ...miniBtn("transparent", theme.textMuted), flex: 1, padding: "10px", boxShadow: `inset 0 0 0 1px ${theme.cardBorder}` }}>Cancel</button>
@@ -3070,13 +3134,16 @@
 
           {locTriggers.map((t) => {
             const col = getCatColor(t.category);
-            const win = (t.startTime && t.endTime) ? `${t.startTime}–${t.endTime}` : "any time";
+            const hasTime = !!(t.startTime && t.endTime), hasLoc = t.lat != null;
+            const bits = [];
+            if (hasTime) bits.push(`${t.startTime}–${t.endTime}`);
+            if (hasLoc) bits.push(`${t.radius || 150}m` + (Number(t.dwellMinutes) > 0 ? ` · stay ${t.dwellMinutes}m` : ""));
             return (
               <div key={t.id} style={{ ...card, display: "flex", alignItems: "center", gap: 8, opacity: t.is_active ? 1 : 0.5 }}>
                 <span style={{ width: 30, height: 30, borderRadius: 9, background: `${col}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>{getCatIcon(t.category)}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.name || "Untitled"}</div>
-                  <div style={{ fontSize: 10.5, color: theme.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.shop} · {win} · {t.radius || 150}m{t.amount != null ? ` · ${fmt(t.amount)}` : ""}</div>
+                  <div style={{ fontSize: 10.5, color: theme.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.shop}{bits.length ? " · " + bits.join(" · ") : ""}{t.amount != null ? ` · ${fmt(t.amount)}` : ""}</div>
                 </div>
                 <button onClick={() => checkLocation({ simTriggerId: t.id })} title="Simulate being here" style={miniBtn(`${theme.primary}22`, theme.primary)}>Test</button>
                 <button onClick={() => toggle(t)} style={{ ...miniBtn(t.is_active ? `${theme.success}22` : theme.inputBg, t.is_active ? theme.success : theme.textDim), minWidth: 42 }}>{t.is_active ? "On" : "Off"}</button>
