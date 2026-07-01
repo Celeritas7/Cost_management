@@ -226,17 +226,41 @@
 
     // ═════════════════════════════════════════════════════════════
     //  LOCATION-BASED PAYMENT TRIGGERS  (geofence + time-of-day window)
-    //  Stored locally (no DB changes). A trigger fires when you are within
+    //  Synced to Supabase (cost_management_location_triggers). A trigger fires when you are within
     //  `radius` metres of (lat,lng) AND the local clock is inside its
     //  [startTime,endTime] window — then it surfaces in a pile-up panel.
     // ═════════════════════════════════════════════════════════════
-    const LOC_TRIGGER_KEY = "cost_management_location_triggers";
-    function getStoredTriggers() {
-      try { const v = JSON.parse(localStorage.getItem(LOC_TRIGGER_KEY)); return Array.isArray(v) ? v : []; }
-      catch (e) { return []; }
+    const LOC_TRIGGER_TABLE = "cost_management_location_triggers";
+    // Supabase row (snake_case) → in-app trigger object (camelCase)
+    function triggerFromRow(r) {
+      return {
+        id: r.id, name: r.name, category: r.category, shop: r.shop || "",
+        amount: r.amount, cond: r.cond || "both", freq: r.freq || "daily",
+        monthDay: r.month_day == null ? 1 : r.month_day,
+        radius: r.radius == null ? 150 : r.radius,
+        dwellMinutes: r.dwell_minutes == null ? 0 : r.dwell_minutes,
+        startTime: r.start_time || null, endTime: r.end_time || null,
+        lat: r.lat, lng: r.lng,
+        expense_type: r.expense_type || "normal", tags: r.tags || "",
+        is_active: r.is_active !== false, last_fired_date: r.last_fired_date || null,
+        sort_order: r.sort_order == null ? 0 : r.sort_order,
+      };
     }
-    function setStoredTriggers(list) {
-      try { localStorage.setItem(LOC_TRIGGER_KEY, JSON.stringify(list)); } catch (e) {}
+    // in-app trigger object (camelCase) → Supabase row (snake_case)
+    function triggerToRow(t) {
+      return {
+        id: t.id, name: t.name, category: t.category, shop: t.shop || "",
+        amount: (t.amount === "" || t.amount == null) ? null : Number(t.amount),
+        cond: t.cond || "both", freq: t.freq || "daily",
+        month_day: t.monthDay == null ? 1 : Number(t.monthDay),
+        radius: Number(t.radius) || 150,
+        dwell_minutes: Math.max(0, Number(t.dwellMinutes) || 0),
+        start_time: t.startTime || null, end_time: t.endTime || null,
+        lat: t.lat == null ? null : t.lat, lng: t.lng == null ? null : t.lng,
+        expense_type: t.expense_type || "normal", tags: t.tags || "",
+        is_active: t.is_active !== false, last_fired_date: t.last_fired_date || null,
+        sort_order: t.sort_order == null ? 0 : t.sort_order,
+      };
     }
     // metres between two {lat,lng} points (haversine)
     function distanceMeters(a, b) {
@@ -352,8 +376,16 @@
       const [dueModalOpen, setDueModalOpen] = useState(false);
       const dueShownRef = useRef(false); // open the due modal at most once per session
       // ── Location triggers (geofence + time-of-day window) ──
-      const [locTriggers, setLocTriggers] = useState(() => getStoredTriggers());
-      const reloadTriggers = useCallback(() => setLocTriggers(getStoredTriggers()), []);
+      const [locTriggers, setLocTriggers] = useState([]);
+      const locTriggersRef = useRef([]); // always-latest mirror for synchronous reads inside effects
+      const reloadTriggers = useCallback(async () => {
+        const { data, error } = await supabase
+          .from(LOC_TRIGGER_TABLE).select("*")
+          .order("sort_order", { ascending: true }).order("created_at", { ascending: true });
+        if (!error && data) { const list = data.map(triggerFromRow); locTriggersRef.current = list; setLocTriggers(list); }
+        return true;
+      }, []);
+      useEffect(() => { locTriggersRef.current = locTriggers; }, [locTriggers]);
       const [locDueList, setLocDueList] = useState([]);
       const [locDueOpen, setLocDueOpen] = useState(false);
       const [locDismissed, setLocDismissed] = useState([]); // trigger ids dismissed this session
@@ -395,6 +427,7 @@
       }, []);
 
       useEffect(() => { fetchData(); }, [fetchData]);
+      useEffect(() => { reloadTriggers(); }, [reloadTriggers]);
 
       // ── Outstanding reconciler: missed schedule occurrences become persistent pending rows ──
       const reconRef = useRef(false);
@@ -478,15 +511,17 @@
       // ── Location triggers: detect which fire for the current / simulated spot ──
       const resolveLoc = (id) => setLocDueList((prev) => prev.filter((t) => t.id !== id));
       const stampLocFired = (id) => {
-        const next = getStoredTriggers().map((x) => x.id === id ? { ...x, last_fired_date: ymdToday() } : x);
-        setStoredTriggers(next); setLocTriggers(next);
+        const today = ymdToday();
+        const next = locTriggersRef.current.map((x) => x.id === id ? { ...x, last_fired_date: today } : x);
+        locTriggersRef.current = next; setLocTriggers(next);
+        supabase.from(LOC_TRIGGER_TABLE).update({ last_fired_date: today }).eq("id", id).then(() => {});
       };
       // simTriggerId: pretend you're standing at that trigger's pin (ignores GPS,
       // day-stamp and time window) so it can be demoed without moving / real GPS.
       const checkLocation = useCallback((opts = {}) => {
         const { simTriggerId = null, silent = false } = opts;
         const now = new Date();
-        const fresh = getStoredTriggers(); setLocTriggers(fresh);
+        const fresh = locTriggersRef.current;
         const run = (pos, simMode) => {
           const matched = fresh
             .filter((t) => isLocationDue(t, pos, now, locDismissed, { ignoreDistance: simMode, ignoreDay: simMode, ignoreTime: simMode }))
@@ -523,7 +558,7 @@
           const now = new Date();
           const pos = posRef.current;
           const fire = [];
-          getStoredTriggers().forEach((tg) => {
+          locTriggersRef.current.forEach((tg) => {
             if (!tg.is_active || locDismissed.includes(tg.id) || tg.last_fired_date === ymdToday()) return;
             const hasTime = !!(tg.startTime && tg.endTime);
             const hasLoc = tg.lat != null && tg.lng != null;
@@ -3101,7 +3136,7 @@
       };
       const useSample = () => { setEditing((e) => ({ ...e, lat: 35.6762, lng: 139.6503 })); setCoordRaw("35.6762, 139.6503"); flash("Sample spot pinned (Tokyo)"); };
 
-      const save = () => {
+      const save = async () => {
         const e = editing;
         if (!e.name.trim()) { flash("Name required"); return; }
         if (!e.category || !e.shop.trim()) { flash("Category + shop required"); return; }
@@ -3110,13 +3145,12 @@
         if (wantTime && (!e.startTime || !e.endTime)) { flash("Set a time window"); return; }
         if (wantLoc && (e.lat == null || e.lng == null)) { flash("Pin a location first"); return; }
         const rec = { ...e, name: e.name.trim(), shop: e.shop.trim(), amount: e.amount === "" ? null : Number(e.amount), radius: Number(e.radius) || 150, dwellMinutes: Math.max(0, Number(e.dwellMinutes) || 0), startTime: wantTime ? e.startTime : null, endTime: wantTime ? e.endTime : null, lat: wantLoc ? e.lat : null, lng: wantLoc ? e.lng : null };
-        const list = getStoredTriggers();
-        const i = list.findIndex((x) => x.id === rec.id);
-        if (i >= 0) list[i] = rec; else list.push(rec);
-        setStoredTriggers(list); reloadTriggers(); cancel(); flash("Saved");
+        const { error } = await supabase.from(LOC_TRIGGER_TABLE).upsert(triggerToRow(rec), { onConflict: "id" });
+        if (error) { flash(error.message || "Save failed"); return; }
+        await reloadTriggers(); cancel(); flash("Saved");
       };
-      const remove = (id) => { setStoredTriggers(getStoredTriggers().filter((x) => x.id !== id)); reloadTriggers(); };
-      const toggle = (t) => { setStoredTriggers(getStoredTriggers().map((x) => x.id === t.id ? { ...x, is_active: !x.is_active } : x)); reloadTriggers(); };
+      const remove = async (id) => { await supabase.from(LOC_TRIGGER_TABLE).delete().eq("id", id); await reloadTriggers(); };
+      const toggle = async (t) => { await supabase.from(LOC_TRIGGER_TABLE).update({ is_active: !t.is_active }).eq("id", t.id); await reloadTriggers(); };
 
       const formShops = editing ? shops.filter((s) => s.category === editing.category) : [];
       const card = { background: theme.inputBg, borderRadius: 10, padding: "11px 12px", marginBottom: 8 };
