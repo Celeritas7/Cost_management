@@ -15,6 +15,9 @@
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
   <style>
     html, body, #root { margin: 0; padding: 0; min-height: 100vh; }
+    body { overflow-x: hidden; }
+    .cm-tabscroll { scrollbar-width: none; -ms-overflow-style: none; }
+    .cm-tabscroll::-webkit-scrollbar { height: 0; display: none; }
     *, *::before, *::after { box-sizing: border-box; }
     body { font-family: 'Noto Sans JP', system-ui, sans-serif; }
     ::-webkit-scrollbar { width: 6px; }
@@ -1659,7 +1662,7 @@
       const tabStyle = (active) => ({
         padding:"8px 14px",fontSize:11,fontWeight:active?600:400,cursor:"pointer",
         background:active?theme.inputBg:"transparent",color:active?theme.text:theme.textMuted,
-        border:"none",borderBottom:active?`2px solid ${theme.primary}`:"2px solid transparent",
+        border:"none",borderBottom:active?`2px solid ${theme.primary}`:"2px solid transparent",whiteSpace:"nowrap",flexShrink:0,
       });
 
       return (
@@ -1670,7 +1673,7 @@
             </div>
           )}
 
-          <div style={{display:"flex",borderBottom:`1px solid ${theme.cardBorder}`,marginBottom:16,marginTop:8}}>
+          <div className="cm-tabscroll" style={{display:"flex",borderBottom:`1px solid ${theme.cardBorder}`,marginBottom:16,marginTop:8,overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
             <button onClick={() => setActiveTab("categories")} style={tabStyle(activeTab==="categories")}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="folder" size={14}/>Categories</span></button>
             <button onClick={() => setActiveTab("shops")} style={tabStyle(activeTab==="shops")}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="store" size={14}/>Shops</span></button>
             <button onClick={() => setActiveTab("tags")} style={tabStyle(activeTab==="tags")}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="tag" size={14}/>Tags</span></button>
