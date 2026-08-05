@@ -15,9 +15,6 @@
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
   <style>
     html, body, #root { margin: 0; padding: 0; min-height: 100vh; }
-    body { overflow-x: hidden; }
-    .cm-tabscroll { scrollbar-width: none; -ms-overflow-style: none; }
-    .cm-tabscroll::-webkit-scrollbar { height: 0; display: none; }
     *, *::before, *::after { box-sizing: border-box; }
     body { font-family: 'Noto Sans JP', system-ui, sans-serif; }
     ::-webkit-scrollbar { width: 6px; }
@@ -108,6 +105,25 @@
     }
     function setStoredTheme(theme) { localStorage.setItem("cost_mgmt_theme", JSON.stringify({ theme, timestamp: Date.now() })); }
 
+    const CURRENCIES = {
+      INR: { symbol: "₹", name: "Indian Rupee", locale: "en-IN" },
+      JPY: { symbol: "¥", name: "Japanese Yen", locale: "ja-JP" },
+      USD: { symbol: "$", name: "US Dollar", locale: "en-US" },
+      EUR: { symbol: "€", name: "Euro", locale: "de-DE" },
+      GBP: { symbol: "£", name: "British Pound", locale: "en-GB" },
+    };
+    const CURRENCY_KEYS = Object.keys(CURRENCIES);
+    function getStoredCurrency() {
+      try { const { currency } = JSON.parse(localStorage.getItem("cost_mgmt_currency")); if (CURRENCIES[currency]) return currency; } catch (e) {}
+      return "JPY";
+    }
+    function setStoredCurrency(currency) { try { localStorage.setItem("cost_mgmt_currency", JSON.stringify({ currency, timestamp: Date.now() })); } catch (e) {} }
+    let CUR = CURRENCIES[getStoredCurrency()]; // kept in sync by App; read by fmt() and chart labels
+    CURRENCY_KEYS.forEach((k) => { CURRENCIES[k].code = k; });
+    // Region = currency profile. Rows without a region tag are legacy Japan (JPY) data.
+    const regionOf = (x) => (x && x.region) || "JPY";
+    const fmtIn = (n, region) => { const c = CURRENCIES[region] || CUR; return n == null ? "—" : c.symbol + Number(n).toLocaleString(c.locale); };
+
     const { useState, useMemo, useEffect, useCallback, useRef, createContext, useContext } = React;
     const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area, CartesianGrid } = Recharts;
 
@@ -134,7 +150,7 @@
       { id: 5, name: "Travel", icon: "✈️", color: "#06b6d4" },
     ];
 
-    const fmt = (n) => (n == null ? "—" : `¥${n.toLocaleString()}`);
+    const fmt = (n) => (n == null ? "—" : CUR.symbol + n.toLocaleString(CUR.locale));
     // Local-date key 'YYYY-MM-DD' from a Date's LOCAL components (never UTC).
     // toISOString() returns the UTC date, which rolls back a day in east-of-UTC
     // zones during the local-midnight→UTC-offset window (e.g. 00:00–09:00 Tokyo).
@@ -226,41 +242,17 @@
 
     // ═════════════════════════════════════════════════════════════
     //  LOCATION-BASED PAYMENT TRIGGERS  (geofence + time-of-day window)
-    //  Synced to Supabase (cost_management_location_triggers). A trigger fires when you are within
+    //  Stored locally (no DB changes). A trigger fires when you are within
     //  `radius` metres of (lat,lng) AND the local clock is inside its
     //  [startTime,endTime] window — then it surfaces in a pile-up panel.
     // ═════════════════════════════════════════════════════════════
-    const LOC_TRIGGER_TABLE = "cost_management_location_triggers";
-    // Supabase row (snake_case) → in-app trigger object (camelCase)
-    function triggerFromRow(r) {
-      return {
-        id: r.id, name: r.name, category: r.category, shop: r.shop || "",
-        amount: r.amount, cond: r.cond || "both", freq: r.freq || "daily",
-        monthDay: r.month_day == null ? 1 : r.month_day,
-        radius: r.radius == null ? 150 : r.radius,
-        dwellMinutes: r.dwell_minutes == null ? 0 : r.dwell_minutes,
-        startTime: r.start_time || null, endTime: r.end_time || null,
-        lat: r.lat, lng: r.lng,
-        expense_type: r.expense_type || "normal", tags: r.tags || "",
-        is_active: r.is_active !== false, last_fired_date: r.last_fired_date || null,
-        sort_order: r.sort_order == null ? 0 : r.sort_order,
-      };
+    const LOC_TRIGGER_KEY = "cost_management_location_triggers";
+    function getStoredTriggers() {
+      try { const v = JSON.parse(localStorage.getItem(LOC_TRIGGER_KEY)); return Array.isArray(v) ? v : []; }
+      catch (e) { return []; }
     }
-    // in-app trigger object (camelCase) → Supabase row (snake_case)
-    function triggerToRow(t) {
-      return {
-        id: t.id, name: t.name, category: t.category, shop: t.shop || "",
-        amount: (t.amount === "" || t.amount == null) ? null : Number(t.amount),
-        cond: t.cond || "both", freq: t.freq || "daily",
-        month_day: t.monthDay == null ? 1 : Number(t.monthDay),
-        radius: Number(t.radius) || 150,
-        dwell_minutes: Math.max(0, Number(t.dwellMinutes) || 0),
-        start_time: t.startTime || null, end_time: t.endTime || null,
-        lat: t.lat == null ? null : t.lat, lng: t.lng == null ? null : t.lng,
-        expense_type: t.expense_type || "normal", tags: t.tags || "",
-        is_active: t.is_active !== false, last_fired_date: t.last_fired_date || null,
-        sort_order: t.sort_order == null ? 0 : t.sort_order,
-      };
+    function setStoredTriggers(list) {
+      try { localStorage.setItem(LOC_TRIGGER_KEY, JSON.stringify(list)); } catch (e) {}
     }
     // metres between two {lat,lng} points (haversine)
     function distanceMeters(a, b) {
@@ -356,6 +348,11 @@
     function App() {
       const [themeName, setThemeName] = useState(getStoredTheme);
       const theme = THEMES[themeName] || THEMES.midnight;
+      const [currency, setCurrency] = useState(getStoredCurrency);
+      CUR = CURRENCIES[currency] || CURRENCIES.JPY;
+      const [showCurrencyPicker, setShowCurrencyPicker] = useState(false);
+      const changeCurrency = (c) => { setCurrency(c); setStoredCurrency(c); setShowCurrencyPicker(false); setTxPage(0); };
+      const [allRegions, setAllRegions] = useState(false); // History-view toggle: show every region’s entries
       const [data, setData] = useState([]);
       const [shops, setShops] = useState([]);
       const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
@@ -368,6 +365,7 @@
       const [typeFilter, setTypeFilter] = useState("All");
       const [tagFilter, setTagFilter] = useState("All");
       const [view, setView] = useState("add");
+      const [filtersOpen, setFiltersOpen] = useState(false);
       const [presetDate, setPresetDate] = useState(null); // ISO date handed from the Calendar day panel to a fresh AddEntryView
       const [txPage, setTxPage] = useState(0);
       const [showThemePicker, setShowThemePicker] = useState(false);
@@ -376,16 +374,8 @@
       const [dueModalOpen, setDueModalOpen] = useState(false);
       const dueShownRef = useRef(false); // open the due modal at most once per session
       // ── Location triggers (geofence + time-of-day window) ──
-      const [locTriggers, setLocTriggers] = useState([]);
-      const locTriggersRef = useRef([]); // always-latest mirror for synchronous reads inside effects
-      const reloadTriggers = useCallback(async () => {
-        const { data, error } = await supabase
-          .from(LOC_TRIGGER_TABLE).select("*")
-          .order("sort_order", { ascending: true }).order("created_at", { ascending: true });
-        if (!error && data) { const list = data.map(triggerFromRow); locTriggersRef.current = list; setLocTriggers(list); }
-        return true;
-      }, []);
-      useEffect(() => { locTriggersRef.current = locTriggers; }, [locTriggers]);
+      const [locTriggers, setLocTriggers] = useState(() => getStoredTriggers());
+      const reloadTriggers = useCallback(() => setLocTriggers(getStoredTriggers()), []);
       const [locDueList, setLocDueList] = useState([]);
       const [locDueOpen, setLocDueOpen] = useState(false);
       const [locDismissed, setLocDismissed] = useState([]); // trigger ids dismissed this session
@@ -395,6 +385,12 @@
 
       // success feedback for the due modal: toast (survives the modal closing) + haptic
       const flashDue = (msg) => { setDueToast(msg); vibrate(10); setTimeout(() => setDueToast(null), 2500); };
+
+      // ── Region scoping: the app shows only the active region’s shops, rules, triggers and pending ──
+      const regionShops = useMemo(() => shops.filter((s) => regionOf(s) === currency), [shops, currency]);
+      const regionRecurring = useMemo(() => recurring.filter((r) => regionOf(r) === currency), [recurring, currency]);
+      const regionPending = useMemo(() => pending.filter((p) => { const r = recurring.find((x) => x.id === p.rule_id); return r ? regionOf(r) === currency : true; }), [pending, recurring, currency]);
+      const regionTriggers = useMemo(() => locTriggers.filter((t) => regionOf(t) === currency), [locTriggers, currency]);
 
       const changeTheme = (t) => { setThemeName(t); setStoredTheme(t); setShowThemePicker(false); };
 
@@ -412,7 +408,7 @@
         if (!expRes.error && expRes.data) {
           setData(expRes.data.map(r => enrichRow({ 
             id: r.id, amount: r.amount, date: r.date, category: r.category, 
-            shop: r.shop, notes: r.notes || "", expense_type: r.expense_type || "normal",
+            shop: r.shop, notes: r.notes || "", expense_type: r.expense_type || "normal", region: r.region,
             tags: r.tags || ""
           })));
           const years = [...new Set(expRes.data.map(r => new Date(r.date).getFullYear()))];
@@ -427,7 +423,6 @@
       }, []);
 
       useEffect(() => { fetchData(); }, [fetchData]);
-      useEffect(() => { reloadTriggers(); }, [reloadTriggers]);
 
       // ── Outstanding reconciler: missed schedule occurrences become persistent pending rows ──
       const reconRef = useRef(false);
@@ -460,7 +455,7 @@
         const today = new Date();
         const order = (r) => FREQ_ORDER.indexOf(r.frequency);
         const due = recurring
-          .filter((r) => isRecurringDue(r, today, sessionSnoozed)) // snoozed ids excluded here
+          .filter((r) => regionOf(r) === currency && isRecurringDue(r, today, sessionSnoozed)) // snoozed ids excluded here
           .sort((a, b) => order(a) - order(b) || (a.sort_order ?? 0) - (b.sort_order ?? 0));
         console.log(`[recurring] due: ${due.length}`, due.map((r) => `${r.name} → ${computeDueDate(r, today)}`));
         if (dueShownRef.current) return; // modal opens at most once per session — never reopen
@@ -479,7 +474,7 @@
         // Variable-amount rules (rec.amount == null) supply the amount at due time via
         // the modal's inline input; fixed rules use the stored rec.amount.
         const amount = amountOverride != null ? amountOverride : rec.amount;
-        const record = { date: due, category: rec.category, shop: rec.shop, amount: Number(amount), notes: rec.notes || "", expense_type: rec.expense_type || "normal", tags: rec.tags || "" };
+        const record = { region: regionOf(rec), date: due, category: rec.category, shop: rec.shop, amount: Number(amount), notes: rec.notes || "", expense_type: rec.expense_type || "normal", tags: rec.tags || "" };
         const { error: insErr } = await supabase.from("cost_management_expenses").insert(record);
         if (insErr) return { ok: false };
         const { error: updErr } = await supabase.from("cost_management_recurring").update({ last_added_date: due }).eq("id", rec.id);
@@ -511,19 +506,18 @@
       // ── Location triggers: detect which fire for the current / simulated spot ──
       const resolveLoc = (id) => setLocDueList((prev) => prev.filter((t) => t.id !== id));
       const stampLocFired = (id) => {
-        const today = ymdToday();
-        const next = locTriggersRef.current.map((x) => x.id === id ? { ...x, last_fired_date: today } : x);
-        locTriggersRef.current = next; setLocTriggers(next);
-        supabase.from(LOC_TRIGGER_TABLE).update({ last_fired_date: today }).eq("id", id).then(() => {});
+        const next = getStoredTriggers().map((x) => x.id === id ? { ...x, last_fired_date: ymdToday() } : x);
+        setStoredTriggers(next); setLocTriggers(next);
       };
       // simTriggerId: pretend you're standing at that trigger's pin (ignores GPS,
       // day-stamp and time window) so it can be demoed without moving / real GPS.
       const checkLocation = useCallback((opts = {}) => {
         const { simTriggerId = null, silent = false } = opts;
         const now = new Date();
-        const fresh = locTriggersRef.current;
+        const fresh = getStoredTriggers(); setLocTriggers(fresh);
         const run = (pos, simMode) => {
           const matched = fresh
+            .filter((t) => regionOf(t) === currency)
             .filter((t) => isLocationDue(t, pos, now, locDismissed, { ignoreDistance: simMode, ignoreDay: simMode, ignoreTime: simMode }))
             .map((t) => simMode ? { ...t, _simulated: true } : (t.lat != null ? { ...t, _distance: Math.round(distanceMeters(pos, { lat: t.lat, lng: t.lng })) } : { ...t, _timeOnly: true }));
           if (matched.length) { setLocStatus(""); setLocDueList(matched); setLocDueOpen(true); }
@@ -537,7 +531,7 @@
           (err) => { const m = err.code === 1 ? "Location permission denied — use a trigger's Test button." : "Couldn't get your location."; setLocStatus(m); if (!silent) flashDue(m); },
           { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
         );
-      }, [locDismissed]); // eslint-disable-line react-hooks/exhaustive-deps
+      }, [locDismissed, currency]); // eslint-disable-line react-hooks/exhaustive-deps
       useEffect(() => { if (locDueOpen && locDueList.length === 0) setLocDueOpen(false); }, [locDueList, locDueOpen]);
       // Continuous location watch + dwell evaluator. A location rule fires only
       // after the configured dwell time INSIDE its radius (not just passing by);
@@ -558,8 +552,8 @@
           const now = new Date();
           const pos = posRef.current;
           const fire = [];
-          locTriggersRef.current.forEach((tg) => {
-            if (!tg.is_active || locDismissed.includes(tg.id) || tg.last_fired_date === ymdToday()) return;
+          getStoredTriggers().forEach((tg) => {
+            if (regionOf(tg) !== currency || !tg.is_active || locDismissed.includes(tg.id) || tg.last_fired_date === ymdToday()) return;
             const hasTime = !!(tg.startTime && tg.endTime);
             const hasLoc = tg.lat != null && tg.lng != null;
             if (!hasTime && !hasLoc) return;
@@ -586,12 +580,12 @@
         tick();
         const iv = setInterval(tick, 15000);
         return () => { if (watchId != null) navigator.geolocation.clearWatch(watchId); clearInterval(iv); };
-      }, [loading, locDismissed]); // eslint-disable-line react-hooks/exhaustive-deps
+      }, [loading, locDismissed, currency]); // eslint-disable-line react-hooks/exhaustive-deps
 
       const locAdd = async (t, amountOverride) => {
         const amount = amountOverride != null ? amountOverride : t.amount;
         if (amount == null || !(Number(amount) > 0)) return { ok: false };
-        const record = { date: ymdToday(), category: t.category, shop: t.shop, amount: Number(amount), notes: t.notes || "", expense_type: t.expense_type || "normal", tags: t.tags || "" };
+        const record = { region: regionOf(t), date: ymdToday(), category: t.category, shop: t.shop, amount: Number(amount), notes: t.notes || "", expense_type: t.expense_type || "normal", tags: t.tags || "" };
         const { error } = await supabase.from("cost_management_expenses").insert(record);
         if (error) return { ok: false };
         stampLocFired(t.id); await fetchData(); flashDue(`Added ${t.name}`); return { ok: true };
@@ -600,7 +594,7 @@
       const locSnooze = (t) => setLocDismissed((prev) => prev.includes(t.id) ? prev : [...prev, t.id]);
       const locClose = () => { setLocDismissed((prev) => [...new Set([...prev, ...locDueList.map((t) => t.id)])]); setLocDueOpen(false); };
 
-      const RAW = data;
+      const RAW = useMemo(() => data.filter((r) => regionOf(r) === currency), [data, currency]);
       const catList = useMemo(() => [...new Set(RAW.map(r => r.category))].sort(), [RAW]);
       const years = useMemo(() => [...new Set(RAW.map(r => String(r.year)))].sort(), [RAW]);
 
@@ -636,7 +630,14 @@
         return Object.entries(map).map(([name,value]) => ({name,value})).sort((a,b) => b.value-a.value).slice(0,6);
       }, [filtered]);
 
-      const sortedTx = useMemo(() => [...filtered].sort((a,b) => b.date.localeCompare(a.date) || b.id - a.id), [filtered]);
+      const txSource = useMemo(() => allRegions ? data.filter(r => {
+        if (yearFilter !== "All" && String(r.year) !== yearFilter) return false;
+        if (catFilter !== "All" && r.category !== catFilter) return false;
+        if (typeFilter !== "All" && r.expense_type !== typeFilter) return false;
+        if (tagFilter !== "All" && !(r.tags || "").split(",").includes(tagFilter)) return false;
+        return true;
+      }) : filtered, [data, filtered, allRegions, yearFilter, catFilter, typeFilter, tagFilter]);
+      const sortedTx = useMemo(() => [...txSource].sort((a,b) => b.date.localeCompare(a.date) || b.id - a.id), [txSource]);
       const txPerPage = 15;
       const txPages = Math.ceil(sortedTx.length / txPerPage);
       const pageTx = sortedTx.slice(txPage * txPerPage, (txPage+1) * txPerPage);
@@ -662,50 +663,58 @@
       const navTabs = [
         { id: "add", label: "Add", icon: "add" },
         { id: "overview", label: "Overview", icon: "chart" },
-        { id: "calendar", label: "Calendar", icon: "calendar" },
         { id: "transactions", label: "History", icon: "list" },
-        { id: "outstanding", label: "Outstanding", icon: "inbox" },
         { id: "settings", label: "Settings", icon: "settings" },
       ];
 
       return (
-        <ThemeContext.Provider value={{ theme, themeName, inputStyle, labelStyle, pillStyle, supabase, fetchData, categories, tags, getCatIcon, getCatColor, getTagIcon, getTagColor, shops, recurring, changeTheme, setView, presetDate, setPresetDate, locTriggers, reloadTriggers, checkLocation, locStatus }}>
+        <ThemeContext.Provider value={{ theme, themeName, inputStyle, labelStyle, pillStyle, supabase, fetchData, categories, tags, getCatIcon, getCatColor, getTagIcon, getTagColor, shops: regionShops, recurring: regionRecurring, currency, changeTheme, setView, presetDate, setPresetDate, locTriggers: regionTriggers, reloadTriggers, checkLocation, locStatus }}>
           <div style={{minHeight:"100vh",background:theme.bg,color:theme.text,fontFamily:"'Noto Sans JP', system-ui, sans-serif"}}>
             {/* Header */}
             <div style={{background:theme.headerBg,borderBottom:`1px solid ${theme.cardBorder}`,padding:"14px 16px"}}>
              <div style={{maxWidth:1080,margin:"0 auto",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
-              <div>
-                <div style={{fontSize:10.5,letterSpacing:2.5,textTransform:"uppercase",color:theme.textMuted,fontWeight:700}}>家計簿</div>
-                <h1 style={{fontSize:18,fontWeight:700,color:"#fff",margin:0}}>Cost Management</h1>
-              </div>
+              <h1 style={{fontSize:18,fontWeight:700,color:"#fff",margin:0}}>Cost Management</h1>
               <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>
                 {navTabs.map(tab => (
-                  <button key={tab.id} onClick={() => { setView(tab.id); setTxPage(0); }} style={{...pillStyle(view===tab.id),padding:"5px 11px",fontSize:11,display:"inline-flex",alignItems:"center",gap:6}}><Icon name={tab.icon} size={15}/>{tab.label}{tab.id==="outstanding" && pending.length>0 && <span style={{background:theme.danger,color:"#fff",fontSize:9,fontWeight:700,borderRadius:9,padding:"1px 5px",marginLeft:1,lineHeight:1.6}}>{pending.length}</span>}</button>
+                  <button key={tab.id} onClick={() => { setView(tab.id); setTxPage(0); }} style={{...pillStyle(view===tab.id || (tab.id==="transactions" && view==="calendar")),padding:"5px 11px",fontSize:11,display:"inline-flex",alignItems:"center",gap:6}}><Icon name={tab.icon} size={15}/>{tab.label}</button>
                 ))}
+                {regionPending.length>0 && (
+                  <button onClick={() => setView("outstanding")} title="Outstanding payments" style={{...pillStyle(view==="outstanding"),padding:"5px 9px",fontSize:11,display:"inline-flex",alignItems:"center",gap:5}}><Icon name="inbox" size={15}/><span style={{background:theme.danger,color:"#fff",fontSize:9,fontWeight:700,borderRadius:9,padding:"1px 5px",lineHeight:1.6}}>{regionPending.length}</span></button>
+                )}
                 <div style={{position:"relative"}}>
-                  <button onClick={() => checkLocation()} title="Check in — nearby payment triggers" style={{...pillStyle(false),padding:"6px 9px",display:"inline-flex",alignItems:"center"}}><Icon name="pin" size={16}/></button>
-                  <button onClick={() => setShowThemePicker(!showThemePicker)} title="Theme" style={{...pillStyle(false),padding:"6px 9px",display:"inline-flex",alignItems:"center",color:theme.primary}}><Icon name="palette" size={16}/></button>
-                  {showThemePicker && (
+                  <button onClick={() => setShowCurrencyPicker(!showCurrencyPicker)} title="Region & currency" style={{...pillStyle(false),padding:"6px 10px",display:"inline-flex",alignItems:"center",justifyContent:"center",color:theme.primary,fontSize:14,fontWeight:700,minWidth:32,lineHeight:1}}>{CUR.symbol}</button>
+                  {showCurrencyPicker && (
                     <>
-                      <div style={{position:"fixed",inset:0,zIndex:90}} onClick={() => setShowThemePicker(false)}/>
-                      <div style={{position:"absolute",top:"100%",right:0,marginTop:6,background:"#1a1a2e",border:`1px solid ${theme.cardBorder}`,borderRadius:10,padding:6,zIndex:100,minWidth:130}}>
-                        {THEME_KEYS.map(key => (
-                          <button key={key} onClick={() => changeTheme(key)} style={{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"6px 8px",background:themeName===key?`${THEMES[key].primary}20`:"transparent",border:"none",borderRadius:6,cursor:"pointer"}}>
-                            <span style={{width:12,height:12,borderRadius:"50%",background:THEMES[key].primary,boxShadow:`0 0 0 2px ${THEMES[key].accent}55`,flexShrink:0}}/>
-                            <span style={{color:themeName===key?THEMES[key].primary:"#ccc",fontSize:11}}>{THEMES[key].name}</span>
+                      <div style={{position:"fixed",inset:0,zIndex:90}} onClick={() => setShowCurrencyPicker(false)}/>
+                      <div style={{position:"absolute",top:"100%",right:0,marginTop:6,background:"#1a1a2e",border:`1px solid ${theme.cardBorder}`,borderRadius:10,padding:6,zIndex:100,minWidth:180}}>
+                        <div style={{fontSize:9.5,letterSpacing:1,textTransform:"uppercase",color:"#888",padding:"4px 8px 3px",fontWeight:700}}>Region profile</div>
+                        {CURRENCY_KEYS.map(key => (
+                          <button key={key} onClick={() => changeCurrency(key)} style={{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"6px 8px",background:currency===key?`${theme.primary}20`:"transparent",border:"none",borderRadius:6,cursor:"pointer"}}>
+                            <span style={{width:16,textAlign:"center",color:currency===key?theme.primary:"#ccc",fontSize:13,fontWeight:700,flexShrink:0}}>{CURRENCIES[key].symbol}</span>
+                            <span style={{color:currency===key?theme.primary:"#ccc",fontSize:11}}>{key} · {CURRENCIES[key].name}</span>
                           </button>
                         ))}
                       </div>
                     </>
                   )}
+
                 </div>
               </div>
              </div>
             </div>
 
             {/* Filters */}
-            {(view === "overview" || view === "transactions") && (
+            {(view === "overview" || view === "transactions" || view === "calendar") && (
               <div style={{padding:"10px 16px",maxWidth:1080,margin:"0 auto",boxSizing:"border-box",display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                {(view === "transactions" || view === "calendar") && (
+                  <div style={{display:"flex",gap:3,padding:3,background:theme.cardBg,borderRadius:10,border:`1px solid ${theme.cardBorder}`}}>
+                    <button onClick={() => setView("transactions")} style={{padding:"3px 12px",fontSize:11,fontWeight:600,borderRadius:7,border:"none",cursor:"pointer",fontFamily:"inherit",background:view==="transactions"?theme.primaryGlow:"transparent",color:view==="transactions"?"#fff":theme.textMuted}}>List</button>
+                    <button onClick={() => setView("calendar")} style={{padding:"3px 12px",fontSize:11,fontWeight:600,borderRadius:7,border:"none",cursor:"pointer",fontFamily:"inherit",background:view==="calendar"?theme.primaryGlow:"transparent",color:view==="calendar"?"#fff":theme.textMuted}}>Calendar</button>
+                  </div>
+                )}
+                {view !== "calendar" && <button onClick={() => setFiltersOpen((o) => !o)} style={{...pillStyle(filtersOpen),padding:"4px 10px",fontSize:11,display:"inline-flex",alignItems:"center",gap:5}}><Icon name="chevronDown" size={12} style={{transform:filtersOpen?"rotate(180deg)":"none",transition:"transform .15s"}}/>Filters{(() => { const n = [catFilter,typeFilter,tagFilter].filter(f=>f!=="All").length + (allRegions?1:0); return n ? ` · ${n}` : ""; })()}</button>}
+                {filtersOpen && view === "transactions" && <button onClick={() => setAllRegions((a) => !a)} title="Include entries from every region" style={{...pillStyle(allRegions),padding:"4px 10px",fontSize:11,whiteSpace:"nowrap"}}>All regions</button>}
+                {filtersOpen && view !== "calendar" && <>
                 <select value={yearFilter} onChange={e => setYearFilter(e.target.value)} style={{background:theme.inputBg,border:`1px solid ${theme.inputBorder}`,color:theme.text,padding:"4px 8px",borderRadius:6,fontSize:11}}>
                   <option value="All">All Years</option>
                   {years.map(y => <option key={y} value={y}>{y}</option>)}
@@ -724,6 +733,7 @@
                   <option value="All">All Tags</option>
                   {tags.map(t => <option key={t.name} value={t.name}>{t.icon} {t.name}</option>)}
                 </select>
+                </>}
               </div>
             )}
 
@@ -739,7 +749,7 @@
               ) : view === "transactions" ? (
                 <TransactionsView pageTx={pageTx} txPage={txPage} setTxPage={setTxPage} txPages={txPages} />
               ) : view === "outstanding" ? (
-                <OutstandingView pending={pending} recurring={recurring} refresh={async () => { const { data: p } = await supabase.from("cost_management_pending").select("*").eq("status", "pending").order("due_date"); setPending(p || []); await fetchData(); }} />
+                <OutstandingView pending={regionPending} recurring={recurring} refresh={async () => { const { data: p } = await supabase.from("cost_management_pending").select("*").eq("status", "pending").order("due_date"); setPending(p || []); await fetchData(); }} />
               ) : (
                 <SettingsView allExpenses={RAW} />
               )}
@@ -949,6 +959,8 @@
       const blankRow = (d) => ({ id: ++_rid, date: d, cat: null, shop: null, type: "normal", tags: [], amount: "" });
 
       const [mode, setMode] = useState("quick"); // quick | same | list
+      const [batchOpen, setBatchOpen] = useState(false); // reveals the multi-entry mode switcher
+      const [moreOpen, setMoreOpen] = useState(false); // reveals type + tags in quick mode
       const [amount, setAmount] = useState("");
       // A pre-set date from the Calendar day panel seeds quick-mode for same-day stacking.
       const [dates, setDates] = useState(() => presetDate ? [presetDate] : [isoOfDate(today)]);
@@ -1051,7 +1063,7 @@
       const showToast = (type, msg) => { setToast({ type, msg }); setTimeout(() => setToast(null), 3000); };
       const insertExpenses = async (records) => {
         setSaving(true);
-        const { error } = await supabase.from("cost_management_expenses").insert(records);
+        const { error } = await supabase.from("cost_management_expenses").insert(records.map((r) => ({ region: CUR.code, ...r })));
         setSaving(false);
         if (error) { showToast("error", error.message); return false; }
         await fetchData();
@@ -1143,7 +1155,7 @@
       const addShop = async () => {
         const name = newShop.name.trim(); if (!name || !curCat) return;
         if (!shops.some((s) => s.name === name && s.category === curCat)) {
-          const { error } = await supabase.from("cost_management_shops").insert({ name, category: curCat, is_favorite: newShop.fav });
+          const { error } = await supabase.from("cost_management_shops").insert({ region: CUR.code, name, category: curCat, is_favorite: newShop.fav });
           if (error) { showToast("error", error.message.includes("duplicate") ? "Shop exists" : error.message); return; }
           await fetchData();
         }
@@ -1361,7 +1373,7 @@
                             <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: rShop ? C.text : C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{rShop || (isSame ? "set the shop above" : "tap to set shop")}</span>
                             {EXPENSE_TYPES[rType]?.icon && <span style={{ fontSize: 12 }}>{EXPENSE_TYPES[rType].icon}</span>}
                             {dup && <span title={`Possible duplicate — ${fmt(dup.amount)} at ${dup.shop} already logged on ${dup.date}`} style={{ fontSize: 13, color: theme.warning }}>⚠</span>}
-                            <span style={{ fontSize: 13.5, fontWeight: 700, color: r.amount ? "#fff" : C.dim }}>{r.amount ? fmt(Number(r.amount)) : "¥–"}</span>
+                            <span style={{ fontSize: 13.5, fontWeight: 700, color: r.amount ? "#fff" : C.dim }}>{r.amount ? fmt(Number(r.amount)) : CUR.symbol + "–"}</span>
                             <button onClick={(e) => { e.stopPropagation(); removeRow(i); }} style={{ border: "none", background: "none", color: C.dim, cursor: "pointer", fontSize: 17, lineHeight: 1, padding: "0 2px" }}>×</button>
                           </div>
                           {expanded && (
@@ -1427,8 +1439,12 @@
             </div>
           )}
 
-          {/* mode switcher */}
-          <div style={{ display: "flex", gap: 3, padding: 3, background: theme.headerBg, borderRadius: 12, border: `1px solid ${C.border}`, marginTop: 8 }}>
+          {/* batch toggle — the 3-mode switcher lives behind it */}
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
+            <button onClick={() => { if (batchOpen && isMulti) switchMode("quick"); setBatchOpen((o) => !o); }} style={{ border: "none", background: "none", color: batchOpen ? theme.primary : C.muted, cursor: "pointer", fontFamily: "inherit", fontSize: 11.5, fontWeight: 600, padding: "2px 4px", whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", gap: 4 }}>Batch add<Icon name="chevronDown" size={12} style={{ transform: batchOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }}/></button>
+          </div>
+          {batchOpen && (
+          <div className="cm-slide-in" style={{ display: "flex", gap: 3, padding: 3, background: theme.headerBg, borderRadius: 12, border: `1px solid ${C.border}`, marginTop: 2 }}>
             {[{ k: "quick", label: "Quick", sub: "one entry" }, { k: "same", label: "Same shop", sub: "many days" }, { k: "list", label: "Different", sub: "many shops" }].map((m) => (
               <button key={m.k} onClick={() => switchMode(m.k)} style={{ flex: 1, padding: "6px 4px", borderRadius: 9, border: "none", cursor: "pointer", fontFamily: "inherit", background: mode === m.k ? theme.primaryGlow : "transparent", boxShadow: mode === m.k ? `inset 0 0 0 1px ${theme.primary}` : "none" }}>
                 <div style={{ fontSize: 12.5, fontWeight: 700, color: mode === m.k ? "#fff" : C.muted }}>{m.label}</div>
@@ -1436,6 +1452,7 @@
               </button>
             ))}
           </div>
+          )}
 
           {/* date control — on top, all modes; single date for Quick, multi-date otherwise */}
           <div style={{ marginTop: 12 }}>
@@ -1457,11 +1474,11 @@
           {/* amount hero — tap to open the keypad (quick only) */}
           {!isMulti && (
             <div onClick={() => setPadOpen((o) => !o)} style={{ padding: "14px 0 12px", textAlign: "center", cursor: "pointer" }}>
-              <div style={{ fontSize: 50, fontWeight: 700, letterSpacing: -2, lineHeight: 1, color: amt > 0 ? "#fff" : C.dim, display: "inline-flex", alignItems: "center", gap: 8, padding: "2px 14px", borderRadius: 14, boxShadow: padOpen ? `inset 0 0 0 1.5px ${accent}66` : "none", transition: "box-shadow .15s" }}>{amt > 0 ? fmt(amt) : "¥0"}</div>
+              <div style={{ fontSize: 50, fontWeight: 700, letterSpacing: -2, lineHeight: 1, color: amt > 0 ? "#fff" : C.dim, display: "inline-flex", alignItems: "center", gap: 8, padding: "2px 14px", borderRadius: 14, boxShadow: padOpen ? `inset 0 0 0 1.5px ${accent}66` : "none", transition: "box-shadow .15s" }}>{amt > 0 ? fmt(amt) : CUR.symbol + "0"}</div>
               <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8, minHeight: 18 }}>
-                {curCat && curShop ? <span><span style={{ color: catObj.color }}>{catObj.icon} {curCat}</span> · {curShop}{!padOpen && amt === 0 ? <span style={{ color: C.dim }}> · tap ¥ to enter amount</span> : ""}</span>
+                {curCat && curShop ? <span><span style={{ color: catObj.color }}>{catObj.icon} {curCat}</span> · {curShop}{!padOpen && amt === 0 ? <span style={{ color: C.dim }}> · tap {CUR.symbol} to enter amount</span> : ""}</span>
                   : curCat ? <span style={{ color: catObj.color }}>{catObj.icon} {curCat} — pick a shop</span>
-                  : "Tap ¥ for the keypad · pick a category"}
+                  : "Tap " + CUR.symbol + " for the keypad · pick a category"}
               </div>
             </div>
           )}
@@ -1486,8 +1503,15 @@
             {mode === "quick" && (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {catChipsRow}
-                {typeRow}
-                {tagsRow}
+                <div>
+                  <button onClick={() => setMoreOpen((o) => !o)} style={{ border: "none", background: "none", color: (etype !== "normal" || etags.length > 0) ? theme.primary : C.dim, cursor: "pointer", fontFamily: "inherit", fontSize: 11.5, fontWeight: 600, padding: 0, whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", gap: 4 }}>More options{etype !== "normal" ? ` · ${EXPENSE_TYPES[etype].label}` : ""}{etags.length > 0 ? ` · ${etags.length} tag${etags.length > 1 ? "s" : ""}` : ""}<Icon name="chevronDown" size={12} style={{ transform: moreOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }}/></button>
+                  {moreOpen && (
+                    <div className="cm-slide-in" style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 10 }}>
+                      {typeRow}
+                      {tagsRow}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -1585,7 +1609,7 @@
     //  SETTINGS VIEW (Categories + Tags + Recurring)
     // ═══════════════════════════════════════════
     function SettingsView({ allExpenses }) {
-      const { theme, inputStyle, labelStyle, supabase, fetchData, categories, tags, shops, getCatIcon } = useTheme();
+      const { theme, themeName, changeTheme, inputStyle, labelStyle, supabase, fetchData, categories, tags, shops, getCatIcon } = useTheme();
       const [activeTab, setActiveTab] = useState("categories");
       const [toast, setToast] = useState(null);
 
@@ -1663,7 +1687,7 @@
       const handleAddShop = async () => {
         if (!newShop.name.trim() || !newShop.category) { showToast("error","Enter name and category"); return; }
         const { error } = await supabase.from("cost_management_shops").insert({ 
-          name: newShop.name.trim(), 
+          region: CUR.code, name: newShop.name.trim(), 
           category: newShop.category, 
           is_favorite: newShop.is_favorite 
         });
@@ -1697,7 +1721,7 @@
       const tabStyle = (active) => ({
         padding:"8px 14px",fontSize:11,fontWeight:active?600:400,cursor:"pointer",
         background:active?theme.inputBg:"transparent",color:active?theme.text:theme.textMuted,
-        border:"none",borderBottom:active?`2px solid ${theme.primary}`:"2px solid transparent",whiteSpace:"nowrap",flexShrink:0,
+        border:"none",borderBottom:active?`2px solid ${theme.primary}`:"2px solid transparent",
       });
 
       return (
@@ -1708,7 +1732,13 @@
             </div>
           )}
 
-          <div className="cm-tabscroll" style={{display:"flex",borderBottom:`1px solid ${theme.cardBorder}`,marginBottom:16,marginTop:8,overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginTop:10,flexWrap:"wrap"}}>
+            <span style={{fontSize:11,fontWeight:600,color:theme.textMuted,textTransform:"uppercase",letterSpacing:0.5,marginRight:2}}>Theme</span>
+            {THEME_KEYS.map(key => (
+              <button key={key} onClick={() => changeTheme(key)} title={THEMES[key].name} style={{width:22,height:22,borderRadius:"50%",border:"none",cursor:"pointer",background:THEMES[key].primary,boxShadow:themeName===key?"0 0 0 2px #fff":`0 0 0 1px ${theme.cardBorder}`}}></button>
+            ))}
+          </div>
+          <div style={{display:"flex",borderBottom:`1px solid ${theme.cardBorder}`,marginBottom:16,marginTop:8}}>
             <button onClick={() => setActiveTab("categories")} style={tabStyle(activeTab==="categories")}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="folder" size={14}/>Categories</span></button>
             <button onClick={() => setActiveTab("shops")} style={tabStyle(activeTab==="shops")}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="store" size={14}/>Shops</span></button>
             <button onClick={() => setActiveTab("tags")} style={tabStyle(activeTab==="tags")}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="tag" size={14}/>Tags</span></button>
@@ -2039,7 +2069,7 @@
                         <span key={t} title={t} style={{fontSize:12,marginRight:3,cursor:"default"}}>{getTagIcon(t)}</span>
                       ))}
                     </td>
-                    <td style={{padding:"8px 6px",color:"#fff",fontWeight:600}}>{fmt(tx.amount)}</td>
+                    <td style={{padding:"8px 6px",color:"#fff",fontWeight:600}}>{fmtIn(tx.amount, regionOf(tx))}</td>
                     <td style={{padding:"8px 6px"}}>
                       <button title="Edit" onClick={() => openEdit(tx)} style={{background:"none",border:"none",cursor:"pointer",opacity:0.85,padding:"3px 5px",color:theme.textMuted,display:"inline-flex"}}><Icon name="pencil" size={15}/></button>
                       <button title="Delete" onClick={() => requestDelete(tx)} style={{background:"none",border:"none",cursor:"pointer",opacity:0.85,padding:"3px 5px",color:theme.danger,display:"inline-flex"}}><Icon name="trash" size={15}/></button>
@@ -2087,7 +2117,7 @@
           {gridVals.map((gv, i) => (
             <g key={i}>
               <line x1={padL} y1={y(gv)} x2={W - padR} y2={y(gv)} stroke={gridColor} strokeDasharray="3 3" strokeWidth="1" />
-              <text x={padL - 6} y={y(gv) + 3} textAnchor="end" fontSize="9" fill={labelColor} fontFamily="inherit">{`¥${Math.round(gv / 1000)}k`}</text>
+              <text x={padL - 6} y={y(gv) + 3} textAnchor="end" fontSize="9" fill={labelColor} fontFamily="inherit">{`${CUR.symbol}${Math.round(gv / 1000)}k`}</text>
             </g>
           ))}
           <path d={area} fill={`url(#ag-${uid})`} />
@@ -2115,7 +2145,7 @@
           {gridVals.map((gv, i) => (
             <g key={i}>
               <line x1={padL} y1={y(gv)} x2={W - padR} y2={y(gv)} stroke={gridColor} strokeDasharray="3 3" strokeWidth="1" />
-              <text x={padL - 6} y={y(gv) + 3} textAnchor="end" fontSize="9" fill={labelColor} fontFamily="inherit">{`¥${Math.round(gv / 1000)}k`}</text>
+              <text x={padL - 6} y={y(gv) + 3} textAnchor="end" fontSize="9" fill={labelColor} fontFamily="inherit">{`${CUR.symbol}${Math.round(gv / 1000)}k`}</text>
             </g>
           ))}
           {data.map((d, i) => {
@@ -2152,7 +2182,7 @@
               acc += frac;
               return el;
             })}
-            <text x={c} y={c + 4} textAnchor="middle" fontSize="13" fontWeight="700" fill="#fff" fontFamily="inherit">{`¥${Math.round(total / 1000)}k`}</text>
+            <text x={c} y={c + 4} textAnchor="middle" fontSize="13" fontWeight="700" fill="#fff" fontFamily="inherit">{`${CUR.symbol}${Math.round(total / 1000)}k`}</text>
           </svg>
         </div>
       );
@@ -2551,7 +2581,7 @@
           {/* Amount */}
           <div style={{ marginBottom: 12 }}>
             <label style={labelS}>AMOUNT</label>
-            <input type="number" inputMode="numeric" value={form.amount ?? ""} onChange={e => set("amount", e.target.value)} placeholder="¥" style={{ ...inputStyle, fontSize: 14, fontWeight: 600 }} />
+            <input type="number" inputMode="numeric" value={form.amount ?? ""} onChange={e => set("amount", e.target.value)} placeholder={CUR.symbol} style={{ ...inputStyle, fontSize: 14, fontWeight: 600 }} />
             <div style={{ fontSize: 10.5, color: theme.textDim, marginTop: 5 }}>Leave blank to be asked each time it's due.</div>
           </div>
           {/* Category */}
@@ -2661,7 +2691,7 @@
     //  RECURRING VIEW (templates — CRUD only)
     // ═══════════════════════════════════════════
     function RecurringView() {
-      const { theme, supabase, getCatIcon, getCatColor } = useTheme();
+      const { theme, supabase, getCatIcon, getCatColor, currency } = useTheme();
       const [items, setItems] = useState([]);
       const [loading, setLoading] = useState(true);
       const [toast, setToast] = useState(null);
@@ -2704,10 +2734,10 @@
       const fetchList = useCallback(async () => {
         const { data, error } = await supabase.from("cost_management_recurring")
           .select("*").order("frequency").order("sort_order");
-        if (!error && data) setItems(data);
+        if (!error && data) setItems(data.filter((r) => regionOf(r) === CUR.code));
         setLoading(false);
       }, []);
-      useEffect(() => { fetchList(); }, [fetchList]);
+      useEffect(() => { fetchList(); }, [fetchList, currency]);
 
       const grouped = useMemo(() => {
         const g = { daily: [], weekdays: [], weekly: [], monthly: [] };
@@ -2727,7 +2757,7 @@
       const handleAdd = async (form) => {
         setSaving(true);
         const maxSort = grouped[form.frequency].reduce((m, i) => Math.max(m, i.sort_order ?? 0), -1);
-        const rec = { ...buildRecord(form), sort_order: maxSort + 1 };
+        const rec = { ...buildRecord(form), sort_order: maxSort + 1, region: CUR.code };
         const { data, error } = await supabase.from("cost_management_recurring").insert(rec).select().single();
         setSaving(false);
         if (error) { showToast(error.message); return; }
@@ -3002,7 +3032,7 @@
                       type="number" inputMode="numeric" autoFocus
                       value={rawAmt ?? ""}
                       onChange={(e) => setAmt(rec.id, e.target.value)}
-                      placeholder="¥ Enter amount"
+                      placeholder={CUR.symbol + " Enter amount"}
                       disabled={busy}
                       style={{ ...inputStyle, fontSize: 14, fontWeight: 600, marginBottom: 6 }}
                     />
@@ -3087,7 +3117,7 @@
                     <span style={{ fontSize: 14, fontWeight: 700, color: "#fff", whiteSpace: "nowrap" }}>{needsAmount ? "—" : fmt(t.amount)}</span>
                   </div>
                   {needsAmount && (
-                    <input type="number" inputMode="numeric" autoFocus value={rawAmt ?? ""} onChange={(e) => setAmt(t.id, e.target.value)} placeholder="¥ Enter amount" disabled={busy} style={{ ...inputStyle, fontSize: 14, fontWeight: 600, marginBottom: 6 }} />
+                    <input type="number" inputMode="numeric" autoFocus value={rawAmt ?? ""} onChange={(e) => setAmt(t.id, e.target.value)} placeholder={CUR.symbol + " Enter amount"} disabled={busy} style={{ ...inputStyle, fontSize: 14, fontWeight: 600, marginBottom: 6 }} />
                   )}
                   <div style={{ display: "flex", gap: 6 }}>
                     <button onClick={() => doAdd(t, needsAmount ? amtNum : undefined)} disabled={busy || (needsAmount && !amtValid)} style={{ ...addBtn, opacity: (needsAmount && !amtValid) ? 0.5 : 1, cursor: (needsAmount && !amtValid) ? "not-allowed" : "pointer" }}>Add</button>
@@ -3136,7 +3166,7 @@
       };
       const useSample = () => { setEditing((e) => ({ ...e, lat: 35.6762, lng: 139.6503 })); setCoordRaw("35.6762, 139.6503"); flash("Sample spot pinned (Tokyo)"); };
 
-      const save = async () => {
+      const save = () => {
         const e = editing;
         if (!e.name.trim()) { flash("Name required"); return; }
         if (!e.category || !e.shop.trim()) { flash("Category + shop required"); return; }
@@ -3144,13 +3174,14 @@
         const wantLoc = e.cond === "location" || e.cond === "both";
         if (wantTime && (!e.startTime || !e.endTime)) { flash("Set a time window"); return; }
         if (wantLoc && (e.lat == null || e.lng == null)) { flash("Pin a location first"); return; }
-        const rec = { ...e, name: e.name.trim(), shop: e.shop.trim(), amount: e.amount === "" ? null : Number(e.amount), radius: Number(e.radius) || 150, dwellMinutes: Math.max(0, Number(e.dwellMinutes) || 0), startTime: wantTime ? e.startTime : null, endTime: wantTime ? e.endTime : null, lat: wantLoc ? e.lat : null, lng: wantLoc ? e.lng : null };
-        const { error } = await supabase.from(LOC_TRIGGER_TABLE).upsert(triggerToRow(rec), { onConflict: "id" });
-        if (error) { flash(error.message || "Save failed"); return; }
-        await reloadTriggers(); cancel(); flash("Saved");
+        const rec = { ...e, region: e.region || CUR.code, name: e.name.trim(), shop: e.shop.trim(), amount: e.amount === "" ? null : Number(e.amount), radius: Number(e.radius) || 150, dwellMinutes: Math.max(0, Number(e.dwellMinutes) || 0), startTime: wantTime ? e.startTime : null, endTime: wantTime ? e.endTime : null, lat: wantLoc ? e.lat : null, lng: wantLoc ? e.lng : null };
+        const list = getStoredTriggers();
+        const i = list.findIndex((x) => x.id === rec.id);
+        if (i >= 0) list[i] = rec; else list.push(rec);
+        setStoredTriggers(list); reloadTriggers(); cancel(); flash("Saved");
       };
-      const remove = async (id) => { await supabase.from(LOC_TRIGGER_TABLE).delete().eq("id", id); await reloadTriggers(); };
-      const toggle = async (t) => { await supabase.from(LOC_TRIGGER_TABLE).update({ is_active: !t.is_active }).eq("id", t.id); await reloadTriggers(); };
+      const remove = (id) => { setStoredTriggers(getStoredTriggers().filter((x) => x.id !== id)); reloadTriggers(); };
+      const toggle = (t) => { setStoredTriggers(getStoredTriggers().map((x) => x.id === t.id ? { ...x, is_active: !x.is_active } : x)); reloadTriggers(); };
 
       const formShops = editing ? shops.filter((s) => s.category === editing.category) : [];
       const card = { background: theme.inputBg, borderRadius: 10, padding: "11px 12px", marginBottom: 8 };
@@ -3295,7 +3326,7 @@
         const r = ruleOf(p.rule_id);
         const amt = amount != null ? amount : (p.amount != null ? p.amount : r.amount);
         if (amt == null || !(Number(amt) > 0)) { setBusyId(null); return; }
-        const { error } = await supabase.from("cost_management_expenses").insert({ date: p.due_date, category: r.category, shop: r.shop, amount: Number(amt), notes: r.notes || "", expense_type: r.expense_type || "normal", tags: r.tags || "" });
+        const { error } = await supabase.from("cost_management_expenses").insert({ region: regionOf(r), date: p.due_date, category: r.category, shop: r.shop, amount: Number(amt), notes: r.notes || "", expense_type: r.expense_type || "normal", tags: r.tags || "" });
         if (!error) await supabase.from("cost_management_pending").update({ status: "logged", amount: Number(amt), resolved_at: new Date().toISOString() }).eq("id", p.id);
         await refresh(); setBusyId(null); vibrate(10);
       };
@@ -3343,7 +3374,7 @@
                         <span style={{ fontSize: 14, fontWeight: 700, color: "#fff", whiteSpace: "nowrap" }}>{needsAmount ? "—" : fmt(known)}</span>
                       </div>
                       {needsAmount && (
-                        <input type="number" inputMode="numeric" value={raw ?? ""} onChange={(e) => setAmt(p.id, e.target.value)} placeholder="¥ Enter amount" disabled={busy} style={{ ...inputStyle, fontSize: 14, fontWeight: 600, marginBottom: 6 }} />
+                        <input type="number" inputMode="numeric" value={raw ?? ""} onChange={(e) => setAmt(p.id, e.target.value)} placeholder={CUR.symbol + " Enter amount"} disabled={busy} style={{ ...inputStyle, fontSize: 14, fontWeight: 600, marginBottom: 6 }} />
                       )}
                       <div style={{ display: "flex", gap: 6 }}>
                         <button onClick={() => doLog(p, needsAmount ? amtNum : undefined)} disabled={busy || (needsAmount && !amtValid)} style={{ flex: 1, padding: "8px 6px", borderRadius: 9, border: "none", cursor: (needsAmount && !amtValid) ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})`, opacity: (needsAmount && !amtValid) ? 0.5 : 1 }}>Log it</button>
