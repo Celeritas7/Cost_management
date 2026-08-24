@@ -242,7 +242,8 @@
 
     // ═════════════════════════════════════════════════════════════
     //  LOCATION-BASED PAYMENT TRIGGERS  (geofence + time-of-day window)
-    //  Stored locally (no DB changes). A trigger fires when you are within
+    //  Stored in cost_management_triggers (DB) with localStorage as cache.
+    //  A trigger fires when you are within
     //  `radius` metres of (lat,lng) AND the local clock is inside its
     //  [startTime,endTime] window — then it surfaces in a pile-up panel.
     // ═════════════════════════════════════════════════════════════
@@ -253,6 +254,24 @@
     }
     function setStoredTriggers(list) {
       try { localStorage.setItem(LOC_TRIGGER_KEY, JSON.stringify(list)); } catch (e) {}
+    }
+    // ── DB sync: cost_management_triggers is the source of truth; localStorage
+    //    stays as the synchronous cache the geofence checks read from. ──
+    const trigRow = (t) => ({ id: t.id, region: t.region || "JPY", is_active: t.is_active !== false, last_fired_date: t.last_fired_date || null, data: t, updated_at: new Date().toISOString() });
+    async function pullTriggersFromDB(sb) {
+      const { data, error } = await sb.from("cost_management_triggers").select("*");
+      if (error) { console.warn("trigger pull failed", error.message); return null; }
+      const list = (data || []).map((r) => ({ ...r.data, id: r.id, region: r.region, is_active: r.is_active, last_fired_date: r.last_fired_date }));
+      setStoredTriggers(list);
+      return list;
+    }
+    async function upsertTriggerDB(sb, t) {
+      const { error } = await sb.from("cost_management_triggers").upsert(trigRow(t));
+      if (error) console.warn("trigger upsert failed", error.message);
+    }
+    async function deleteTriggerDB(sb, id) {
+      const { error } = await sb.from("cost_management_triggers").delete().eq("id", id);
+      if (error) console.warn("trigger delete failed", error.message);
     }
     // metres between two {lat,lng} points (haversine)
     function distanceMeters(a, b) {
@@ -376,6 +395,22 @@
       // ── Location triggers (geofence + time-of-day window) ──
       const [locTriggers, setLocTriggers] = useState(() => getStoredTriggers());
       const reloadTriggers = useCallback(() => setLocTriggers(getStoredTriggers()), []);
+      // pull triggers from the DB on load (localStorage cache shows instantly, DB wins)
+      useEffect(() => { (async () => { const list = await pullTriggersFromDB(supabase); if (list) setLocTriggers(list); })(); }, []);
+      // one-time migration: push any local-only triggers up to the DB
+      useEffect(() => {
+        (async () => {
+          try {
+            if (localStorage.getItem("cm_triggers_migrated") === "1") return;
+            const local = getStoredTriggers();
+            if (local.length) {
+              const { error } = await supabase.from("cost_management_triggers").upsert(local.map(trigRow));
+              if (error) { console.warn("trigger migration failed", error.message); return; }
+            }
+            localStorage.setItem("cm_triggers_migrated", "1");
+          } catch (e) {}
+        })();
+      }, []);
       const [locDueList, setLocDueList] = useState([]);
       const [locDueOpen, setLocDueOpen] = useState(false);
       const [locDismissed, setLocDismissed] = useState([]); // trigger ids dismissed this session
@@ -508,6 +543,7 @@
       const stampLocFired = (id) => {
         const next = getStoredTriggers().map((x) => x.id === id ? { ...x, last_fired_date: ymdToday() } : x);
         setStoredTriggers(next); setLocTriggers(next);
+        const t = next.find((x) => x.id === id); if (t) upsertTriggerDB(supabase, t);
       };
       // simTriggerId: pretend you're standing at that trigger's pin (ignores GPS,
       // day-stamp and time window) so it can be demoed without moving / real GPS.
@@ -3140,7 +3176,7 @@
     //  LOCATION TRIGGERS SETTINGS  (manage geofence + time-window rules)
     // ═══════════════════════════════════════════
     function LocationTriggersView() {
-      const { theme, inputStyle, categories, shops, getCatIcon, getCatColor, locTriggers, reloadTriggers, checkLocation, locStatus } = useTheme();
+      const { theme, inputStyle, categories, shops, getCatIcon, getCatColor, locTriggers, reloadTriggers, checkLocation, locStatus, supabase } = useTheme();
       const [editing, setEditing] = useState(null);
       const [showForm, setShowForm] = useState(false);
       const [capturing, setCapturing] = useState(false);
@@ -3178,10 +3214,10 @@
         const list = getStoredTriggers();
         const i = list.findIndex((x) => x.id === rec.id);
         if (i >= 0) list[i] = rec; else list.push(rec);
-        setStoredTriggers(list); reloadTriggers(); cancel(); flash("Saved");
+        setStoredTriggers(list); upsertTriggerDB(supabase, rec); reloadTriggers(); cancel(); flash("Saved");
       };
-      const remove = (id) => { setStoredTriggers(getStoredTriggers().filter((x) => x.id !== id)); reloadTriggers(); };
-      const toggle = (t) => { setStoredTriggers(getStoredTriggers().map((x) => x.id === t.id ? { ...x, is_active: !x.is_active } : x)); reloadTriggers(); };
+      const remove = (id) => { setStoredTriggers(getStoredTriggers().filter((x) => x.id !== id)); deleteTriggerDB(supabase, id); reloadTriggers(); };
+      const toggle = (t) => { const next = getStoredTriggers().map((x) => x.id === t.id ? { ...x, is_active: !x.is_active } : x); setStoredTriggers(next); const u = next.find((x) => x.id === t.id); if (u) upsertTriggerDB(supabase, u); reloadTriggers(); };
 
       const formShops = editing ? shops.filter((s) => s.category === editing.category) : [];
       const card = { background: theme.inputBg, borderRadius: 10, padding: "11px 12px", marginBottom: 8 };
