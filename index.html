@@ -35,6 +35,14 @@
     .cm-chip { transition: background 0.15s ease, color 0.15s ease, outline-color 0.15s ease, transform 0.1s ease, filter 0.15s ease; }
     .cm-chip:hover { filter: brightness(1.18); transform: translateY(-1px); }
     .cm-chip:active { transform: scale(0.94); }
+    @media print {
+      @page { size: A4 landscape; margin: 8mm; }
+      html, body { background: #fff !important; }
+      body > #root { display: none !important; }
+      .cm-print-portal { position: static !important; inset: auto !important; padding: 0 !important; background: #fff !important; overflow: visible !important; }
+      .cm-print-toolbar { display: none !important; }
+      .cm-print-sheet { box-shadow: none !important; margin: 0 !important; min-height: 0 !important; padding: 0 !important; }
+    }
   </style>
 </head>
 <body>
@@ -247,6 +255,155 @@
     //  `radius` metres of (lat,lng) AND the local clock is inside its
     //  [startTime,endTime] window — then it surfaces in a pile-up panel.
     // ═════════════════════════════════════════════════════════════
+    // ── PURCHASE REQUESTS INBOX ── any companion app (Sukkiri, etc.) can send
+    // "things to buy" here via localStorage or pasted JSON. Requests hold items
+    // to purchase; approving logs them as expenses. A periodic reminder banner
+    // surfaces pending requests on every screen.
+    const REQUESTS_KEY = "cost_management_purchase_requests";
+    const LEGACY_REQUEST_KEYS = ["sukkiri_cost_requests"]; // older per-app keys, absorbed on read
+    function getPurchaseRequests() {
+      let list;
+      try { const v = JSON.parse(localStorage.getItem(REQUESTS_KEY)); list = Array.isArray(v) ? v : []; }
+      catch (e) { list = []; }
+      // absorb legacy per-app keys so old senders keep working
+      LEGACY_REQUEST_KEYS.forEach((k) => {
+        try {
+          const v = JSON.parse(localStorage.getItem(k));
+          if (Array.isArray(v) && v.length) {
+            v.forEach((r) => { if (r && r.id && !list.some((x) => x.id === r.id)) list.push(r); });
+            localStorage.removeItem(k);
+            localStorage.setItem(REQUESTS_KEY, JSON.stringify(list));
+          }
+        } catch (e) {}
+      });
+      return list;
+    }
+    function setPurchaseRequests(list) {
+      try { localStorage.setItem(REQUESTS_KEY, JSON.stringify(list)); } catch (e) {}
+    }
+    function mergePurchaseRequests(incoming) {
+      const arr = Array.isArray(incoming) ? incoming : [incoming];
+      const valid = arr.filter((r) => r && r.type === "purchase_request" && r.id && Array.isArray(r.items));
+      if (!valid.length) return { list: getPurchaseRequests(), added: 0 };
+      const list = getPurchaseRequests();
+      let added = 0;
+      valid.forEach((r) => { if (!list.some((x) => x.id === r.id)) { list.push({ source: "unknown", ...r }); added++; } });
+      setPurchaseRequests(list);
+      return { list, added };
+    }
+
+    // ═════════════════════════════════════════════════════════════
+    //  WEEKLY FOCUS TASKS — tasks authored in the Weekly Focus app arrive
+    //  here (shared localStorage key, or pasted JSON) and render on the
+    //  Calendar, which doubles as the printable weekly sheet. The reader is
+    //  deliberately tolerant: arrays, {tasks:[…]}, {days:{mon:[…]}}, bare
+    //  strings and most common field spellings all normalise to one shape.
+    // ═════════════════════════════════════════════════════════════
+    const FOCUS_TASKS_KEY = "weekly_focus_tasks";
+    const LEGACY_TASK_KEYS = ["weeklyFocusTasks", "weekly_focus_app_tasks", "focus_tasks", "weeklyfocus_tasks"];
+    const DAY_ALIAS = { mon:1, monday:1, tue:2, tues:2, tuesday:2, wed:3, weds:3, wednesday:3, thu:4, thur:4, thurs:4, thursday:4, fri:5, friday:5, sat:6, saturday:6, sun:7, sunday:7 };
+    const mondayOfDate = (d) => { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); const j = x.getDay(); x.setDate(x.getDate() - (j === 0 ? 6 : j - 1)); return x; };
+    const addDays = (d, n) => { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() + n); return x; };
+    const dateOfIso = (iso) => new Date(iso + "T00:00:00");
+    function normTaskDate(v, weekStart) {
+      if (v == null || v === "") return null;
+      if (v instanceof Date) return isNaN(v) ? null : ymdLocal(v);
+      const str = String(v).trim();
+      if (!str) return null;
+      const iso = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (iso) return iso[1] + "-" + iso[2] + "-" + iso[3];
+      const slash = str.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+      if (slash) return slash[1] + "-" + pad2(+slash[2]) + "-" + pad2(+slash[3]);
+      const alias = DAY_ALIAS[str.toLowerCase()];
+      if (alias) return ymdLocal(addDays(weekStart || mondayOfDate(new Date()), alias - 1));
+      const d = new Date(str);
+      return isNaN(d) ? null : ymdLocal(d);
+    }
+    const pickField = (o, keys) => { for (const k of keys) { const v = o[k]; if (v != null && v !== "") return v; } return ""; };
+    function normalizeTask(raw, i, weekStart, fallbackDate) {
+      const t = typeof raw === "string" ? { title: raw } : (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : null);
+      if (!t) return null;
+      const title = String(pickField(t, ["title", "name", "text", "task", "label", "todo", "summary"])).trim();
+      if (!title) return null;
+      const date = normTaskDate(pickField(t, ["date", "due", "dueDate", "due_date", "day", "scheduled_for", "scheduledFor", "on"]), weekStart) || fallbackDate || null;
+      const doneRaw = t.done ?? t.completed ?? t.isDone ?? t.is_done ?? t.checked ?? t.complete;
+      const timeRaw = String(pickField(t, ["time", "start", "start_time", "slot", "when"]) || "").trim();
+      const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 32);
+      return {
+        id: String(t.id || t.uid || t.key || ("wf-" + (date || "any") + "-" + slug + "-" + i)),
+        title, date,
+        done: !!doneRaw,
+        time: timeRaw.length <= 12 ? timeRaw : "",
+        category: String(pickField(t, ["category", "area", "focus", "project", "bucket", "tag", "list"]) || "").trim(),
+        priority: String(pickField(t, ["priority", "prio", "importance"]) || "").trim(),
+        notes: String(pickField(t, ["notes", "note", "detail", "details", "description"]) || "").trim(),
+        source: String(t.source || "weekly-focus"),
+      };
+    }
+    function flattenFocusInput(input) {
+      const out = [];
+      const weekStartOf = (o, fallback) => {
+        const w = o && (o.week || o.week_start || o.weekStart || o.weekOf);
+        const d = w ? normTaskDate(w, null) : null;
+        return d ? mondayOfDate(dateOfIso(d)) : fallback;
+      };
+      const walk = (node, weekStart, fallbackDate) => {
+        if (!node) return;
+        if (Array.isArray(node)) {
+          node.forEach((n) => {
+            const nested = n && typeof n === "object" && (n.tasks || n.items || n.todos || n.days);
+            if (nested) walk(n, weekStart, fallbackDate);
+            else { const t = normalizeTask(n, out.length, weekStart, fallbackDate); if (t) out.push(t); }
+          });
+          return;
+        }
+        if (typeof node === "object") {
+          const ws = weekStartOf(node, weekStart);
+          const list = node.tasks || node.items || node.todos || node.entries;
+          const days = node.days || node.byDay || node.schedule;
+          if (list) walk(list, ws, fallbackDate);
+          if (days && typeof days === "object" && !Array.isArray(days)) {
+            Object.keys(days).forEach((k) => walk(days[k], ws, normTaskDate(k, ws) || fallbackDate));
+          }
+          if (!list && !days) { const t = normalizeTask(node, out.length, ws, fallbackDate); if (t) out.push(t); }
+        }
+      };
+      walk(input, mondayOfDate(new Date()), null);
+      return out;
+    }
+    function setFocusTasks(list) { try { localStorage.setItem(FOCUS_TASKS_KEY, JSON.stringify(list)); } catch (e) {} }
+    function getFocusTasks() {
+      let list = [];
+      try { list = flattenFocusInput(JSON.parse(localStorage.getItem(FOCUS_TASKS_KEY))); } catch (e) { list = []; }
+      let absorbed = false;
+      LEGACY_TASK_KEYS.forEach((k) => {
+        try {
+          const extra = flattenFocusInput(JSON.parse(localStorage.getItem(k)));
+          extra.forEach((t) => { if (!list.some((x) => x.id === t.id)) { list.push(t); absorbed = true; } });
+        } catch (e) {}
+      });
+      if (absorbed) setFocusTasks(list);
+      return list;
+    }
+    function mergeFocusTasks(incoming) {
+      const add = flattenFocusInput(incoming);
+      const list = getFocusTasks();
+      if (!add.length) return { list, added: 0 };
+      let added = 0;
+      add.forEach((t) => {
+        const i = list.findIndex((x) => x.id === t.id);
+        if (i < 0) { list.push(t); added++; } else { list[i] = { ...t, done: list[i].done || t.done }; }
+      });
+      setFocusTasks(list);
+      return { list, added };
+    }
+    const groupTasksByDate = (list) => {
+      const map = {};
+      list.forEach((t) => { if (t.date) (map[t.date] = map[t.date] || []).push(t); });
+      Object.keys(map).forEach((k) => map[k].sort((a, b) => (a.time || "zz").localeCompare(b.time || "zz")));
+      return map;
+    };
+
     const LOC_TRIGGER_KEY = "cost_management_location_triggers";
     function getStoredTriggers() {
       try { const v = JSON.parse(localStorage.getItem(LOC_TRIGGER_KEY)); return Array.isArray(v) ? v : []; }
@@ -394,21 +551,33 @@
       const dueShownRef = useRef(false); // open the due modal at most once per session
       // ── Location triggers (geofence + time-of-day window) ──
       const [locTriggers, setLocTriggers] = useState(() => getStoredTriggers());
+      const [sukkiriReqs, setSukkiriReqs] = useState(() => getPurchaseRequests());
+      const reloadSukkiri = useCallback(() => setSukkiriReqs(getPurchaseRequests()), []);
+      const sukkiriPending = useMemo(() => sukkiriReqs.filter((r) => !r.status || r.status === "pending"), [sukkiriReqs]);
+      // reminder banner: shows when requests are pending; a dismiss hides it,
+      // but it re-surfaces every 30 minutes and on each app load
+      const [reqReminderHidden, setReqReminderHidden] = useState(false);
+      useEffect(() => {
+        const t = setInterval(() => { reloadSukkiri(); setReqReminderHidden(false); }, 30 * 60 * 1000);
+        return () => clearInterval(t);
+      }, []);
       const reloadTriggers = useCallback(() => setLocTriggers(getStoredTriggers()), []);
-      // pull triggers from the DB on load (localStorage cache shows instantly, DB wins)
-      useEffect(() => { (async () => { const list = await pullTriggersFromDB(supabase); if (list) setLocTriggers(list); })(); }, []);
-      // one-time migration: push any local-only triggers up to the DB
+      // DB sync on load: first push any local-only triggers up (one-time
+      // migration), THEN pull — so an empty table never wipes local triggers.
       useEffect(() => {
         (async () => {
           try {
-            if (localStorage.getItem("cm_triggers_migrated") === "1") return;
-            const local = getStoredTriggers();
-            if (local.length) {
-              const { error } = await supabase.from("cost_management_triggers").upsert(local.map(trigRow));
-              if (error) { console.warn("trigger migration failed", error.message); return; }
+            if (localStorage.getItem("cm_triggers_migrated") !== "1") {
+              const local = getStoredTriggers();
+              if (local.length) {
+                const { error } = await supabase.from("cost_management_triggers").upsert(local.map(trigRow));
+                if (error) { console.warn("trigger migration failed", error.message); return; }
+              }
+              localStorage.setItem("cm_triggers_migrated", "1");
             }
-            localStorage.setItem("cm_triggers_migrated", "1");
-          } catch (e) {}
+            const list = await pullTriggersFromDB(supabase);
+            if (list) setLocTriggers(list);
+          } catch (e) { console.warn("trigger sync failed", e); }
         })();
       }, []);
       const [locDueList, setLocDueList] = useState([]);
@@ -702,6 +871,16 @@
         { id: "transactions", label: "History", icon: "list" },
         { id: "settings", label: "Settings", icon: "settings" },
       ];
+      // On phones the primary tabs move to a thumb-reachable bottom bar;
+      // Settings + the region/currency switch stay in the top-right corner.
+      const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.matchMedia("(max-width: 720px)").matches : false));
+      useEffect(() => {
+        const mq = window.matchMedia("(max-width: 720px)");
+        const on = (e) => setIsMobile(e.matches);
+        mq.addEventListener ? mq.addEventListener("change", on) : mq.addListener(on);
+        return () => { mq.removeEventListener ? mq.removeEventListener("change", on) : mq.removeListener(on); };
+      }, []);
+      const bottomTabs = [navTabs[0], navTabs[2], navTabs[1]];
 
       return (
         <ThemeContext.Provider value={{ theme, themeName, inputStyle, labelStyle, pillStyle, supabase, fetchData, categories, tags, getCatIcon, getCatColor, getTagIcon, getTagColor, shops: regionShops, recurring: regionRecurring, currency, changeTheme, setView, presetDate, setPresetDate, locTriggers: regionTriggers, reloadTriggers, checkLocation, locStatus }}>
@@ -711,12 +890,13 @@
              <div style={{maxWidth:1080,margin:"0 auto",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
               <h1 style={{fontSize:18,fontWeight:700,color:"#fff",margin:0}}>Cost Management</h1>
               <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>
-                {navTabs.map(tab => (
-                  <button key={tab.id} onClick={() => { setView(tab.id); setTxPage(0); }} style={{...pillStyle(view===tab.id || (tab.id==="transactions" && view==="calendar")),padding:"5px 11px",fontSize:11,display:"inline-flex",alignItems:"center",gap:6}}><Icon name={tab.icon} size={15}/>{tab.label}</button>
+                {(isMobile ? navTabs.filter(t => t.id === "settings") : navTabs).map(tab => (
+                  <button key={tab.id} onClick={() => { setView(tab.id); setTxPage(0); }} style={{...pillStyle(view===tab.id || (tab.id==="transactions" && view==="calendar")),padding:"5px 11px",fontSize:11,display:"inline-flex",alignItems:"center",gap:6}}><Icon name={tab.icon} size={15}/>{isMobile && tab.id==="settings" ? "" : tab.label}</button>
                 ))}
-                {regionPending.length>0 && (
+                {!isMobile && regionPending.length>0 && (
                   <button onClick={() => setView("outstanding")} title="Outstanding payments" style={{...pillStyle(view==="outstanding"),padding:"5px 9px",fontSize:11,display:"inline-flex",alignItems:"center",gap:5}}><Icon name="inbox" size={15}/><span style={{background:theme.danger,color:"#fff",fontSize:9,fontWeight:700,borderRadius:9,padding:"1px 5px",lineHeight:1.6}}>{regionPending.length}</span></button>
                 )}
+                {!isMobile && <button onClick={() => { reloadSukkiri(); setView("sukkiri"); }} title="Purchase requests from companion apps" style={{...pillStyle(view==="sukkiri"),padding:"5px 11px",fontSize:11,display:"inline-flex",alignItems:"center",gap:6}}>🛒 Requests{sukkiriPending.length>0 && <span style={{background:theme.danger,color:"#fff",fontSize:9,fontWeight:700,borderRadius:9,padding:"1px 5px",lineHeight:1.6}}>{sukkiriPending.length}</span>}</button>}
                 <div style={{position:"relative"}}>
                   <button onClick={() => setShowCurrencyPicker(!showCurrencyPicker)} title="Region & currency" style={{...pillStyle(false),padding:"6px 10px",display:"inline-flex",alignItems:"center",justifyContent:"center",color:theme.primary,fontSize:14,fontWeight:700,minWidth:32,lineHeight:1}}>{CUR.symbol}</button>
                   {showCurrencyPicker && (
@@ -773,7 +953,7 @@
               </div>
             )}
 
-            <div style={{padding:"0 16px 20px",maxWidth:1080,margin:"0 auto",boxSizing:"border-box"}}>
+            <div style={{padding:isMobile?"0 16px 92px":"0 16px 20px",maxWidth:1080,margin:"0 auto",boxSizing:"border-box"}}>
               {loading ? (
                 <div style={{textAlign:"center",padding:50,color:theme.textMuted}}>Loading…</div>
               ) : view === "add" ? (
@@ -786,10 +966,46 @@
                 <TransactionsView pageTx={pageTx} txPage={txPage} setTxPage={setTxPage} txPages={txPages} />
               ) : view === "outstanding" ? (
                 <OutstandingView pending={regionPending} recurring={recurring} refresh={async () => { const { data: p } = await supabase.from("cost_management_pending").select("*").eq("status", "pending").order("due_date"); setPending(p || []); await fetchData(); }} />
+              ) : view === "sukkiri" ? (
+                <SukkiriRequestsView requests={sukkiriReqs} reload={reloadSukkiri} />
               ) : (
                 <SettingsView allExpenses={RAW} />
               )}
             </div>
+
+            {/* Mobile bottom tab bar — thumb-reachable primary navigation */}
+            {isMobile && (
+              <nav style={{position:"fixed",left:0,right:0,bottom:0,zIndex:200,background:"rgba(10,10,18,0.94)",backdropFilter:"blur(14px) saturate(140%)",WebkitBackdropFilter:"blur(14px) saturate(140%)",borderTop:`1px solid ${theme.cardBorder}`,padding:"6px 6px calc(6px + env(safe-area-inset-bottom))",display:"grid",gridTemplateColumns:`repeat(${bottomTabs.length + 1 + (regionPending.length>0?1:0)}, 1fr)`,gap:2,boxShadow:"0 -6px 20px rgba(0,0,0,0.35)"}}>
+                {bottomTabs.map(tab => {
+                  const on = view===tab.id || (tab.id==="transactions" && view==="calendar");
+                  return (
+                    <button key={tab.id} onClick={() => { setView(tab.id); setTxPage(0); }} style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,minHeight:52,border:"none",borderRadius:12,cursor:"pointer",fontFamily:"inherit",fontSize:10,fontWeight:600,background:on?theme.primaryGlow:"transparent",color:on?"#fff":theme.textMuted}}>
+                      <Icon name={tab.icon} size={19}/>{tab.label}
+                    </button>
+                  );
+                })}
+                {regionPending.length>0 && (
+                  <button onClick={() => setView("outstanding")} style={{position:"relative",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,minHeight:52,border:"none",borderRadius:12,cursor:"pointer",fontFamily:"inherit",fontSize:10,fontWeight:600,background:view==="outstanding"?theme.primaryGlow:"transparent",color:view==="outstanding"?"#fff":theme.textMuted}}>
+                    <Icon name="inbox" size={19}/>Due
+                    <span style={{position:"absolute",top:4,right:"50%",marginRight:-20,background:theme.danger,color:"#fff",fontSize:9,fontWeight:700,borderRadius:9,padding:"1px 5px",lineHeight:1.6}}>{regionPending.length}</span>
+                  </button>
+                )}
+                <button onClick={() => { reloadSukkiri(); setView("sukkiri"); }} style={{position:"relative",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,minHeight:52,border:"none",borderRadius:12,cursor:"pointer",fontFamily:"inherit",fontSize:10,fontWeight:600,background:view==="sukkiri"?theme.primaryGlow:"transparent",color:view==="sukkiri"?"#fff":theme.textMuted}}>
+                  <span style={{fontSize:17,lineHeight:1.1}}>🛒</span>Requests
+                  {sukkiriPending.length>0 && <span style={{position:"absolute",top:4,right:"50%",marginRight:-22,background:theme.danger,color:"#fff",fontSize:9,fontWeight:700,borderRadius:9,padding:"1px 5px",lineHeight:1.6}}>{sukkiriPending.length}</span>}
+                </button>
+              </nav>
+            )}
+
+            {/* Purchase-requests reminder — floats on every screen while requests are pending */}
+            {sukkiriPending.length > 0 && !reqReminderHidden && view !== "sukkiri" && (
+              <div style={{ position: "fixed", bottom: isMobile ? 84 : 18, left: "50%", transform: "translateX(-50%)", zIndex: 80, display: "flex", alignItems: "center", gap: 10, background: theme.headerBg, border: `1px solid ${theme.primary}55`, borderRadius: 14, padding: "10px 14px", boxShadow: `0 8px 30px rgba(0,0,0,0.45)`, maxWidth: "92vw" }}>
+                <span style={{ fontSize: 16 }}>🛒</span>
+                <span style={{ fontSize: 12.5, color: "#fff" }}><b>{sukkiriPending.reduce((s, r) => s + (r.items ? r.items.length : 0), 0)} item{sukkiriPending.reduce((s, r) => s + (r.items ? r.items.length : 0), 0) === 1 ? "" : "s"} to buy</b> · {sukkiriPending.length} request{sukkiriPending.length === 1 ? "" : "s"} waiting</span>
+                <button onClick={() => { setView("sukkiri"); setReqReminderHidden(true); }} style={{ border: "none", borderRadius: 8, background: theme.primary, color: "#fff", fontSize: 11.5, fontWeight: 700, padding: "6px 12px", cursor: "pointer", fontFamily: "inherit" }}>Review</button>
+                <button onClick={() => setReqReminderHidden(true)} title="Remind me later" style={{ border: "none", background: "none", color: theme.textMuted, fontSize: 14, cursor: "pointer", padding: "2px 4px" }}>✕</button>
+              </div>
+            )}
 
             {dueModalOpen && dueList.length > 0 && (
               <RecurringDueModal items={dueList} onAdd={dueAdd} onSkip={dueSkip} onSnooze={dueSnooze} onResolve={resolveDue} onClose={dueClose} />
@@ -812,6 +1028,154 @@
     // ═══════════════════════════════════════════
     //  CALENDAR VIEW (read-only dot calendar + day panel)
     // ═══════════════════════════════════════════
+    const pillish = (on, theme) => ({
+      padding: "4px 10px", fontSize: 11, fontWeight: 600, borderRadius: 8, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap", lineHeight: 1.6,
+      background: on ? "rgba(96,165,250,0.16)" : theme.inputBg,
+      color: on ? "#60a5fa" : theme.textMuted,
+      border: "1px solid " + (on ? "rgba(96,165,250,0.45)" : theme.cardBorder),
+    });
+
+    // ═══════════════════════════════════════════
+    //  PRINTABLE FOCUS SHEET — light ink, A4. The screen preview is the same
+    //  markup the printer gets; the toolbar drops out under @media print.
+    // ═══════════════════════════════════════════
+    function PrintSheet({ tasks = [], anchorDate, onClose }) {
+      const [mode, setMode] = useState("week");
+      const [offset, setOffset] = useState(0);
+      const base = anchorDate ? dateOfIso(anchorDate) : new Date();
+      const byDate = groupTasksByDate(tasks);
+      const loose = tasks.filter((t) => !t.date);
+      const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+      const ink = { head: "#111827", body: "#1f2937", soft: "#6b7280", rule: "#d1d5db", faint: "#eef0f3" };
+
+      const weekStart = addDays(mondayOfDate(base), offset * 7);
+      const weekDays = Array.from({ length: 7 }).map((_, i) => addDays(weekStart, i));
+      const monthAnchor = new Date(base.getFullYear(), base.getMonth() + offset, 1);
+      const rangeLabel = mode === "week"
+        ? MONTHS_FULL[weekStart.getMonth()].slice(0, 3) + " " + weekStart.getDate() + " – " + MONTHS_FULL[weekDays[6].getMonth()].slice(0, 3) + " " + weekDays[6].getDate() + ", " + weekDays[6].getFullYear()
+        : MONTHS_FULL[monthAnchor.getMonth()] + " " + monthAnchor.getFullYear();
+
+      const TaskLine = ({ t, size = 10.5 }) => (
+        <div style={{ display: "flex", gap: 5, alignItems: "flex-start", padding: "2.5px 0", borderBottom: "1px dotted " + ink.faint }}>
+          <span style={{ width: 9, height: 9, minWidth: 9, marginTop: 3, border: "1px solid " + ink.soft, borderRadius: 2, background: t.done ? ink.soft : "#fff" }}></span>
+          <span style={{ fontSize: size, lineHeight: 1.3, color: t.done ? ink.soft : ink.body, textDecoration: t.done ? "line-through" : "none" }}>
+            {t.time ? <b style={{ color: ink.soft, fontWeight: 700 }}>{t.time} </b> : null}
+            {t.title}
+            {t.category ? <span style={{ color: ink.soft }}> · {t.category}</span> : null}
+          </span>
+        </div>
+      );
+      const BlankLines = ({ n }) => (
+        <React.Fragment>
+          {Array.from({ length: Math.max(0, n) }).map((_, i) => (
+            <div key={"b" + i} style={{ display: "flex", gap: 5, alignItems: "flex-start", padding: "2.5px 0", borderBottom: "1px dotted " + ink.faint }}>
+              <span style={{ width: 9, height: 9, minWidth: 9, marginTop: 3, border: "1px solid " + ink.rule, borderRadius: 2 }}></span>
+              <span style={{ fontSize: 10.5, lineHeight: 1.3, color: "transparent" }}>·</span>
+            </div>
+          ))}
+        </React.Fragment>
+      );
+
+      const btn = { padding: "6px 12px", fontSize: 12, fontWeight: 600, borderRadius: 8, border: "1px solid #d1d5db", background: "#fff", color: "#111827", cursor: "pointer", fontFamily: "inherit" };
+      const btnOn = { ...btn, background: "#111827", color: "#fff", borderColor: "#111827" };
+
+      return ReactDOM.createPortal(
+        <div className="cm-print-portal" style={{ position: "fixed", inset: 0, zIndex: 9000, background: "#e9ecef", overflow: "auto", padding: "16px 12px 40px" }}>
+          <div className="cm-print-toolbar" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "center", marginBottom: 14 }}>
+            <button onClick={() => setMode("week")} style={mode === "week" ? btnOn : btn}>Week</button>
+            <button onClick={() => setMode("month")} style={mode === "month" ? btnOn : btn}>Month</button>
+            <button onClick={() => setOffset((o) => o - 1)} style={btn}>‹</button>
+            <button onClick={() => setOffset(0)} style={btn}>{rangeLabel}</button>
+            <button onClick={() => setOffset((o) => o + 1)} style={btn}>›</button>
+            <button onClick={() => window.print()} style={{ ...btnOn, background: "#2563eb", borderColor: "#2563eb" }}>Print</button>
+            <button onClick={onClose} style={btn}>Close</button>
+          </div>
+
+          <div className="cm-print-sheet" style={{ width: "277mm", maxWidth: "100%", margin: "0 auto", background: "#fff", color: ink.body, padding: "8mm 9mm", boxShadow: "0 6px 24px rgba(0,0,0,0.18)" }}>
+            <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", borderBottom: "2px solid " + ink.head, paddingBottom: 6, marginBottom: 10 }}>
+              <div>
+                <div style={{ fontSize: 19, fontWeight: 700, color: ink.head, letterSpacing: -0.2 }}>Weekly Focus</div>
+                <div style={{ fontSize: 11, color: ink.soft, marginTop: 2, whiteSpace: "nowrap" }}>{mode === "week" ? "Week of " : ""}{rangeLabel}</div>
+              </div>
+              <div style={{ fontSize: 10, color: ink.soft, textAlign: "right", whiteSpace: "nowrap", paddingLeft: 16 }}>
+                {tasks.filter((t) => !t.done).length} open · {tasks.length} total<br/>printed {todayStr()}
+              </div>
+            </div>
+
+            {mode === "week" ? (
+              <React.Fragment>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", border: "1px solid " + ink.rule, borderRight: "none" }}>
+                  {weekDays.map((d, i) => {
+                    const iso = ymdLocal(d);
+                    const list = byDate[iso] || [];
+                    const weekend = i >= 5;
+                    return (
+                      <div key={iso} style={{ borderRight: "1px solid " + ink.rule, minHeight: "128mm", display: "flex", flexDirection: "column" }}>
+                        <div style={{ padding: "4px 6px", borderBottom: "1px solid " + ink.rule, background: weekend ? "#f6f7f9" : "#fff" }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: ink.head, textTransform: "uppercase", letterSpacing: 0.6 }}>{DAY_NAMES[i]}</div>
+                          <div style={{ fontSize: 15, fontWeight: 700, color: weekend ? ink.soft : ink.head, lineHeight: 1.1 }}>{d.getDate()}</div>
+                        </div>
+                        <div style={{ padding: "3px 6px 6px", flex: 1 }}>
+                          {list.map((t) => <TaskLine key={t.id} t={t}/>)}
+                          <BlankLines n={Math.max(2, 14 - list.length)}/>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginTop: 9, border: "1px solid " + ink.rule, padding: "6px 8px" }}>
+                  <div>
+                    <div style={{ fontSize: 9.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, color: ink.head, marginBottom: 3 }}>Anytime this week</div>
+                    {loose.length ? loose.slice(0, 6).map((t) => <TaskLine key={t.id} t={t} size={10}/>) : <BlankLines n={4}/>}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 9.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, color: ink.head, marginBottom: 3 }}>Notes</div>
+                    <BlankLines n={4}/>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 9.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, color: ink.head, marginBottom: 3 }}>Carry over</div>
+                    <BlankLines n={4}/>
+                  </div>
+                </div>
+              </React.Fragment>
+            ) : (() => {
+                const y = monthAnchor.getFullYear(), mo = monthAnchor.getMonth();
+                const dim = new Date(y, mo + 1, 0).getDate();
+                const jsFirst = new Date(y, mo, 1).getDay();
+                const lead = jsFirst === 0 ? 6 : jsFirst - 1;
+                const cells = Array.from({ length: lead }).map(() => null).concat(Array.from({ length: dim }).map((_, i) => i + 1));
+                while (cells.length % 7) cells.push(null);
+                return (
+                  <div style={{ border: "1px solid " + ink.rule, borderRight: "none", borderBottom: "none" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)" }}>
+                      {DAY_NAMES.map((d) => (
+                        <div key={d} style={{ borderRight: "1px solid " + ink.rule, borderBottom: "1px solid " + ink.rule, padding: "3px 6px", fontSize: 9.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, color: ink.head, background: "#f6f7f9" }}>{d}</div>
+                      ))}
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)" }}>
+                      {cells.map((day, i) => {
+                        const iso = day ? y + "-" + pad2(mo + 1) + "-" + pad2(day) : null;
+                        const list = iso ? (byDate[iso] || []) : [];
+                        return (
+                          <div key={i} style={{ borderRight: "1px solid " + ink.rule, borderBottom: "1px solid " + ink.rule, minHeight: "27mm", padding: "3px 5px", background: day ? "#fff" : "#fafbfc" }}>
+                            {day ? <div style={{ fontSize: 11, fontWeight: 700, color: ink.head, marginBottom: 2 }}>{day}</div> : null}
+                            {list.slice(0, 4).map((t) => (
+                              <div key={t.id} style={{ fontSize: 9.5, lineHeight: 1.3, color: t.done ? ink.soft : ink.body, textDecoration: t.done ? "line-through" : "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>▢ {t.title}</div>
+                            ))}
+                            {list.length > 4 ? <div style={{ fontSize: 9, color: ink.soft }}>+{list.length - 4} more</div> : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+          </div>
+        </div>,
+        document.body
+      );
+    }
+
     function CalendarView({ allExpenses = [] }) {
       const { theme, fetchData, getCatIcon, getTagIcon, setView, setPresetDate } = useTheme();
       const { openEdit, requestDelete, modals } = useExpenseMutations({ onChange: fetchData });
@@ -820,6 +1184,41 @@
         return { year: d.getFullYear(), month: d.getMonth() };
       });
       const [panelDate, setPanelDate] = useState(null); // ISO date string of the open day panel, or null
+      // ── Weekly Focus tasks: read from the shared localStorage key and kept
+      //    in sync while the app is open, so edits made in the other app show
+      //    up here without a reload.
+      const [tasks, setTasks] = useState(() => getFocusTasks());
+      const [showTasks, setShowTasks] = useState(true);
+      const [importOpen, setImportOpen] = useState(false);
+      const [importText, setImportText] = useState("");
+      const [importMsg, setImportMsg] = useState("");
+      const [printOpen, setPrintOpen] = useState(false);
+      useEffect(() => {
+        const sync = () => setTasks(getFocusTasks());
+        const onStorage = (e) => { if (!e.key || e.key === FOCUS_TASKS_KEY || LEGACY_TASK_KEYS.indexOf(e.key) >= 0) sync(); };
+        window.addEventListener("storage", onStorage);
+        window.addEventListener("focus", sync);
+        const iv = setInterval(sync, 15000);
+        return () => { window.removeEventListener("storage", onStorage); window.removeEventListener("focus", sync); clearInterval(iv); };
+      }, []);
+      const tasksByDate = groupTasksByDate(tasks);
+      const openTasks = tasks.filter((t) => !t.done).length;
+      const toggleTask = (id) => {
+        const next = getFocusTasks().map((t) => (t.id === id ? { ...t, done: !t.done } : t));
+        setFocusTasks(next); setTasks(next);
+      };
+      const doImport = () => {
+        let parsed;
+        try { parsed = JSON.parse(importText); }
+        catch (e) {
+          const lines = importText.split("\n").map((l) => l.replace(/^[-*\u2022\s\[\]x]+/i, "").trim()).filter(Boolean);
+          if (!lines.length) { setImportMsg("Couldn't read that — paste JSON, or one task per line."); return; }
+          parsed = lines;
+        }
+        const res = mergeFocusTasks(parsed);
+        setTasks(res.list); setImportText("");
+        setImportMsg(res.added ? res.added + " task" + (res.added === 1 ? "" : "s") + " imported." : "Nothing new — those tasks were already here.");
+      };
 
       const daysInMonth = new Date(viewDate.year, viewDate.month + 1, 0).getDate();
       const firstDayJS = new Date(viewDate.year, viewDate.month, 1).getDay();
@@ -856,6 +1255,13 @@
               <div style={{fontSize:14,fontWeight:600,color:"#fff"}}>{MONTHS_FULL[viewDate.month]} {viewDate.year}</div>
               <button onClick={() => setViewDate(v => v.month===11?{year:v.year+1,month:0}:{...v,month:v.month+1})} style={{background:theme.inputBg,border:"none",borderRadius:6,width:30,height:30,cursor:"pointer",color:theme.textMuted,display:"inline-flex",alignItems:"center",justifyContent:"center"}}><Icon name="chevronRight" size={16}/></button>
             </div>
+            {/* Weekly Focus task controls */}
+            <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",justifyContent:"center",marginBottom:10}}>
+              <button onClick={() => setShowTasks(s => !s)} style={pillish(showTasks, theme)}>{showTasks ? "☑" : "☐"} Focus tasks</button>
+              <button onClick={() => { setTasks(getFocusTasks()); setImportMsg(""); setImportOpen(true); }} style={pillish(false, theme)}>Import</button>
+              <button onClick={() => setPrintOpen(true)} style={pillish(false, theme)}>🖨 Print sheet</button>
+              <span style={{fontSize:10,color:theme.textDim}}>{openTasks} open · {tasks.length} total</span>
+            </div>
             {/* Legend */}
             <div style={{display:"flex",gap:12,justifyContent:"center",marginBottom:10,fontSize:10,color:theme.textDim}}>
               <span><span style={{color:"#22c55e"}}>●</span> Normal</span>
@@ -871,6 +1277,8 @@
                 const day = i+1;
                 const tod = isToday(day);
                 const indicators = getDateIndicators(day);
+                const dayTasks = showTasks ? (tasksByDate[isoOf(day)] || []) : [];
+                const dayOpen = dayTasks.filter(t => !t.done).length;
                 return (
                   <button key={day} onClick={() => setPanelDate(isoOf(day))} style={{
                     aspectRatio:"1",borderRadius:8,border:"none",cursor:"pointer",fontSize:12,fontWeight:400,
@@ -885,6 +1293,9 @@
                           <span key={idx} style={{color: ind === "●" ? "#22c55e" : undefined}}>{ind}</span>
                         ))}
                       </span>
+                    )}
+                    {dayTasks.length > 0 && (
+                      <span title={dayTasks.map(t => t.title).join(", ")} style={{position:"absolute",top:3,right:4,fontSize:8,fontWeight:700,lineHeight:1,padding:"1px 4px",borderRadius:5,background:dayOpen?"rgba(96,165,250,0.18)":"transparent",color:dayOpen?"#60a5fa":theme.textDim}}>{dayOpen || "✓"}</span>
                     )}
                   </button>
                 );
@@ -902,6 +1313,21 @@
                 </div>
                 <button onClick={() => setPanelDate(null)} style={{background:theme.inputBg,border:"none",borderRadius:8,width:30,height:30,cursor:"pointer",color:theme.textMuted,fontSize:16,lineHeight:1}}>×</button>
               </div>
+              {(tasksByDate[panelDate] || []).length > 0 && (
+                <div style={{marginBottom:14}}>
+                  <div style={{fontSize:10,fontWeight:700,letterSpacing:0.5,textTransform:"uppercase",color:theme.textDim,marginBottom:6}}>Focus tasks</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                    {(tasksByDate[panelDate] || []).map(t => (
+                      <button key={t.id} onClick={() => toggleTask(t.id)} style={{display:"flex",alignItems:"center",gap:9,background:theme.inputBg,border:"none",borderRadius:10,padding:"9px 12px",cursor:"pointer",textAlign:"left",fontFamily:"inherit"}}>
+                        <span style={{width:16,height:16,flexShrink:0,borderRadius:5,border:`1.5px solid ${t.done ? "#22c55e" : theme.cardBorder}`,background:t.done?"#22c55e":"transparent",color:"#06210f",fontSize:11,display:"inline-flex",alignItems:"center",justifyContent:"center"}}>{t.done ? "✓" : ""}</span>
+                        <span style={{flex:1,minWidth:0,fontSize:13,fontWeight:600,color:t.done?theme.textDim:"#fff",textDecoration:t.done?"line-through":"none"}}>{t.title}</span>
+                        {t.time && <span style={{fontSize:11,color:theme.textMuted,flexShrink:0}}>{t.time}</span>}
+                        {t.category && <span style={{fontSize:10,color:theme.textMuted,background:theme.cardBg,padding:"2px 7px",borderRadius:6,flexShrink:0}}>{t.category}</span>}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               {panelExpenses.length === 0 ? (
                 <div style={{textAlign:"center",padding:"24px 0",color:theme.textMuted,fontSize:13}}>No entries for this day.</div>
               ) : (
@@ -938,6 +1364,33 @@
               </button>
             </Modal>
           )}
+
+          {/* Import tasks from the Weekly Focus app */}
+          {importOpen && (
+            <Modal onClose={() => setImportOpen(false)}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+                <div>
+                  <div style={{fontSize:15,fontWeight:700,color:"#fff"}}>Weekly Focus tasks</div>
+                  <div style={{fontSize:11,color:theme.textMuted,marginTop:2}}>Auto-read from <code style={{color:theme.primary}}>{FOCUS_TASKS_KEY}</code> · {tasks.length} loaded</div>
+                </div>
+                <button onClick={() => setImportOpen(false)} style={{background:theme.inputBg,border:"none",borderRadius:8,width:30,height:30,cursor:"pointer",color:theme.textMuted,fontSize:16,lineHeight:1}}>×</button>
+              </div>
+              <div style={{fontSize:11.5,color:theme.textMuted,lineHeight:1.5,marginBottom:8}}>
+                Paste JSON from the Weekly Focus app — an array, {"{tasks:[…]}"} or {"{days:{mon:[…]}}"} — or just one task per line.
+              </div>
+              <textarea value={importText} onChange={(e) => { setImportText(e.target.value); setImportMsg(""); }} rows={7}
+                placeholder={'[{"title":"Draft the report","date":"2026-08-31","time":"09:00","category":"Work"}]'}
+                style={{width:"100%",background:theme.inputBg,border:`1px solid ${theme.inputBorder}`,borderRadius:10,color:theme.text,padding:"10px 12px",fontSize:12,fontFamily:"ui-monospace, SFMono-Regular, Menlo, monospace",resize:"vertical"}}/>
+              {importMsg && <div style={{fontSize:11.5,color:theme.primary,marginTop:8}}>{importMsg}</div>}
+              <div style={{display:"flex",gap:8,marginTop:12,flexWrap:"wrap"}}>
+                <button onClick={doImport} style={{flex:1,minWidth:120,padding:"10px",borderRadius:10,border:"none",background:theme.primary,color:"#fff",fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"inherit"}}>Import</button>
+                <button onClick={() => { setTasks(getFocusTasks()); setImportMsg("Reloaded from the Weekly Focus app."); }} style={{padding:"10px 14px",borderRadius:10,border:`1px solid ${theme.cardBorder}`,background:theme.inputBg,color:theme.text,fontWeight:600,fontSize:12.5,cursor:"pointer",fontFamily:"inherit"}}>Reload</button>
+                <button onClick={() => { if (tasks.length && confirm("Remove all " + tasks.length + " imported tasks?")) { setFocusTasks([]); setTasks([]); setImportMsg("Cleared."); } }} style={{padding:"10px 14px",borderRadius:10,border:`1px solid ${theme.cardBorder}`,background:"transparent",color:theme.danger,fontWeight:600,fontSize:12.5,cursor:"pointer",fontFamily:"inherit"}}>Clear</button>
+              </div>
+            </Modal>
+          )}
+
+          {printOpen && <PrintSheet tasks={tasks} anchorDate={panelDate || (new Date().getFullYear() === viewDate.year && new Date().getMonth() === viewDate.month ? todayStr() : isoOf(1))} onClose={() => setPrintOpen(false)}/>}
 
           {/* Edit/delete modals from the shared hook. Wrapped in a stacking
               context above the day-panel sheet (sheet zIndex=300) so they layer
@@ -1774,7 +2227,7 @@
               <button key={key} onClick={() => changeTheme(key)} title={THEMES[key].name} style={{width:22,height:22,borderRadius:"50%",border:"none",cursor:"pointer",background:THEMES[key].primary,boxShadow:themeName===key?"0 0 0 2px #fff":`0 0 0 1px ${theme.cardBorder}`}}></button>
             ))}
           </div>
-          <div style={{display:"flex",borderBottom:`1px solid ${theme.cardBorder}`,marginBottom:16,marginTop:8}}>
+          <div style={{display:"flex",borderBottom:`1px solid ${theme.cardBorder}`,marginBottom:16,marginTop:8,overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
             <button onClick={() => setActiveTab("categories")} style={tabStyle(activeTab==="categories")}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="folder" size={14}/>Categories</span></button>
             <button onClick={() => setActiveTab("shops")} style={tabStyle(activeTab==="shops")}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="store" size={14}/>Shops</span></button>
             <button onClick={() => setActiveTab("tags")} style={tabStyle(activeTab==="tags")}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="tag" size={14}/>Tags</span></button>
@@ -2948,7 +3401,7 @@
 
           {/* Floating add button */}
           <button onClick={() => { vibrate(10); setShowAdd(true); }} title="Add recurring entry" style={{
-            position: "fixed", right: 20, bottom: 20, zIndex: 80, width: 54, height: 54, borderRadius: "50%",
+            position: "fixed", right: 20, bottom: (typeof window !== "undefined" && window.innerWidth <= 720) ? 92 : 20, zIndex: 80, width: 54, height: 54, borderRadius: "50%",
             border: "none", cursor: "pointer", color: "#fff", lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
             background: `linear-gradient(135deg,${theme.primary},${theme.accent})`,
             boxShadow: `0 6px 20px ${theme.primaryGlow}`,
@@ -3174,6 +3627,170 @@
 
     // ═══════════════════════════════════════════
     //  LOCATION TRIGGERS SETTINGS  (manage geofence + time-window rules)
+    // ═══════════════════════════════════════════
+    //  PURCHASE REQUESTS INBOX  (buy-requests from companion apps)
+    // ╔══ kept under the historical component name ══
+    function SukkiriRequestsView({ requests, reload }) {
+      const { theme, inputStyle, supabase, fetchData, categories, shops } = useTheme();
+      const [pasteOpen, setPasteOpen] = useState(false);
+      const [pasteVal, setPasteVal] = useState("");
+      const [busyId, setBusyId] = useState(null);
+      const [toast, setToast] = useState(null);
+      // approve confirm step: pick shop/date, adjust prices before inserting
+      const [confirmId, setConfirmId] = useState(null);
+      const [confShop, setConfShop] = useState("");
+      const [confDate, setConfDate] = useState(ymdToday());
+      const [confAmts, setConfAmts] = useState({});
+      const flash = (m) => { setToast(m); setTimeout(() => setToast(null), 2400); };
+      useEffect(() => { reload(); }, []);
+
+      const pending = requests.filter((r) => !r.status || r.status === "pending");
+      const handled = requests.filter((r) => r.status && r.status !== "pending");
+
+      const setStatus = (id, status) => {
+        const list = getPurchaseRequests().map((r) => r.id === id ? { ...r, status, resolvedAt: new Date().toISOString() } : r);
+        setPurchaseRequests(list); reload();
+      };
+
+      const ensureCategory = async (name) => {
+        if (categories.some((c) => c.name === name)) return true;
+        const { error } = await supabase.from("cost_management_categories").insert({ name, icon: "🛒", color: "#10b981", sort_order: categories.length + 1 });
+        if (error && !/duplicate/i.test(error.message)) { flash(`Couldn't create ${name} category`); return false; }
+        return true;
+      };
+
+
+      const startApprove = (req) => {
+        setConfirmId(req.id);
+        setConfShop(req.source || "");
+        setConfDate(ymdToday());
+        const amts = {};
+        (req.items || []).forEach((it, i) => { amts[i] = it.priceYen != null ? it.priceYen : (it.price != null ? it.price : ""); });
+        setConfAmts(amts);
+      };
+      const approve = async (req) => {
+        setBusyId(req.id);
+        try {
+          const region = (req.currency && CURRENCIES[req.currency]) ? req.currency : "JPY";
+          const catNames = [...new Set((req.items || []).map((it) => it.category || "Other"))];
+          for (const c of catNames) { if (!(await ensureCategory(c))) return; }
+          const rows = (req.items || []).map((it, i) => ({
+            region, date: confDate || ymdToday(), category: it.category || "Other", shop: (confShop || req.source || "Request").trim(),
+            amount: Number(confAmts[i]) || 0,
+            notes: [it.name, it.reason].filter(Boolean).join(" — "),
+            expense_type: "normal", tags: "",
+          })).filter((r) => r.amount > 0);
+          if (!rows.length) { flash("Set at least one price above zero"); return; }
+          const { error } = await supabase.from("cost_management_expenses").insert(rows);
+          if (error) { flash("Insert failed: " + error.message); return; }
+          setStatus(req.id, "approved");
+          setConfirmId(null);
+          await fetchData();
+          flash(`Approved — ${rows.length} expense${rows.length === 1 ? "" : "s"} added`);
+        } finally { setBusyId(null); }
+      };
+      const reject = (req) => { setStatus(req.id, "rejected"); flash("Request rejected"); };
+
+      const importPaste = () => {
+        let parsed;
+        try { parsed = JSON.parse(pasteVal); } catch (e) { flash("That's not valid JSON"); return; }
+        const { added } = mergePurchaseRequests(parsed);
+        reload();
+        if (added) { setPasteVal(""); setPasteOpen(false); flash(`Imported ${added} request${added === 1 ? "" : "s"}`); }
+        else flash("No new requests found (already imported or wrong format)");
+      };
+
+      const reqDate = (r) => { try { const d = new Date(r.requestedAt); return `${MONTHS_SHORT[d.getMonth() + 1]} ${d.getDate()}, ${d.getFullYear()}`; } catch (e) { return ""; } };
+      const total = (r) => r.totalYen != null ? r.totalYen : (r.items || []).reduce((s, it) => s + (Number(it.priceYen != null ? it.priceYen : it.price) || 0), 0);
+      const curSym = (r) => (r.currency && CURRENCIES[r.currency]) ? CURRENCIES[r.currency].symbol : "¥";
+      const miniBtn = (bg, fg) => ({ padding: "7px 13px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit", background: bg, color: fg });
+
+      const card = (req, done) => (
+        <div key={req.id} style={{ background: theme.inputBg, borderRadius: 12, padding: "13px 14px", marginBottom: 10, opacity: done ? 0.55 : 1 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, color: theme.textMuted }}><span style={{ background: `${theme.primary}22`, color: theme.primary, borderRadius: 6, padding: "2px 7px", fontSize: 10, fontWeight: 700, textTransform: "capitalize", marginRight: 7 }}>{req.source || "app"}</span>{reqDate(req)}</span>
+            <span style={{ fontSize: 15, fontWeight: 700, color: "#fff" }}>{curSym(req)}{Number(total(req)).toLocaleString()}</span>
+          </div>
+          <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+            {(req.items || []).map((it, i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12.5 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ color: "#fff", fontWeight: 600 }}>{it.name}{it.link ? <> · <a href={it.link} target="_blank" rel="noreferrer" style={{ color: theme.primary, fontSize: 11 }}>link</a></> : null}</div>
+                  {it.reason && <div style={{ color: theme.textDim, fontSize: 11, marginTop: 1 }}>{it.reason}</div>}
+                </div>
+                <span style={{ color: theme.textMuted, whiteSpace: "nowrap", fontWeight: 600 }}>{curSym(req)}{Number(it.priceYen != null ? it.priceYen : it.price || 0).toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+          {done ? (
+            <div style={{ marginTop: 9, fontSize: 11, fontWeight: 700, color: req.status === "approved" ? theme.success || "#10b981" : theme.danger }}>{req.status === "approved" ? "✓ Approved — logged as expenses" : "✕ Rejected"}</div>
+          ) : confirmId === req.id ? (
+            <div style={{ marginTop: 11, background: theme.cardBg, borderRadius: 10, padding: "11px 12px", boxShadow: `inset 0 0 0 1px ${theme.primary}44` }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 9 }}>
+                <div style={{ flex: "1 1 160px" }}>
+                  <label style={{ fontSize: 10, fontWeight: 600, letterSpacing: 0.6, textTransform: "uppercase", color: theme.textDim, display: "block", marginBottom: 4 }}>Bought at</label>
+                  <input list={`req-shops-${req.id}`} value={confShop} onChange={(e) => setConfShop(e.target.value)} placeholder="Shop name…" style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} />
+                  <datalist id={`req-shops-${req.id}`}>{shops.map((s) => <option key={s.id} value={s.name} />)}{req.source && <option value={req.source} />}</datalist>
+                </div>
+                <div>
+                  <label style={{ fontSize: 10, fontWeight: 600, letterSpacing: 0.6, textTransform: "uppercase", color: theme.textDim, display: "block", marginBottom: 4 }}>Date</label>
+                  <input type="date" value={confDate} max={ymdToday()} onChange={(e) => setConfDate(e.target.value)} style={{ ...inputStyle, boxSizing: "border-box" }} />
+                </div>
+              </div>
+              {(req.items || []).map((it, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
+                  <span style={{ fontSize: 12, color: "#fff", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</span>
+                  <input inputMode="numeric" value={confAmts[i] ?? ""} onChange={(e) => setConfAmts((a) => ({ ...a, [i]: e.target.value.replace(/[^0-9.]/g, "") }))} placeholder={curSym(req)} style={{ ...inputStyle, width: 96, textAlign: "right", boxSizing: "border-box" }} />
+                </div>
+              ))}
+              <div style={{ fontSize: 10.5, color: theme.textDim, margin: "2px 0 9px" }}>Items priced 0 are skipped. Real prices from the till beat the app's estimates.</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button disabled={busyId === req.id} onClick={() => approve(req)} style={{ ...miniBtn(theme.primary, "#fff"), flex: 1, padding: "10px", opacity: busyId === req.id ? 0.6 : 1 }}>{busyId === req.id ? "Adding…" : "Confirm — add expenses"}</button>
+                <button onClick={() => setConfirmId(null)} style={{ ...miniBtn(theme.inputBg, theme.text), padding: "10px 14px" }}>Back</button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 8, marginTop: 11 }}>
+              <button onClick={() => startApprove(req)} style={{ ...miniBtn(theme.primary, "#fff"), flex: 1, padding: "10px" }}>Approve…</button>
+              <button onClick={() => reject(req)} style={{ ...miniBtn(`${theme.danger}22`, theme.danger), padding: "10px 16px" }}>Reject</button>
+            </div>
+          )}
+        </div>
+      );
+
+      return (
+        <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 14, padding: 16 }}>
+          {toast && <div style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 1000, padding: "9px 16px", borderRadius: 9, fontSize: 12, fontWeight: 600, background: theme.primary, color: "#fff" }}>{toast}</div>}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+            <div>
+              <h3 style={{ fontSize: 15, fontWeight: 700, color: "#fff", margin: 0 }}>🛒 Purchase Requests</h3>
+              <p style={{ fontSize: 11, color: theme.textDim, margin: "4px 0 0" }}>Buy-requests sent by companion apps (Sukkiri, etc.). Approving logs each item as an expense, dated today, under the item's category.</p>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => { reload(); flash("Refreshed"); }} style={miniBtn(theme.inputBg, theme.text)}>Refresh</button>
+              <button onClick={() => setPasteOpen((o) => !o)} style={miniBtn(pasteOpen ? theme.primary : theme.inputBg, pasteOpen ? "#fff" : theme.text)}>Paste request</button>
+            </div>
+          </div>
+          {pasteOpen && (
+            <div style={{ marginTop: 12 }}>
+              <textarea value={pasteVal} onChange={(e) => setPasteVal(e.target.value)} placeholder='Paste the request JSON copied from the sending app…' rows={5} style={{ ...inputStyle, fontFamily: "monospace", fontSize: 11.5, resize: "vertical", width: "100%", boxSizing: "border-box" }} />
+              <button onClick={importPaste} style={{ ...miniBtn(theme.primary, "#fff"), marginTop: 8 }}>Import</button>
+            </div>
+          )}
+          <div style={{ marginTop: 14 }}>
+            {pending.length === 0 && <div style={{ textAlign: "center", padding: "26px 10px", color: theme.textDim, fontSize: 12 }}>No pending requests — they appear here when a companion app sends one.</div>}
+            {pending.map((r) => card(r, false))}
+          </div>
+          {handled.length > 0 && (
+            <div style={{ marginTop: 18 }}>
+              <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: 0.6, textTransform: "uppercase", color: theme.textDim, marginBottom: 8 }}>Handled</div>
+              {handled.slice(-6).reverse().map((r) => card(r, true))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
     // ═══════════════════════════════════════════
     function LocationTriggersView() {
       const { theme, inputStyle, categories, shops, getCatIcon, getCatColor, locTriggers, reloadTriggers, checkLocation, locStatus, supabase } = useTheme();
