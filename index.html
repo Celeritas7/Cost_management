@@ -3,7 +3,16 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Cost Management Dashboard</title>
+  <title>Cost Management</title>
+  <link rel="manifest" href="manifest.webmanifest"/>
+  <meta name="theme-color" content="#3b0764"/>
+  <meta name="mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="Cost Management"/>
+  <link rel="icon" type="image/svg+xml" href="icons/icon.svg"/>
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png"/>
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png"/>
   <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/react-is@18/umd/react-is.production.min.js"></script>
@@ -44,6 +53,7 @@
       .cm-print-sheet { box-shadow: none !important; margin: 0 !important; min-height: 0 !important; padding: 0 !important; }
     }
   </style>
+  <script>if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(console.error));}</script>
 </head>
 <body>
   <div id="root"></div>
@@ -161,6 +171,11 @@
       { id: 5, name: "Travel", icon: "✈️", color: "#06b6d4" },
     ];
 
+    // Locked to yen on purpose. `fmt` follows the app's selected region, which
+    // is right for amounts the user logged — but published Japanese operator
+    // tariffs are only ever yen, so rendering ¥178 as "₹178" under an INR
+    // selection would be factually wrong reference data.
+    const yen = (n) => "¥" + Number(n).toLocaleString("ja-JP");
     const fmt = (n) => (n == null ? "—" : CUR.symbol + n.toLocaleString(CUR.locale));
     // Local-date key 'YYYY-MM-DD' from a Date's LOCAL components (never UTC).
     // toISOString() returns the UTC date, which rolls back a day in east-of-UTC
@@ -893,7 +908,7 @@
             {/* Header */}
             <div style={{background:theme.headerBg,borderBottom:`1px solid ${theme.cardBorder}`,padding:"14px 16px"}}>
              <div style={{maxWidth:1080,margin:"0 auto",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
-              <h1 style={{fontSize:18,fontWeight:700,color:"#fff",margin:0}}>Cost Management</h1>
+              <div style={{display:"flex",alignItems:"center",gap:10}}><img src="icons/icon.svg" alt="" width="30" height="30" style={{borderRadius:8,display:"block"}}/><h1 style={{fontSize:18,fontWeight:700,color:"#fff",margin:0}}>Cost Management</h1></div>
               <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>
                 {(isMobile ? navTabs.filter(t => t.id === "settings") : navTabs).map(tab => (
                   <button key={tab.id} onClick={() => { setView(tab.id); setTxPage(0); }} style={{...pillStyle(view===tab.id || (tab.id==="transactions" && view==="calendar")),padding:"5px 11px",fontSize:11,display:"inline-flex",alignItems:"center",gap:6}}><Icon name={tab.icon} size={15}/>{isMobile && tab.id==="settings" ? "" : tab.label}</button>
@@ -2240,11 +2255,14 @@
             <button onClick={() => setActiveTab("tags")} style={tabStyle(activeTab==="tags")}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="tag" size={14}/>Tags</span></button>
             <button onClick={() => setActiveTab("rules")} style={tabStyle(activeTab==="rules")}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="repeat" size={14}/>Rules</span></button>
             <button onClick={() => setActiveTab("triggers")} style={tabStyle(activeTab==="triggers")}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="pin" size={14}/>Triggers</span></button>
+            <button onClick={() => setActiveTab("farebook")} style={tabStyle(activeTab==="farebook")}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="train" size={14}/>Fare book</span></button>
           </div>
 
           {activeTab === "rules" && <RecurringView />}
 
           {activeTab === "triggers" && <LocationTriggersView />}
+
+          {activeTab === "farebook" && <FareBookView />}
 
           {/* CATEGORIES TAB */}
           {activeTab === "categories" && (
@@ -2552,10 +2570,211 @@
     // before this epoch is stale regardless of the 90-day freshness rule.
     const FARE_REVISION_EPOCH = "2026-03-14";
     const FARE_CACHE_DAYS = 90;
-    const SEED_STATIONS = ["Shimosanakayama","Funabashi","Nishi-Funabashi","Motoyawata","Gotanda","Minami Urawa","Musashi Urawa","Shinjuku","Okubo"];
 
-    // cache (90 days AND after revision epoch) → Edge Function → {error, reason}
+    // ═══ JR EAST FARE ENGINE ═══════════════════════════════════════════
+    // A fare is DERIVED here, never guessed: published band table + published
+    // station kilometrage. Two inputs, one arithmetic step, both citable.
+    //
+    // A表 · ordinary fares, 幹線, effective 2026-03-14 (JR East fare-revision
+    // pamphlet p.17). The 2026 revision ABOLISHED the cheaper 電車特定区間 and
+    // 山手線内 bands and merged them into 幹線 — which is precisely why one
+    // table can now price every JR East line around Tokyo. [upTo_km, IC, ticket]
+    const JR_BANDS = [
+      [3,155,160],[6,199,200],[10,209,210],[15,253,260],[20,341,350],[25,440,440],
+      [30,528,530],[35,616,620],[40,715,720],[45,803,810],[50,902,910],[60,1034,1040],
+      [70,1221,1230],[80,1408,1410],[90,1595,1600],[100,1782,1790],[120,2090,2090],
+      [140,2420,2420],[160,2750,2750],[180,3190,3190],[200,3520,3520],
+    ];
+    // JR rounds fare kilometres UP to the whole kilometre before reading the
+    // table (1キロ未満は切り上げ). 44.0 km stays 44 and prices at ¥803; 45.1 km
+    // becomes 46 and jumps a band — so the rounding is not cosmetic.
+    function jrBandFare(km) {
+      const k = Math.ceil(Number((km).toFixed(2)));
+      for (const [upTo, ic, tk] of JR_BANDS) if (k <= upTo) return { fare_ic: ic, fare_ticket: tk, km: k };
+      return null; // past the seeded table — refuse rather than extrapolate
+    }
+
+    // 営業キロ from each line's origin. Add lines here as you verify them; an
+    // unseeded station simply falls through to "type it once".
+    const JR_LINES = [
+      { id: "musashino", name: "Musashino Line", source: "JR timetable 営業キロ · Fuchuhommachi 0.0 – Nishi-Funabashi 71.8", stations: [
+        ["Fuchuhommachi",0.0],["Kita-Fuchu",1.7],["Nishi-Kokubunji",3.9],["Shin-Kodaira",7.4],
+        ["Shin-Akitsu",13.0],["Higashi-Tokorozawa",15.7],["Niiza",19.7],["Kita-Asaka",22.8],
+        ["Nishi-Urawa",27.8],["Musashi-Urawa",29.8],["Minami-Urawa",31.7],["Higashi-Urawa",35.4],
+        ["Higashi-Kawaguchi",39.2],["Minami-Koshigaya",43.5],["Koshigaya-Laketown",46.3],["Yoshikawa",48.2],
+        ["Yoshikawaminami",49.8],["Shin-Misato",51.3],["Misato",53.4],["Minami-Nagareyama",55.4],
+        ["Shin-Matsudo",57.5],["Shin-Yahashira",61.6],["Higashi-Matsudo",64.0],["Ichikawa-Ono",65.9],
+        ["Funabashi-Hoten",68.9],["Nishi-Funabashi",71.8],
+      ] },
+    ];
+
+    // 特定区間 · the 12 corridors that SURVIVED the 2026 revision keep a fare
+    // below the band table, so they must be checked BEFORE the arithmetic or
+    // the engine would overcharge. Figures are the post-revision published ones
+    // (pamphlet pp.33-34). [IC, ticket]
+    const JR_SPECIAL = [
+      ["Tokyo","Nishi-Funabashi",341,350],["Shin-Nihombashi","Nishi-Funabashi",341,350],
+      ["Shimbashi","Zushi",902,910],["Hamamatsucho","Zushi",902,910],["Tamachi","Zushi",902,910],
+      ["Shimbashi","Kamakura",902,910],["Shinagawa","Zushi",803,810],["Yokohama","Zushi",440,440],
+      ["Shinagawa","Yokohama",341,350],["Shinagawa","Higashi-Kanagawa",341,350],
+      ["Shibuya","Yokohama",440,440],["Shibuya","Kichijoji",281,290],
+      ["Yokohama","Shibuya",440,440],["Yokohama","Ebisu",440,440],["Yokohama","Meguro",440,440],
+      ["Yokohama","Nishi-Oi",341,350],["Higashi-Kanagawa","Shibuya",440,440],["Higashi-Kanagawa","Ebisu",440,440],
+      ["Shinjuku","Hachioji",616,620],["Shinjuku","Takao",715,720],["Shinjuku","Haijima",528,530],
+    ];
+
+    // Station identity is spelling-tolerant: "Musashi Urawa", "Musashi-Urawa"
+    // and "musashiurawa" are one station. Without this the engine would miss on
+    // a hyphen the user did not happen to type.
+    const stnKey = (s) => String(s || "").toLowerCase().replace(/[\s\-–—·'’.]/g, "");
+
+    const JR_INDEX = (() => { const m = new Map(); JR_LINES.forEach((L) => L.stations.forEach(([n]) => m.set(stnKey(n), n))); return m; })();
+    const JR_ADJ = (() => {
+      const adj = new Map();
+      const link = (a, b, km, line) => { const k = stnKey(a); const l = adj.get(k) || []; l.push({ to: stnKey(b), km, line }); adj.set(k, l); };
+      JR_LINES.forEach((L) => { for (let i = 1; i < L.stations.length; i++) { const [a, ka] = L.stations[i - 1], [b, kb] = L.stations[i]; const w = Math.abs(kb - ka); link(a, b, w, L.id); link(b, a, w, L.id); } });
+      return adj;
+    })();
+    const JR_SPECIAL_MAP = (() => { const m = new Map(); JR_SPECIAL.forEach(([a, b, ic, tk]) => { const k = [stnKey(a), stnKey(b)].sort().join("|"); m.set(k, { fare_ic: ic, fare_ticket: tk }); }); return m; })();
+
+    // Shortest path by fare kilometres (Dijkstra). Japanese fares are charged on
+    // the WHOLE through journey, not per leg, so pricing the endpoints over the
+    // real network is more correct than adding hop fares together.
+    function jrRoute(from, to) {
+      const s = stnKey(from), t = stnKey(to);
+      if (!s || !t || s === t || !JR_ADJ.has(s) || !JR_ADJ.has(t)) return null;
+      const dist = new Map([[s, 0]]), prev = new Map(), done = new Set();
+      for (;;) {
+        let cur = null, best = Infinity;
+        dist.forEach((d, k) => { if (!done.has(k) && d < best) { best = d; cur = k; } });
+        if (cur === null) return null;
+        if (cur === t) break;
+        done.add(cur);
+        (JR_ADJ.get(cur) || []).forEach((e) => {
+          const nd = best + e.km, old = dist.has(e.to) ? dist.get(e.to) : Infinity;
+          if (nd < old) { dist.set(e.to, nd); prev.set(e.to, { from: cur, line: e.line }); }
+        });
+      }
+      const path = [], lines = [];
+      for (let k = t; k !== s; ) { const p = prev.get(k); path.unshift(JR_INDEX.get(k)); lines.unshift(p.line); k = p.from; }
+      path.unshift(JR_INDEX.get(s));
+      // Interchanges = the stations where the line actually changes. These are
+      // what "Suggest transfers" offers, and they are always priceable.
+      const changes = [];
+      for (let i = 1; i < lines.length; i++) if (lines[i] !== lines[i - 1]) changes.push(path[i]);
+      return { km: Math.round(dist.get(t) * 10) / 10, path, changes, lines: [...new Set(lines)] };
+    }
+
+    // The engine's answer for a pair, or null if it cannot honestly produce one.
+    function jrCompute(from, to) {
+      const sp = JR_SPECIAL_MAP.get([stnKey(from), stnKey(to)].sort().join("|"));
+      if (sp) return { ...sp, source: "special", note: "特定区間 · published special-section fare" };
+      const r = jrRoute(from, to);
+      if (!r) return null;
+      const f = jrBandFare(r.km);
+      if (!f) return null;
+      const lineNames = r.lines.map((id) => (JR_LINES.find((L) => L.id === id) || {}).name).filter(Boolean);
+      return { ...f, distance_km: r.km, source: "calc", route_summary: lineNames.join(" · "), changes: r.changes };
+    }
+
+    const SEED_STATIONS = [...new Set([
+      "Shimosanakayama","Funabashi","Motoyawata","Gotanda","Okubo",
+      ...JR_LINES.flatMap((L) => L.stations.map(([n]) => n)),
+      ...JR_SPECIAL.flatMap(([a, b]) => [a, b]),
+    ])].sort();
+
+    const overridden = (v) => { const n = parseInt(v, 10); return Number.isInteger(n) && n > 0; };
+    const fareTone = (r, theme) => (r.source === "book" ? (r.verified ? theme.success : theme.warning) : r.source === "cache" ? theme.warning : r.source === "calc" || r.source === "special" ? theme.primary : theme.success);
+    const fareSourceLabel = (r) => (
+      r.source === "book" ? (r.verified ? "BOOK · VERIFIED" : "BOOK · UNVERIFIED") + (r.hit_count ? ` · ${r.hit_count}×` : "")
+      : r.source === "special" ? "JR · SPECIAL SECTION"
+      : r.source === "calc" ? `CALC · ${r.distance_km} km · JR 幹線`
+      : r.source === "cache" ? "CACHED"
+      : "MANUAL");
+
+    // ══ FARE BOOK — self-owned fare table, the ground truth for fares ══
+    // Fares are symmetric, so both stations are sorted into one canonical row:
+    // enter A→B once and B→A is answered too.
+    // Station names are canonicalised before sorting so "shinjuku" and
+    // "Shinjuku" resolve to ONE row rather than two competing ones.
+    //
+    // Case is only touched when the whole entry is a single case. Mixed-case
+    // input is trusted verbatim, because in the Tokyo area it is almost always
+    // deliberate: macron romanisation is the official JR/Metro style
+    // ("Ōtemachi", "Jūjō", "Shin-Ōkubo") and operator prefixes are initialisms
+    // ("JR Funabashi"). Blanket Title-Casing mangles both — a macron ends an
+    // ASCII letter run, so the next run would get an intrusive capital.
+    // Capitalisation is also boundary-aware (start, space, hyphen, dash,
+    // apostrophe, bracket, slash, interpunct) rather than run-aware.
+    const canonStation = (s) => {
+      const t = String(s || "").trim().replace(/\s+/g, " ");
+      if (!t) return "";
+      const allLower = t === t.toLowerCase(), allUpper = t === t.toUpperCase();
+      if (!allLower && !allUpper) return t; // mixed case → the user meant it
+      return t.toLowerCase().replace(/(^|[\s\-–—'()\/·])(\S)/g, (m, sep, c) => sep + c.toUpperCase());
+    };
+    // Sorting uses UTF-16 code-unit order, which is what the DB check enforces
+    // (that constraint is declared `collate "C"` to match — the database's own
+    // en_US.UTF-8 collation disagrees on case and on '-', and would reject rows
+    // this function considers correctly sorted).
+    const farePair = (a, b) => { const x = canonStation(a), y = canonStation(b); return x <= y ? [x, y] : [y, x]; };
+
+    async function fareBookGet(supabase, from, to) {
+      const [a, b] = farePair(from, to);
+      if (!a || !b || a === b) return null;
+      try {
+        const { data, error } = await supabase.from("cost_management_fare_book").select("*").eq("pair_a", a).eq("pair_b", b).limit(1);
+        if (!error && data && data.length) return data[0];
+      } catch (e) {} // table missing / offline → treat as miss
+      return null;
+    }
+
+    // Write-through. Three outcomes, and the rules matter for trust:
+    //  · same amount as the stored row → bump hit_count (you have now been
+    //    charged this twice, so it is very likely correct)
+    //  · different amount, row unverified → correct it silently
+    //  · different amount, row VERIFIED → leave it alone and report the clash,
+    //    so a typo can never quietly overwrite a fare you personally checked
+    async function fareBookSave(supabase, from, to, fare, opts = {}) {
+      const [a, b] = farePair(from, to);
+      const amount = parseInt(fare, 10);
+      if (!a || !b) return { status: "error", reason: "Both stations are required" };
+      if (a === b) return { status: "error", reason: "Stations are the same" };
+      if (!Number.isInteger(amount) || amount <= 0) return { status: "error", reason: "Enter a fare above 0" };
+      const { origin = "manual", ticket = null, operator = "", notes = "", verified = false } = opts;
+      try {
+        const row = await fareBookGet(supabase, from, to);
+        if (row) {
+          if (row.fare_ic === amount) {
+            const { error } = await supabase.from("cost_management_fare_book").update({ hit_count: (row.hit_count || 0) + 1, verified: row.verified || verified }).eq("id", row.id);
+            if (error) return { status: "error", reason: error.message };
+            return { ...row, status: "confirmed" };
+          }
+          if (row.verified) return { ...row, status: "clash", attempted: amount };
+          const { error } = await supabase.from("cost_management_fare_book").update({ fare_ic: amount, origin, hit_count: 0, verified }).eq("id", row.id);
+          if (error) return { status: "error", reason: error.message };
+          return { ...row, fare_ic: amount, status: "corrected" };
+        }
+        // supabase-js returns constraint violations in `error` rather than
+        // throwing, so it must be read explicitly — swallowing it here is how a
+        // rejected write becomes an undiagnosable silent no-op.
+        const { data, error } = await supabase.from("cost_management_fare_book")
+          .insert({ pair_a: a, pair_b: b, fare_ic: amount, fare_ticket: ticket, operator, origin, notes, verified, hit_count: 0 }).select();
+        if (error) return { status: "error", reason: error.message };
+        return data && data[0] ? { ...data[0], status: "created" } : { status: "error", reason: "Insert returned no row" };
+      } catch (e) { return { status: "error", reason: e.message || "Fare book write failed" }; }
+    }
+
+    // Lookup order: fare book → 90-day cache → miss. No API, no network.
+    // The book comes first deliberately: it is free, offline, instant, and the
+    // one source you have verified yourself.
     async function fareLookup(supabase, from, to) {
+      const book = await fareBookGet(supabase, from, to);
+      // An unverified book row is cross-checked against the engine rather than
+      // trusted blindly — a stale import or an old typo should not sit in front
+      // of a figure derived from published tables without saying so.
+      if (book) { const chk = !book.verified ? jrCompute(from, to) : null;
+      return { from_station: from, to_station: to, fare_ic: book.fare_ic, fare_ticket: book.fare_ticket, distance_km: null, route_summary: book.operator || "", looked_up_at: book.updated_at, source: "book", verified: book.verified, hit_count: book.hit_count || 0, book_id: book.id , calcHint: chk && chk.fare_ic !== book.fare_ic ? chk.fare_ic : null }; }
       const ageFloor = new Date(Date.now() - FARE_CACHE_DAYS * 86400000).toISOString();
       const revFloor = FARE_REVISION_EPOCH + "T00:00:00+09:00";
       const floor = ageFloor > revFloor ? ageFloor : revFloor; // ISO strings compare chronologically
@@ -2565,13 +2784,14 @@
           .order("looked_up_at", { ascending: false }).limit(1);
         if (!error && rows && rows.length) return { ...rows[0], source: "cache" };
       } catch (e) {} // table missing / offline → treat as cache miss
-      let res = null, invokeErr = null;
-      try { const r = await supabase.functions.invoke("fare-lookup", { body: { from_station: from, to_station: to } }); res = r.data; invokeErr = r.error; }
-      catch (e) { invokeErr = e; }
-      if (invokeErr || !res || res.error) return { error: true, reason: (res && res.reason) || (invokeErr && invokeErr.message) || "Lookup failed" };
-      const row = { from_station: from, to_station: to, fare_ic: res.fare_ic, fare_ticket: res.fare_ticket ?? null, distance_km: res.distance_km ?? null, route_summary: res.route_summary || "", looked_up_at: new Date().toISOString() };
-      try { await supabase.from("cost_management_fare_lookup_cache").insert(row); } catch (e) {}
-      return { ...row, transfers: res.transfers, source: "live" };
+      // Then the engine: published band table × published kilometrage. This is
+      // the step that removed "type every fare by hand" — it answers any pair
+      // on a seeded line, including pairs you have never travelled.
+      const calc = jrCompute(from, to);
+      if (calc) return { from_station: from, to_station: to, distance_km: calc.distance_km ?? null, route_summary: calc.route_summary || calc.note || "", looked_up_at: new Date().toISOString(), fare_ic: calc.fare_ic, fare_ticket: calc.fare_ticket, source: calc.source, changes: calc.changes };
+      // A miss is a NORMAL state, not a failure: the pair is on a line the
+      // engine has no kilometrage for yet.
+      return { error: true, miss: true, reason: "Not on a seeded line yet" };
     }
 
     // Period due date for the QUICK path: unlike computeDueDate this never
@@ -2721,16 +2941,23 @@
       const [stops, setStops] = useState(["", ""]);
       const [legs, setLegs] = useState([]);
       const [manual, setManual] = useState({});
+      const [correcting, setCorrecting] = useState({}); // legIndex → showing the "charged something else" input
       const [busy, setBusy] = useState(false);
       const [date, setDate] = useState(ymdToday());
       const [card, setCard] = useState(null);
       const [round, setRound] = useState(false); // return trip: same legs priced again in reverse
+      const [direct, setDirect] = useState(null); // book row for the two endpoints, if any
+      const [useDirect, setUseDirect] = useState(false);
+      const [bookMsg, setBookMsg] = useState(null); // fare-book write feedback after saving
       const [sugg, setSugg] = useState(null);      // route suggestion: {vias, summary, transfers} | {error}
       const [suggBusy, setSuggBusy] = useState(false);
 
       const stations = useMemo(() => {
-        const s = new Set(SEED_STATIONS);
-        allExpenses.forEach((e) => { if (e.category === "Transportation" && e.shop && e.shop.includes("→")) e.shop.split("→").forEach((p) => { const x = p.trim(); if (x) s.add(x); }); });
+        // Canonicalised on the way in, so autocomplete offers exactly the
+        // spelling the fare book stores — otherwise the two render side by side
+        // in slightly different forms.
+        const s = new Set(SEED_STATIONS.map(canonStation));
+        allExpenses.forEach((e) => { if (e.category === "Transportation" && e.shop && e.shop.includes("→")) e.shop.split("→").forEach((p) => { const x = canonStation(p); if (x) s.add(x); }); });
         return [...s].sort();
       }, [allExpenses]);
       const recentTrips = useMemo(() => {
@@ -2744,13 +2971,18 @@
         return out;
       }, [allExpenses]);
 
-      const reset = () => { setLegs([]); setManual({}); setSugg(null); };
+      const reset = () => { setLegs([]); setManual({}); setSugg(null); setCorrecting({}); setDirect(null); setUseDirect(false); setBookMsg(null); };
       const setStop = (i, v) => { setStops((s) => s.map((x, j) => (j === i ? v : x))); reset(); };
       const addStop = () => { setStops((s) => [...s, ""]); reset(); };
       const removeStop = (i) => { setStops((s) => (s.length <= 2 ? s : s.filter((_, j) => j !== i))); reset(); };
       const reverse = () => { setStops((s) => [...s].reverse()); reset(); };
 
-      const clean = stops.map((s) => s.trim());
+      // Canonicalised once, here, at the source. Everything downstream — leg
+      // headers, the saved route/notes strings, the journey card, the
+      // direct-fare probe and the fare-book row — then uses one identical
+      // spelling, so the same leg cannot render three ways across the journey
+      // card, History and the fare-book audit list.
+      const clean = stops.map(canonStation);
       const legPairs = clean.slice(0, -1).map((f, i) => [f, clean[i + 1]]).filter(([f, to]) => f && to);
       const canCalc = legPairs.length === stops.length - 1 && legPairs.every(([f, to]) => f !== to);
 
@@ -2759,15 +2991,33 @@
       const suggest = async () => {
         if (!canSuggest || suggBusy) return;
         setSuggBusy(true); setSugg(null);
-        let res = null, err = null;
-        try { const r = await supabase.functions.invoke("fare-lookup", { body: { from_station: endA, to_station: endB } }); res = r.data; err = r.error; }
-        catch (e) { err = e; }
-        setSuggBusy(false);
-        if (err || !res || res.error) { setSugg({ error: (res && res.reason) || (err && err.message) || "Lookup failed" }); return; }
-        setSugg({ vias: res.via_stations || [], summary: res.route_summary || "", transfers: res.transfers });
+        // Suggestions now come from YOUR fare book, read as a graph: any station
+        // priced against both endpoints is a transfer you have already paid for.
+        // Free, offline, and it can only propose hops it can actually price.
+        try {
+          const eng = jrRoute(endA, endB);
+          if (eng) {
+            setSuggBusy(false);
+            const f = jrBandFare(eng.km);
+            setSugg({ vias: eng.changes, summary: `${eng.km} km${f ? " · " + CUR.symbol + f.fare_ic.toLocaleString() : ""} · ${eng.lines.map((id) => (JR_LINES.find((L) => L.id === id) || {}).name).filter(Boolean).join(" → ")}` });
+            return;
+          }
+          const straight = await fareBookGet(supabase, endA, endB);
+          const neighbours = async (st) => {
+            const { data } = await supabase.from("cost_management_fare_book").select("pair_a,pair_b").or(`pair_a.eq."${st}",pair_b.eq."${st}"`);
+            return (data || []).map((r) => (r.pair_a === st ? r.pair_b : r.pair_a));
+          };
+          const [nA, nB] = await Promise.all([neighbours(endA), neighbours(endB)]);
+          const setB = new Set(nB);
+          const shared = [...new Set(nA.filter((x) => setB.has(x) && x !== endA && x !== endB))];
+          setSuggBusy(false);
+          if (shared.length) { setSugg({ vias: [shared[0]], summary: "both hops are already in your fare book", alts: shared.slice(1, 4) }); return; }
+          if (straight) { setSugg({ vias: [], summary: `direct fare on record · ${fmt(straight.fare_ic)}` }); return; }
+          setSugg({ note: "Nothing on record for these stations yet. Calculate the journey and type each fare once — every fare you enter is saved, so next time this route fills itself in." });
+        } catch (e) { setSuggBusy(false); setSugg({ note: "Couldn't read the fare book — add your transfer stops manually." }); }
       };
       const applySugg = () => {
-        if (!sugg || sugg.error) return;
+        if (!sugg || sugg.note) return;
         setStops([endA, ...sugg.vias, endB]);
         setLegs([]); setManual({}); setSugg(null);
       };
@@ -2777,12 +3027,23 @@
         setBusy(true); setLegs([]); setManual({}); setCard(null);
         const out = [];
         for (const [f, to] of legPairs) out.push(await fareLookup(supabase, f, to)); // sequential: shared cache table
-        setLegs(out); setBusy(false);
+        setLegs(out);
+        if (clean.length > 2) setDirect(await fareBookGet(supabase, clean[0], clean[clean.length - 1]));
+        setBusy(false);
       };
 
-      const amounts = legs.map((r, i) => (r && !r.error ? r.fare_ic : parseInt(manual[i], 10)));
+      // A typed amount always wins over a looked-up one — you are the verifier.
+      const amounts = legs.map((r, i) => {
+        const typed = parseInt(manual[i], 10);
+        if (Number.isInteger(typed) && typed > 0) return typed;
+        return r && !r.error ? r.fare_ic : NaN;
+      });
       const allPriced = legs.length > 0 && amounts.every((a) => Number.isInteger(a) && a > 0);
-      const oneWay = allPriced ? amounts.reduce((a, b) => a + b, 0) : null;
+      const legSum = allPriced ? amounts.reduce((a, b) => a + b, 0) : null;
+      // Japanese fares are not additive: one operator often charges less for
+      // A→C than fare(A,B)+fare(B,C). If the book holds a direct endpoint fare
+      // that differs from the sum, offer it instead of guessing.
+      const oneWay = useDirect && direct ? direct.fare_ic : legSum;
       const total = oneWay == null ? null : round ? oneWay * 2 : oneWay;
 
       const save = async () => {
@@ -2791,6 +3052,29 @@
         const legNotes = legs.map((r, i) => `${legPairs[i][0]}→${legPairs[i][1]} ${fmt(amounts[i])}${r && !r.error ? "" : " (manual)"}`).join(" · ");
         const notes = round ? `Round trip · out ${legNotes} · return same fares` : legNotes;
         const res = await insertExpense({ region: currency, date, category: "Transportation", shop: route, amount: total, notes, expense_type: "normal", tags: "" });
+        // Feed the fare book so the next occurrence of these legs autofills.
+        if (res.ok) {
+          const clashes = [], failures = [];
+          for (let i = 0; i < legPairs.length; i++) {
+            // Saving a book fare you did NOT override is your confirmation that
+            // the gate charged it — flip the row to verified. The leg badge
+            // promises exactly this ("saving this journey confirms it"), and
+            // without it no row could ever become verified from normal use.
+            // Two ways a fare becomes verified: you accepted a book fare without
+            // overriding it, or you typed what the gate charged. A hand-typed
+            // figure is first-hand evidence — the strongest source in the
+            // system — so it must not land in the book as unverified.
+            const typedHere = Number.isInteger(parseInt(manual[i], 10)) && parseInt(manual[i], 10) > 0;
+            const src = legs[i] && legs[i].source;
+            const accepted = typedHere || (!overridden(manual[i]) && (src === "book" || src === "calc" || src === "special"));
+            const w = await fareBookSave(supabase, legPairs[i][0], legPairs[i][1], amounts[i], { origin: src === "calc" || src === "special" ? "calculated" : "manual", verified: accepted });
+            const leg = `${legPairs[i][0]}→${legPairs[i][1]}`;
+            if (w && w.status === "clash") clashes.push(`${leg}: book says ${fmt(w.fare_ic)}, you entered ${fmt(w.attempted)}`);
+            else if (!w || w.status === "error") failures.push(`${leg}: ${(w && w.reason) || "write failed"}`);
+          }
+          if (useDirect && direct) await fareBookSave(supabase, clean[0], clean[clean.length - 1], direct.fare_ic, { origin: "manual" });
+          setBookMsg(failures.length ? { kind: "error", lines: failures } : clashes.length ? { kind: "clash", lines: clashes } : { kind: "ok" });
+        }
         const out = legs.map((r, i) => ({ from: legPairs[i][0], to: legPairs[i][1], amount: amounts[i], source: r && !r.error ? r.source : "manual", km: r && !r.error ? r.distance_km : null }));
         const back = round ? [...out].reverse().map((l) => ({ ...l, from: l.to, to: l.from })) : [];
         if (res.ok) setCard({ route, legs: out, back, oneWay, total, date, round });
@@ -2829,6 +3113,21 @@
               </div>
             </div>
             <div style={{ fontSize: 11.5, color: theme.success, fontWeight: 600, marginTop: 10 }}>✓ Added to expenses as one Transportation entry</div>
+            {bookMsg && bookMsg.kind === "ok" && <div style={{ fontSize: 11, color: theme.textDim, marginTop: 4 }}>Fare book updated — these legs autofill next time.</div>}
+            {bookMsg && bookMsg.kind === "error" && (
+              <div style={{ marginTop: 8, borderRadius: 9, background: theme.danger + "14", border: `1px solid ${theme.danger}44`, padding: "9px 11px" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: theme.danger, marginBottom: 3 }}>Fare book could not be updated</div>
+                {bookMsg.lines.map((l, i) => <div key={i} style={{ fontSize: 10.5, color: theme.textDim }}>{l}</div>)}
+                <div style={{ fontSize: 10.5, color: theme.textDim, marginTop: 3 }}>The expense itself saved fine. If this mentions a missing table, run migrations/006_fare_book.sql.</div>
+              </div>
+            )}
+            {bookMsg && bookMsg.kind === "clash" && (
+              <div style={{ marginTop: 8, borderRadius: 9, background: theme.warning + "14", border: `1px solid ${theme.warning}44`, padding: "9px 11px" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: theme.warning, marginBottom: 3 }}>Fare book left unchanged for {bookMsg.lines.length} leg{bookMsg.lines.length === 1 ? "" : "s"}</div>
+                {bookMsg.lines.map((l, i) => <div key={i} style={{ fontSize: 10.5, color: theme.textDim }}>{l}</div>)}
+                <div style={{ fontSize: 10.5, color: theme.textDim, marginTop: 3 }}>Those rows are verified, so nothing was overwritten — correct them in Settings → Fare book if the fare really changed.</div>
+              </div>
+            )}
             <button onClick={startNew} style={{ width: "100%", marginTop: 12, padding: "11px", borderRadius: 10, border: `1px solid ${theme.cardBorder}`, background: theme.inputBg, color: theme.text, cursor: "pointer", fontFamily: "inherit", fontSize: 12.5, fontWeight: 700 }}>Plan another journey</button>
           </div>
           {modals}
@@ -2861,9 +3160,9 @@
               <button onClick={suggest} disabled={!canSuggest || suggBusy} title="Look up where you change trains between From and To" style={{ padding: "9px", borderRadius: 10, border: `1px dashed ${canSuggest ? theme.primary + "88" : theme.cardBorder}`, background: "transparent", color: canSuggest ? theme.primary : theme.textMuted, cursor: canSuggest && !suggBusy ? "pointer" : "not-allowed", opacity: canSuggest ? 1 : 0.5, fontFamily: "inherit", fontSize: 12, fontWeight: 600, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}><Icon name="zap" size={13}/>{suggBusy ? "Finding route…" : "Suggest transfers"}</button>
             </div>
             {sugg && (
-              <div className="cm-slide-in" style={{ borderRadius: 10, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${sugg.error ? theme.warning + "55" : theme.primary + "55"}`, padding: "11px 13px", marginBottom: 10 }}>
-                {sugg.error ? (
-                  <div style={{ fontSize: 11.5, color: theme.textDim }}>Couldn't fetch a route — {sugg.error}. Add your transfer stops manually.</div>
+              <div className="cm-slide-in" style={{ borderRadius: 10, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${sugg.note ? theme.cardBorder : theme.primary + "55"}`, padding: "11px 13px", marginBottom: 10 }}>
+                {sugg.note ? (
+                  <div style={{ fontSize: 11.5, color: theme.textDim, lineHeight: 1.5 }}>{sugg.note}</div>
                 ) : sugg.vias.length === 0 ? (
                   <div style={{ fontSize: 12, color: "#fff", fontWeight: 600 }}>Direct — no transfer needed <span style={{ fontWeight: 400, color: theme.textDim, fontSize: 11 }}>{sugg.summary && `· ${sugg.summary}`}</span></div>
                 ) : (
@@ -2892,26 +3191,49 @@
                     <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
                       <span style={{ fontSize: 12, fontWeight: 600, color: "#fff" }}>{legPairs[i][0]} → {legPairs[i][1]}</span>
                       {r && !r.error ? (
-                        <span style={{ fontSize: 10, fontWeight: 700, color: r.source === "cache" ? theme.warning : theme.success, background: `${r.source === "cache" ? theme.warning : theme.success}18`, border: `1px solid ${r.source === "cache" ? theme.warning : theme.success}44`, borderRadius: 8, padding: "2px 7px" }}>{r.source === "cache" ? "CACHED" : "LIVE"} · {String(r.looked_up_at).slice(0, 10)}</span>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: fareTone(r, theme), background: `${fareTone(r, theme)}18`, border: `1px solid ${fareTone(r, theme)}44`, borderRadius: 8, padding: "2px 7px" }}>{fareSourceLabel(r)}</span>
                       ) : (
                         <span style={{ fontSize: 10, fontWeight: 700, color: theme.warning }}>MANUAL</span>
                       )}
                     </div>
                     {r && !r.error ? (
-                      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
-                        <span style={{ fontSize: 18, fontWeight: 700, color: "#fff" }}>{fmt(r.fare_ic)}</span>
-                        <span style={{ fontSize: 10.5, color: theme.textMuted }}>{r.fare_ticket != null && `Ticket ${fmt(r.fare_ticket)} · `}{r.distance_km != null && `${r.distance_km} km`}</span>
+                      <div>
+                        <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 18, fontWeight: 700, color: overridden(manual[i]) ? theme.textDim : "#fff", textDecoration: overridden(manual[i]) ? "line-through" : "none" }}>{fmt(r.fare_ic)}</span>
+                          {overridden(manual[i]) && <span style={{ fontSize: 18, fontWeight: 700, color: "#fff" }}>{fmt(parseInt(manual[i], 10))}</span>}
+                          <span style={{ fontSize: 10.5, color: theme.textMuted }}>{r.fare_ticket != null && `Ticket ${fmt(r.fare_ticket)} · `}{r.distance_km != null && `${r.distance_km} km`}</span>
+                        </div>
+                        {correcting[i] ? (
+                          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                            <input type="number" inputMode="numeric" autoFocus value={manual[i] || ""} onChange={(e) => setManual((m) => ({ ...m, [i]: e.target.value }))} placeholder={CUR.symbol + " fare actually charged"} style={{ ...inputStyle, fontSize: 13, fontWeight: 600, flex: 1 }}/>
+                            <button onClick={() => { setCorrecting((c) => ({ ...c, [i]: false })); setManual((m) => { const n = { ...m }; delete n[i]; return n; }); }} style={{ border: `1px solid ${theme.cardBorder}`, background: theme.cardBg, color: theme.textMuted, borderRadius: 9, padding: "0 12px", cursor: "pointer", fontFamily: "inherit", fontSize: 11.5, fontWeight: 600 }}>Cancel</button>
+                          </div>
+                        ) : (
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                            {r.source === "book" && !r.verified && <span style={{ fontSize: 10.5, color: theme.textDim }}>Unverified — saving this journey confirms it</span>}
+                            <button onClick={() => setCorrecting((c) => ({ ...c, [i]: true }))} style={{ border: "none", background: "transparent", color: theme.primary, cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 700, padding: 0 }}>Charged something else?</button>
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <React.Fragment>
-                        <div style={{ fontSize: 10.5, color: theme.textDim, marginTop: 3 }}>{(r && r.reason) || "Lookup unavailable"} — enter this leg's fare</div>
+                        <div style={{ fontSize: 10.5, color: theme.textDim, marginTop: 3, lineHeight: 1.45 }}>{(r && r.reason) || "New pair"} — type it once and this leg autofills next time</div>
                         <input type="number" inputMode="numeric" value={manual[i] || ""} onChange={(e) => setManual((m) => ({ ...m, [i]: e.target.value }))} placeholder={CUR.symbol + " IC fare"} style={{ ...inputStyle, fontSize: 13.5, fontWeight: 600, marginTop: 6 }}/>
                       </React.Fragment>
                     )}
                   </div>
                 ))}
+                {direct && legSum != null && direct.fare_ic !== legSum && (
+                  <div style={{ borderRadius: 10, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${theme.primary}55`, padding: "11px 13px" }}>
+                    <div style={{ fontSize: 11.5, color: "#fff", fontWeight: 600, marginBottom: 2 }}>Book has a direct fare for {clean[0]} → {clean[clean.length - 1]}: {fmt(direct.fare_ic)}</div>
+                    <div style={{ fontSize: 10.5, color: theme.textDim, marginBottom: 8 }}>{direct.fare_ic < legSum
+                      ? `The legs add up to ${fmt(legSum)} — ${fmt(legSum - direct.fare_ic)} more. A through-fare on one operator is usually cheaper than the sum of hops.`
+                      : `The legs add up to ${fmt(legSum)}, which is ${fmt(direct.fare_ic - legSum)} less than the direct fare. Worth a check: the direct row may be stale, or this route may cross operators.`}</div>
+                    <button onClick={() => setUseDirect((v) => !v)} style={{ width: "100%", padding: "8px", borderRadius: 9, border: "none", background: useDirect ? theme.primaryGlow : theme.cardBg, boxShadow: useDirect ? "none" : `inset 0 0 0 1px ${theme.cardBorder}`, color: useDirect ? "#fff" : theme.text, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 700 }}>{useDirect ? `Using direct fare · ${fmt(direct.fare_ic)}` : `Use direct fare instead (${fmt(direct.fare_ic)})`}</button>
+                  </div>
+                )}
                 <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", padding: "4px 2px" }}>
-                  <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600, color: theme.textMuted }}>Journey total{round ? " · round trip" : ""}</span>
+                  <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600, color: theme.textMuted }}>Journey total{round ? " · round trip" : ""}{useDirect ? " · direct" : ""}</span>
                   <span style={{ fontSize: 20, fontWeight: 700, color: total != null ? "#fff" : theme.textDim }}>{total != null ? fmt(total) : "—"}{round && oneWay != null ? <span style={{ fontSize: 11, fontWeight: 600, color: theme.textMuted }}> ({fmt(oneWay)} × 2)</span> : null}</span>
                 </div>
                 <div>
@@ -2938,6 +3260,246 @@
             </div>
           )}
           {modals}
+        </div>
+      );
+    }
+
+    // ═══ FARE BOOK — audit + maintenance surface (Settings → Fare book) ═══
+    // The point of this screen is verification: unverified rows sort to the top
+    // so the list is a shrinking to-do, not a wall of every fare you ever paid.
+    function FareBookView() {
+      const { theme, inputStyle, supabase } = useTheme();
+      const [rows, setRows] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [filter, setFilter] = useState("unverified");
+      const [q, setQ] = useState("");
+      const [editing, setEditing] = useState(null); // row id being edited
+      const [draft, setDraft] = useState({});
+      const [adding, setAdding] = useState(false);
+      const [newRow, setNewRow] = useState({ from: "", to: "", fare: "", operator: "", verified: true });
+      const [tariff, setTariff] = useState(false);   // tariff-band reference panel
+      const [bands, setBands] = useState(null);      // published operator bands
+      const [importing, setImporting] = useState(false);
+      const [csv, setCsv] = useState("");
+      const [toast, setToast] = useState(null);
+      const say = (msg, bad) => { setToast({ msg, bad }); setTimeout(() => setToast(null), 2600); };
+
+      const load = async () => {
+        setLoading(true);
+        try {
+          const { data, error } = await supabase.from("cost_management_fare_book").select("*").order("verified", { ascending: true }).order("pair_a", { ascending: true });
+          if (error) throw error;
+          setRows(data || []);
+        } catch (e) { setRows(null); }
+        setLoading(false);
+      };
+      useEffect(() => { load(); }, []);
+      // Loaded lazily: the reference table is only useful when you open it.
+      useEffect(() => {
+        if (!tariff || bands) return;
+        (async () => {
+          try {
+            const { data, error } = await supabase.from("cost_management_fare_bands").select("*").order("operator").order("km_from");
+            setBands(error ? [] : (data || []));
+          } catch (e) { setBands([]); }
+        })();
+      }, [tariff]);
+
+      const shown = useMemo(() => {
+        if (!rows) return [];
+        const needle = q.trim().toLowerCase();
+        return rows.filter((r) => {
+          if (filter === "unverified" && r.verified) return false;
+          if (filter === "verified" && !r.verified) return false;
+          if (!needle) return true;
+          return (r.pair_a + " " + r.pair_b + " " + (r.operator || "")).toLowerCase().includes(needle);
+        });
+      }, [rows, filter, q]);
+
+      const counts = useMemo(() => ({ all: rows ? rows.length : 0, unverified: rows ? rows.filter((r) => !r.verified).length : 0, verified: rows ? rows.filter((r) => r.verified).length : 0 }), [rows]);
+
+      const patch = async (row, fields) => {
+        const { error } = await supabase.from("cost_management_fare_book").update(fields).eq("id", row.id);
+        if (error) say(error.message, true); else { setRows((rs) => rs.map((r) => (r.id === row.id ? { ...r, ...fields } : r))); }
+      };
+      const remove = async (row) => {
+        if (!window.confirm(`Delete ${row.pair_a} ↔ ${row.pair_b} from the fare book?`)) return;
+        const { error } = await supabase.from("cost_management_fare_book").delete().eq("id", row.id);
+        if (error) say(error.message, true); else { setRows((rs) => rs.filter((r) => r.id !== row.id)); say("Deleted"); }
+      };
+      const saveEdit = async (row) => {
+        const fare = parseInt(draft.fare_ic, 10);
+        if (!Number.isInteger(fare) || fare <= 0) { say("Enter a fare", true); return; }
+        await patch(row, { fare_ic: fare, operator: draft.operator || "", notes: draft.notes || "", verified: !!draft.verified });
+        setEditing(null); say("Saved");
+      };
+      const addRow = async () => {
+        const w = await fareBookSave(supabase, newRow.from, newRow.to, newRow.fare, { origin: "manual", operator: newRow.operator, verified: newRow.verified });
+        if (!w || w.status === "error") { say((w && w.reason) || "Fare book write failed", true); return; }
+        setNewRow({ from: "", to: "", fare: "", operator: "", verified: true }); setAdding(false); load();
+        say(w.status === "clash" ? "That pair is already verified at a different fare" : "Added");
+      };
+
+      // CSV: "From,To,Fare[,Operator]" per line — paste straight from a sheet.
+      const runImport = async () => {
+        const lines = csv.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        let ok = 0, bad = 0, firstErr = "";
+        for (const line of lines) {
+          const p = line.split(",").map((s) => s.trim());
+          if (p.length < 3 || /^from$/i.test(p[0])) { if (!/^from$/i.test(p[0])) bad++; continue; }
+          const w = await fareBookSave(supabase, p[0], p[1], p[2], { origin: "imported", operator: p[3] || "", verified: false });
+          if (w && w.status !== "error") ok++; else { bad++; if (!firstErr) firstErr = (w && w.reason) || "write failed"; }
+        }
+        setCsv(""); setImporting(false); load();
+        say(`Imported ${ok} row${ok === 1 ? "" : "s"}${bad ? ` · ${bad} skipped (${firstErr})` : ""}`, bad > 0 && ok === 0);
+      };
+      const exportCsv = () => {
+        const body = ["From,To,Fare,Operator,Verified", ...(rows || []).map((r) => [r.pair_a, r.pair_b, r.fare_ic, r.operator || "", r.verified ? "yes" : "no"].join(","))].join("\n");
+        const url = URL.createObjectURL(new Blob([body], { type: "text/csv" }));
+        const a = document.createElement("a"); a.href = url; a.download = "fare-book.csv"; a.click(); URL.revokeObjectURL(url);
+      };
+
+      const chip = (id, label, n) => (
+        <button key={id} onClick={() => setFilter(id)} style={{ padding: "5px 11px", borderRadius: 8, border: `1px solid ${filter === id ? theme.primary : theme.cardBorder}`, background: filter === id ? theme.primaryGlow : "transparent", color: filter === id ? "#fff" : theme.textMuted, cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>{label} {n}</button>
+      );
+
+      if (rows === null) return (
+        <div style={{ background: theme.cardBg, border: `1px solid ${theme.warning}44`, borderRadius: 14, padding: "20px 16px" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#fff", marginBottom: 6 }}>Fare book table not found</div>
+          <div style={{ fontSize: 11.5, color: theme.textDim }}>Run <code style={{ background: theme.inputBg, padding: "1px 5px", borderRadius: 4 }}>migrations/006_fare_book.sql</code> in the Supabase SQL editor, then reload.</div>
+        </div>
+      );
+
+      return (
+        <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 14, padding: 16 }}>
+          {toast && <div style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 999, padding: "10px 20px", borderRadius: 10, fontSize: 12, fontWeight: 600, background: toast.bad ? theme.danger : theme.success, color: "#fff" }}>{toast.msg}</div>}
+          <p style={{ fontSize: 11, color: theme.textDim, marginTop: 0, marginBottom: 10 }}>Your own fare table — the first place the journey builder looks. Fares are symmetric, so each row answers both directions. Unverified rows are listed first; confirm one by travelling the leg again, or edit it here.</p>
+          <div style={{ borderRadius: 9, background: theme.warning + "12", border: `1px solid ${theme.warning}33`, padding: "8px 11px", marginBottom: 12 }}>
+            <div style={{ fontSize: 10.5, color: theme.textMuted, lineHeight: 1.55 }}><strong style={{ color: theme.warning }}>JR fares are computed, not guessed</strong> — the engine reads the published 幹線 band table effective 14 Mar 2026 (the revision that abolished the cheaper “electric-specific section” and “within the Yamanote loop” categories) against station kilometrage, and checks the surviving 特定区間 corridors first. A row in this book always beats the engine, so correcting one here makes the correction permanent. Metro and Toei fares were unaffected by the revision.</div>
+          </div>
+
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+            {chip("unverified", "To verify", counts.unverified)}
+            {chip("verified", "Verified", counts.verified)}
+            {chip("all", "All", counts.all)}
+          </div>
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search a station…" style={{ ...inputStyle, marginBottom: 10 }}/>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginBottom: 12 }}>
+            <button onClick={() => { setAdding((v) => !v); setImporting(false); }} style={{ padding: "8px", borderRadius: 9, border: `1px solid ${theme.cardBorder}`, background: adding ? theme.primaryGlow : theme.inputBg, color: adding ? "#fff" : theme.text, cursor: "pointer", fontFamily: "inherit", fontSize: 11.5, fontWeight: 600 }}>Add fare</button>
+            <button onClick={() => { setImporting((v) => !v); setAdding(false); }} style={{ padding: "8px", borderRadius: 9, border: `1px solid ${theme.cardBorder}`, background: importing ? theme.primaryGlow : theme.inputBg, color: importing ? "#fff" : theme.text, cursor: "pointer", fontFamily: "inherit", fontSize: 11.5, fontWeight: 600 }}>Import CSV</button>
+            <button onClick={exportCsv} style={{ padding: "8px", borderRadius: 9, border: `1px solid ${theme.cardBorder}`, background: theme.inputBg, color: theme.text, cursor: "pointer", fontFamily: "inherit", fontSize: 11.5, fontWeight: 600 }}>Export</button>
+          </div>
+
+          <button onClick={() => setTariff((v) => !v)} style={{ width: "100%", padding: "8px", borderRadius: 9, border: `1px solid ${theme.cardBorder}`, background: tariff ? theme.primaryGlow : "transparent", color: tariff ? "#fff" : theme.textMuted, cursor: "pointer", fontFamily: "inherit", fontSize: 11.5, fontWeight: 600, marginBottom: 12, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}><Icon name="train" size={13}/>{tariff ? "Hide" : "Show"} published fare bands</button>
+
+          {tariff && (
+            <div className="cm-slide-in" style={{ borderRadius: 10, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${theme.cardBorder}`, padding: 12, marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: theme.textDim, marginBottom: 10 }}>Operator distance bands, from published tariffs. Look up your leg's distance, read the fare, then verify it at the gate. Metro/Toei only — JR East prices by trunk-line distance with no fixed short table.</div>
+              {bands === null ? (
+                <div style={{ fontSize: 11.5, color: theme.textDim, padding: "8px 0" }}>Loading…</div>
+              ) : bands.length === 0 ? (
+                <div style={{ fontSize: 11.5, color: theme.textDim }}>No bands stored. Run <code style={{ background: theme.cardBg, padding: "1px 5px", borderRadius: 4 }}>migrations/007_tokyo_fare_seed.sql</code> to load them.</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {[...new Set(bands.map((b) => b.operator))].map((op) => (
+                    <div key={op}>
+                      <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: theme.primary, marginBottom: 5 }}>{op}</div>
+                      <div style={{ display: "flex", flexDirection: "column" }}>
+                        {bands.filter((b) => b.operator === op).map((b) => {
+                          // Read from an explicit column, never parsed out of
+                          // the note prose: "Top published denomination" is a
+                          // published fare that no sensible /^published/ test
+                          // would match. The fallback only covers a table made
+                          // by an older copy of 007 that predates the column.
+                          const quoted = b.quoted != null ? b.quoted : !/structure|confirm at gate/i.test(b.source_note || "");
+                          return (
+                          <div key={b.id} style={{ display: "grid", gridTemplateColumns: "8px 1fr auto auto", gap: 9, alignItems: "baseline", padding: "6px 0", borderBottom: `1px solid ${theme.cardBorder}` }}>
+                            <span title={quoted ? "Published tariff" : "Structural — not a published quote"} style={{ width: 7, height: 7, borderRadius: 7, background: quoted ? theme.success : theme.warning, display: "block", transform: "translateY(-1px)" }}/>
+                            <span style={{ minWidth: 0 }}>
+                              <span style={{ display: "block", fontSize: 11.5, color: theme.textMuted }}>{b.km_to == null ? `${b.km_from} km +` : `${b.km_from}–${b.km_to} km`}</span>
+                              {b.source_note && <span style={{ display: "block", fontSize: 10, color: quoted ? theme.textDim : theme.warning }}>{b.source_note}</span>}
+                            </span>
+                            <span style={{ fontSize: 12.5, fontWeight: 700, color: "#fff", whiteSpace: "nowrap" }}>{yen(b.fare_ic)}</span>
+                            <span style={{ fontSize: 10.5, color: theme.textDim, whiteSpace: "nowrap" }}>{b.fare_ticket != null ? `ticket ${yen(b.fare_ticket)}` : ""}</span>
+                          </div>
+                        );})}
+                      </div>
+                    </div>
+                  ))}
+                  <div style={{ fontSize: 10, color: theme.textDim, lineHeight: 1.5 }}>Always shown in yen — these are Japanese operator tariffs, not amounts in your selected currency. IC fares are charged to the single yen and sit just under the paper price, which rounds up to the nearest ¥10. An amber dot marks a band that is structural rather than individually quoted.</div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {adding && (
+            <div className="cm-slide-in" style={{ borderRadius: 10, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${theme.cardBorder}`, padding: 12, marginBottom: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <input list="cm-stations" value={newRow.from} onChange={(e) => setNewRow({ ...newRow, from: e.target.value })} placeholder="From station" style={inputStyle}/>
+                <input list="cm-stations" value={newRow.to} onChange={(e) => setNewRow({ ...newRow, to: e.target.value })} placeholder="To station" style={inputStyle}/>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <input type="number" inputMode="numeric" value={newRow.fare} onChange={(e) => setNewRow({ ...newRow, fare: e.target.value })} placeholder={CUR.symbol + " IC fare"} style={inputStyle}/>
+                <input value={newRow.operator} onChange={(e) => setNewRow({ ...newRow, operator: e.target.value })} placeholder="Operator (optional)" style={inputStyle}/>
+              </div>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, color: theme.textMuted, cursor: "pointer" }}>
+                <input type="checkbox" checked={newRow.verified} onChange={(e) => setNewRow({ ...newRow, verified: e.target.checked })}/>I have checked this fare myself
+              </label>
+              <button onClick={addRow} style={{ padding: "10px", borderRadius: 9, border: "none", background: `linear-gradient(135deg,${theme.primary},${theme.accent})`, color: "#fff", cursor: "pointer", fontFamily: "inherit", fontSize: 12.5, fontWeight: 700 }}>Add to fare book</button>
+            </div>
+          )}
+
+          {importing && (
+            <div className="cm-slide-in" style={{ borderRadius: 10, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${theme.cardBorder}`, padding: 12, marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: theme.textDim, marginBottom: 6 }}>One row per line: <code>From,To,Fare,Operator</code>. Imported rows land unverified.</div>
+              <textarea value={csv} onChange={(e) => setCsv(e.target.value)} rows={6} placeholder={"Nishi-Funabashi,Shinjuku,482,JR East\nMotoyawata,Otemachi,314,Toei"} style={{ ...inputStyle, height: "auto", fontFamily: "ui-monospace,monospace", fontSize: 11.5, resize: "vertical", marginBottom: 8 }}/>
+              <button onClick={runImport} disabled={!csv.trim()} style={{ width: "100%", padding: "10px", borderRadius: 9, border: "none", background: `linear-gradient(135deg,${theme.primary},${theme.accent})`, color: "#fff", cursor: csv.trim() ? "pointer" : "not-allowed", opacity: csv.trim() ? 1 : 0.5, fontFamily: "inherit", fontSize: 12.5, fontWeight: 700 }}>Import</button>
+            </div>
+          )}
+
+          {loading ? (
+            <div style={{ fontSize: 12, color: theme.textDim, padding: "18px 0", textAlign: "center" }}>Loading…</div>
+          ) : shown.length === 0 ? (
+            <div style={{ padding: "22px 12px", textAlign: "center" }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: "#fff", marginBottom: 4 }}>{counts.all === 0 ? "Fare book is empty" : filter === "unverified" ? "Nothing left to verify" : "No matches"}</div>
+              <div style={{ fontSize: 11, color: theme.textDim }}>{counts.all === 0 ? "It fills itself as you log journeys — every fare you type is remembered." : filter === "unverified" ? "Every fare in the book has been checked." : "Try a different search."}</div>
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {shown.map((r) => editing === r.id ? (
+                <div key={r.id} style={{ borderRadius: 10, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${theme.primary}55`, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: "#fff" }}>{r.pair_a} ↔ {r.pair_b}</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    <input type="number" inputMode="numeric" value={draft.fare_ic} onChange={(e) => setDraft({ ...draft, fare_ic: e.target.value })} placeholder={CUR.symbol + " IC fare"} style={inputStyle}/>
+                    <input value={draft.operator} onChange={(e) => setDraft({ ...draft, operator: e.target.value })} placeholder="Operator" style={inputStyle}/>
+                  </div>
+                  <input value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} placeholder="Notes (optional)" style={inputStyle}/>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, color: theme.textMuted, cursor: "pointer" }}>
+                    <input type="checkbox" checked={!!draft.verified} onChange={(e) => setDraft({ ...draft, verified: e.target.checked })}/>Verified — I have checked this fare
+                  </label>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 6 }}>
+                    <button onClick={() => saveEdit(r)} style={{ padding: "9px", borderRadius: 9, border: "none", background: theme.primaryGlow, color: "#fff", cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 700 }}>Save</button>
+                    <button onClick={() => setEditing(null)} style={{ padding: "9px", borderRadius: 9, border: `1px solid ${theme.cardBorder}`, background: "transparent", color: theme.textMuted, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 600 }}>Cancel</button>
+                    <button onClick={() => remove(r)} style={{ padding: "9px 12px", borderRadius: 9, border: `1px solid ${theme.danger}55`, background: "transparent", color: theme.danger, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 600 }}>Delete</button>
+                  </div>
+                </div>
+              ) : (
+                <div key={r.id} style={{ display: "grid", gridTemplateColumns: "8px 1fr auto auto", gap: 10, alignItems: "center", borderRadius: 10, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${theme.cardBorder}`, padding: "10px 12px" }}>
+                  <span title={r.verified ? "Verified" : "Not verified yet"} style={{ width: 8, height: 8, borderRadius: 8, background: r.verified ? theme.success : theme.warning, display: "block" }}/>
+                  <span style={{ minWidth: 0 }}>
+                    <span style={{ display: "block", fontSize: 12.5, fontWeight: 600, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.pair_a} ↔ {r.pair_b}</span>
+                    <span style={{ display: "block", fontSize: 10.5, color: theme.textDim }}>{r.operator ? r.operator + " · " : ""}{r.origin}{r.hit_count ? ` · confirmed ${r.hit_count}×` : ""} · {String(r.updated_at).slice(0, 10)}</span>
+                  </span>
+                  <span style={{ fontSize: 13.5, fontWeight: 700, color: "#fff", whiteSpace: "nowrap" }}>{fmt(r.fare_ic)}</span>
+                  <span style={{ display: "flex", gap: 4 }}>
+                    {!r.verified && <button onClick={() => patch(r, { verified: true })} title="Mark verified" style={{ border: `1px solid ${theme.success}55`, background: "transparent", color: theme.success, borderRadius: 8, padding: "4px 9px", cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 700 }}>✓</button>}
+                    <button onClick={() => { setEditing(r.id); setDraft({ fare_ic: String(r.fare_ic), operator: r.operator || "", notes: r.notes || "", verified: r.verified }); }} title="Edit" style={{ border: `1px solid ${theme.cardBorder}`, background: "transparent", color: theme.textMuted, borderRadius: 8, padding: "4px 9px", cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600 }}>Edit</button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       );
     }
