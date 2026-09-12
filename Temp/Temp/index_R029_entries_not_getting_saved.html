@@ -532,10 +532,6 @@
     }
 
     function enrichRow(r) {
-      // YYYY-MM-DD must be read as a LOCAL date: new Date("2026-01-01") parses as UTC
-      // midnight, which reports the previous month/year west of Greenwich.
-      const s = String(r.date || "");
-      if (/^\d{4}-\d{2}-\d{2}/.test(s)) return { ...r, year: Number(s.slice(0, 4)), month: Number(s.slice(5, 7)) };
       const d = new Date(r.date);
       return { ...r, year: d.getFullYear(), month: d.getMonth() + 1 };
     }
@@ -620,29 +616,11 @@
 
       const changeTheme = (t) => { setThemeName(t); setStoredTheme(t); setShowThemePicker(false); };
 
-      // Supabase caps every SELECT at 1000 rows. Ordered by date ASC, that cap silently
-      // drops the NEWEST entries once the table passes 1000 — inserts succeed and confirm,
-      // but the refetch never returns them, so recent days vanish from every view.
-      // Page through in 1000-row slices until a short page comes back.
-      const fetchAllExpenses = async () => {
-        const PAGE = 1000;
-        let from = 0, out = [];
-        for (;;) {
-          const res = await supabase.from("cost_management_expenses").select("*")
-            .order("date", { ascending: true }).order("id", { ascending: true })
-            .range(from, from + PAGE - 1);
-          if (res.error) return res;
-          out = out.concat(res.data || []);
-          if (!res.data || res.data.length < PAGE) return { data: out, error: null };
-          from += PAGE;
-        }
-      };
-      const yearSeededRef = useRef(false); // the year filter is seeded once, not on every refetch
       const fetchData = useCallback(async () => {
         // no setLoading(true) here: refetches after a save must not unmount the
         // active view (the Add view keeps its review list / flash state)
         const [expRes, shopRes, catRes, tagRes, recRes, pendRes] = await Promise.all([
-          fetchAllExpenses(),
+          supabase.from("cost_management_expenses").select("*").order("date", { ascending: true }),
           supabase.from("cost_management_shops").select("*").order("is_favorite", { ascending: false }).order("name"),
           supabase.from("cost_management_categories").select("*").order("sort_order"),
           supabase.from("cost_management_tags").select("*").order("sort_order"),
@@ -655,13 +633,8 @@
             shop: r.shop, notes: r.notes || "", expense_type: r.expense_type || "normal", region: r.region,
             tags: r.tags || ""
           })));
-          // Seed the year filter on FIRST load only. Re-running it on every refetch —
-          // including the one fired right after a save — snapped the filter back to the
-          // newest year, hiding a just-saved entry dated in any other year.
-          if (!yearSeededRef.current) {
-            const years = [...new Set(expRes.data.map(r => Number(String(r.date).slice(0, 4))))].filter(Number.isFinite);
-            if (years.length) { setYearFilter(String(Math.max(...years))); yearSeededRef.current = true; }
-          }
+          const years = [...new Set(expRes.data.map(r => new Date(r.date).getFullYear()))];
+          if (years.length) setYearFilter(String(Math.max(...years)));
         }
         if (!shopRes.error && shopRes.data) setShops(shopRes.data);
         if (!catRes.error && catRes.data && catRes.data.length > 0) setCategories(catRes.data);
