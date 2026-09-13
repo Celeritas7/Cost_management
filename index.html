@@ -60,7 +60,38 @@
   <script type="text/babel">
     const SUPABASE_URL = "https://wylxvmkcrexwfpjpbhyy.supabase.co";
     const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind5bHh2bWtjcmV4d2ZwanBiaHl5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg2MzkxMDYsImV4cCI6MjA4NDIxNTEwNn0.6Bxo42hx4jwlJGWnfjiTpiDUsYfc1QLTN3YtrU1efak";
-    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    // persistSession keeps you signed in across launches; autoRefreshToken
+    // rotates the access token silently so a 30-day session never expires
+    // mid-session. detectSessionInUrl handles the Google OAuth redirect back.
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: "pkce" },
+    });
+    // Redirect back to WHEREVER the app is being used, not a hardcoded host.
+    // A fixed URL breaks PKCE: the code verifier is written to localStorage on
+    // the origin that started the sign-in, so sending localhost's callback to
+    // github.io leaves the verifier unreachable and the ?code= sits unredeemed
+    // in the address bar. Both origins must be in Supabase's redirect list.
+    const authRedirect = () => window.location.origin + window.location.pathname;
+    const SESSION_MAX_DAYS = 30;
+    const SIGNED_IN_AT = "cm_signed_in_at";
+    // Exposed purely for console diagnostics — the app itself never reads this.
+    // Lets you check `await window.cm.auth()` and run ad-hoc queries when the
+    // UI shows an empty ledger and you need to know whether it is RLS, the
+    // session, or the fetch.
+    window.cm = {
+      supabase,
+      build: "auth-1",
+      auth: async () => {
+        const { data } = await supabase.auth.getUser();
+        const { data: s } = await supabase.auth.getSession();
+        const jwt = s.session && s.session.access_token ? JSON.parse(atob(s.session.access_token.split(".")[1])) : null;
+        return { uid: data.user && data.user.id, email: data.user && data.user.email, role: jwt && jwt.role, expires: jwt && new Date(jwt.exp * 1000).toISOString() };
+      },
+      probe: async () => {
+        const r = await supabase.from("cost_management_expenses").select("id", { count: "exact", head: true });
+        return { count: r.count, error: r.error && r.error.message, status: r.status };
+      },
+    };
 
     const THEMES = {
       midnight: { name: "Midnight", icon: "🌙", bg: "linear-gradient(145deg, #0d0d1a 0%, #1a1a2e 50%, #16213e 100%)", headerBg: "rgba(255,255,255,0.03)", cardBg: "rgba(255,255,255,0.04)", cardBorder: "rgba(255,255,255,0.06)", inputBg: "rgba(255,255,255,0.06)", inputBorder: "rgba(255,255,255,0.12)", primary: "#2563eb", primaryGlow: "rgba(37,99,235,0.3)", accent: "#7c3aed", text: "#e0e0e0", textMuted: "#888", textDim: "#666", success: "#10b981", warning: "#f59e0b", danger: "#ef4444" },
@@ -543,7 +574,7 @@
     // ═══════════════════════════════════════════
     //  MAIN APP
     // ═══════════════════════════════════════════
-    function App() {
+    function App({ session, onSignOut }) {
       const [themeName, setThemeName] = useState(getStoredTheme);
       const theme = THEMES[themeName] || THEMES.midnight;
       const [currency, setCurrency] = useState(getStoredCurrency);
@@ -944,6 +975,9 @@
                   <button onClick={() => setView("outstanding")} title="Outstanding payments" style={{...pillStyle(view==="outstanding"),padding:"5px 9px",fontSize:11,display:"inline-flex",alignItems:"center",gap:5}}><Icon name="inbox" size={15}/><span style={{background:theme.danger,color:"#fff",fontSize:9,fontWeight:700,borderRadius:9,padding:"1px 5px",lineHeight:1.6}}>{regionPending.length}</span></button>
                 )}
                 {!isMobile && <button onClick={() => { reloadSukkiri(); setView("sukkiri"); }} title="Purchase requests from companion apps" style={{...pillStyle(view==="sukkiri"),padding:"5px 11px",fontSize:11,display:"inline-flex",alignItems:"center",gap:6}}>🛒 Requests{sukkiriPending.length>0 && <span style={{background:theme.danger,color:"#fff",fontSize:9,fontWeight:700,borderRadius:9,padding:"1px 5px",lineHeight:1.6}}>{sukkiriPending.length}</span>}</button>}
+                <button onClick={onSignOut} title={`Sign out${session && session.user ? " · " + session.user.email : ""}`} style={{...pillStyle(false),padding:"6px 10px",display:"inline-flex",alignItems:"center",justifyContent:"center",color:theme.textMuted,minWidth:32,lineHeight:1}}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                </button>
                 <div style={{position:"relative"}}>
                   <button onClick={() => setShowCurrencyPicker(!showCurrencyPicker)} title="Region & currency" style={{...pillStyle(false),padding:"6px 10px",display:"inline-flex",alignItems:"center",justifyContent:"center",color:theme.primary,fontSize:14,fontWeight:700,minWidth:32,lineHeight:1}}>{CUR.symbol}</button>
                   {showCurrencyPicker && (
@@ -2817,7 +2851,8 @@
       const calc = jrCompute(from, to);
       if (calc) return { from_station: from, to_station: to, distance_km: calc.distance_km ?? null, route_summary: calc.route_summary || calc.note || "", looked_up_at: new Date().toISOString(), fare_ic: calc.fare_ic, fare_ticket: calc.fare_ticket, source: calc.source, changes: calc.changes };
       // A miss is a NORMAL state, not a failure: the pair is on a line the
-      // engine has no kilometrage for yet.
+      // engine has no kilometrage for yet. `miss` distinguishes it from a real
+      // fault so the UI can render it as an invitation to type, not an alarm.
       return { error: true, miss: true, reason: "Not on a seeded line yet" };
     }
 
@@ -3214,13 +3249,13 @@
             {legs.length > 0 && (
               <div className="cm-slide-in" style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
                 {legs.map((r, i) => (
-                  <div key={i} style={{ borderRadius: 10, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${r && r.error ? theme.warning + "55" : theme.cardBorder}`, padding: "11px 13px" }}>
+                  <div key={i} style={{ borderRadius: 10, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${r && r.error && !r.miss ? theme.warning + "55" : theme.cardBorder}`, padding: "11px 13px" }}>
                     <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
                       <span style={{ fontSize: 12, fontWeight: 600, color: "#fff" }}>{legPairs[i][0]} → {legPairs[i][1]}</span>
                       {r && !r.error ? (
                         <span style={{ fontSize: 10, fontWeight: 700, color: fareTone(r, theme), background: `${fareTone(r, theme)}18`, border: `1px solid ${fareTone(r, theme)}44`, borderRadius: 8, padding: "2px 7px" }}>{fareSourceLabel(r)}</span>
                       ) : (
-                        <span style={{ fontSize: 10, fontWeight: 700, color: theme.warning }}>MANUAL</span>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: r && r.miss ? theme.textMuted : theme.warning }}>MANUAL</span>
                       )}
                     </div>
                     {r && !r.error ? (
@@ -5147,7 +5182,182 @@
       );
     }
 
-    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+    // ═══════════════════════════════════════════
+    //  AUTH GATE — splash → login → app
+    // ═══════════════════════════════════════════
+    // Every table is RLS-scoped to auth.uid() (migrations/008), so the app
+    // cannot read anything until a session exists. This gate is therefore not
+    // decoration: without it the app would render an empty ledger.
+    function AuthSplash() {
+      return (
+        <div style={{minHeight:"100dvh",background:"linear-gradient(145deg,#0d0d1a 0%,#1a1a2e 50%,#16213e 100%)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,fontFamily:"'Noto Sans JP', system-ui, sans-serif"}}>
+          <style>{`@keyframes cmPulse{0%,100%{opacity:.55;transform:scale(.97)}50%{opacity:1;transform:scale(1)}}`}</style>
+          <img src="icons/icon-192.png" alt="" width="64" height="64" style={{borderRadius:18,animation:"cmPulse 1.6s ease-in-out infinite"}}/>
+          <div style={{textAlign:"center"}}>
+            <div style={{fontSize:10,letterSpacing:2.5,textTransform:"uppercase",color:"#888",fontWeight:700}}>家計簿</div>
+            <div style={{fontSize:15,fontWeight:700,color:"#fff",marginTop:2}}>Cost Management</div>
+          </div>
+        </div>
+      );
+    }
+
+    function LoginScreen({ note }) {
+      const T = { cardBg:"rgba(255,255,255,0.04)", cardBorder:"rgba(255,255,255,0.06)", inputBg:"rgba(255,255,255,0.06)", inputBorder:"rgba(255,255,255,0.12)", primary:"#2563eb", primaryGlow:"rgba(37,99,235,0.3)", accent:"#7c3aed", textMuted:"#888", textDim:"#666", danger:"#ef4444" };
+      const [email, setEmail] = useState("");
+      const [password, setPassword] = useState("");
+      const [focus, setFocus] = useState(null);
+      const [status, setStatus] = useState(note ? "error" : "idle"); // idle | loading | error | sent
+      const [msg, setMsg] = useState(note || "");
+      const canSubmit = email.trim() !== "" && password !== "" && status !== "loading";
+      const clear = () => { if (status !== "loading") { setStatus("idle"); setMsg(""); } };
+
+      const submit = async (e) => {
+        e.preventDefault();
+        if (!canSubmit) return;
+        setStatus("loading"); setMsg("");
+        const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+        if (error) {
+          setStatus("error");
+          // Supabase returns the same message for wrong password and unknown
+          // address by design; surfacing it verbatim would leak which it was.
+          setMsg(/confirm/i.test(error.message) ? "That address hasn't been confirmed yet — check your inbox." : "That didn't match — give it another try.");
+        }
+        // success: onAuthStateChange in the gate swaps this screen out
+      };
+
+      const google = async () => {
+        setStatus("loading"); setMsg("");
+        const { error } = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: authRedirect() } });
+        if (error) { setStatus("error"); setMsg("Couldn't reach Google just now."); }
+      };
+
+      const reset = async () => {
+        if (!email.trim()) { setStatus("error"); setMsg("Enter your email first, then tap reset."); return; }
+        setStatus("loading"); setMsg("");
+        const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: authRedirect() });
+        if (error) { setStatus("error"); setMsg("Couldn't send that. Try again shortly."); }
+        else { setStatus("sent"); setMsg("Reset link sent — check your inbox."); }
+      };
+
+      const field = (name) => ({ width:"100%",height:46,padding:"0 14px",borderRadius:11,border:"none",outline:"none",background:T.inputBg,color:"#fff",fontSize:16,fontWeight:600,fontFamily:"inherit",boxShadow: focus === name ? `inset 0 0 0 1.5px ${T.primary}, 0 0 0 3px ${T.primaryGlow}` : status === "error" ? `inset 0 0 0 1px ${T.danger}66` : `inset 0 0 0 1px ${T.inputBorder}`,transition:"box-shadow .15s" });
+      const tag = { fontSize:11,fontWeight:600,color:T.textMuted,textTransform:"uppercase",letterSpacing:0.5,display:"block",marginBottom:6 };
+
+      return (
+        <div style={{minHeight:"100dvh",background:"linear-gradient(145deg,#0d0d1a 0%,#1a1a2e 50%,#16213e 100%)",display:"flex",flexDirection:"column"}}>
+        <form onSubmit={submit} style={{flex:1,display:"flex",flexDirection:"column",padding:"24px 22px calc(24px + env(safe-area-inset-bottom))",maxWidth:420,width:"100%",margin:"0 auto",fontFamily:"'Noto Sans JP', system-ui, sans-serif"}}>
+          <style>{`@keyframes cmSpin{to{transform:rotate(360deg)}}@keyframes cmSlideIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}`}</style>
+          <div style={{flex:1.1,minHeight:20}}></div>
+          <div style={{textAlign:"center"}}>
+            <img src="icons/icon-192.png" alt="" width="58" height="58" style={{borderRadius:16,marginBottom:14}}/>
+            <div style={{fontSize:10.5,letterSpacing:2.5,textTransform:"uppercase",color:T.textMuted,fontWeight:700}}>家計簿</div>
+            <h1 style={{fontSize:22,fontWeight:700,color:"#fff",margin:"2px 0 4px"}}>Cost Management</h1>
+            <div style={{fontSize:12,color:T.textDim,fontWeight:600}}>Your spending, in one place</div>
+          </div>
+          <div style={{flex:1,minHeight:28}}></div>
+          <div style={{background:T.cardBg,boxShadow:`inset 0 0 0 1px ${T.cardBorder}`,borderRadius:16,padding:16,display:"flex",flexDirection:"column",gap:12}}>
+            <div>
+              <label style={tag} htmlFor="cm-email">Email</label>
+              <input id="cm-email" type="email" inputMode="email" autoComplete="username" autoCapitalize="none" spellCheck="false" value={email} onChange={(e) => { setEmail(e.target.value); clear(); }} onFocus={() => setFocus("email")} onBlur={() => setFocus(null)} disabled={status === "loading"} style={field("email")}/>
+            </div>
+            <div>
+              <label style={tag} htmlFor="cm-pw">Password</label>
+              <input id="cm-pw" type="password" autoComplete="current-password" value={password} onChange={(e) => { setPassword(e.target.value); clear(); }} onFocus={() => setFocus("password")} onBlur={() => setFocus(null)} disabled={status === "loading"} style={field("password")}/>
+            </div>
+            {msg && (
+              <div style={{display:"flex",alignItems:"center",gap:8,background: status === "sent" ? "rgba(37,99,235,0.12)" : `${T.danger}14`,boxShadow:`inset 0 0 0 1px ${status === "sent" ? T.primary + "55" : T.danger + "55"}`,borderRadius:11,padding:"10px 12px",fontSize:12.5,fontWeight:600,color: status === "sent" ? "#bfdbfe" : "#fca5a5",animation:"cmSlideIn .18s ease-out"}}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}} aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                {msg}
+              </div>
+            )}
+          </div>
+          <button type="submit" disabled={!canSubmit} style={{marginTop:14,width:"100%",height:46,borderRadius:11,border:"none",cursor: canSubmit ? "pointer" : "default",fontSize:14,fontWeight:700,fontFamily:"inherit",color:"#fff",background:`linear-gradient(135deg,${T.primary},${T.accent})`,boxShadow: canSubmit ? `0 4px 18px ${T.primaryGlow}` : "none",opacity: canSubmit || status === "loading" ? 1 : 0.45,display:"flex",alignItems:"center",justifyContent:"center",gap:8,transition:"opacity .15s, box-shadow .15s"}}>
+            {status === "loading" ? (<><span style={{width:15,height:15,borderRadius:"50%",border:"2px solid rgba(255,255,255,0.35)",borderTopColor:"#fff",animation:"cmSpin .7s linear infinite",display:"inline-block"}}></span>Signing in…</>) : "Sign in"}
+          </button>
+          <div style={{display:"flex",alignItems:"center",gap:10,margin:"16px 0 12px"}}>
+            <span style={{flex:1,height:1,background:T.cardBorder}}></span>
+            <span style={{fontSize:10,letterSpacing:1.4,textTransform:"uppercase",color:T.textDim,fontWeight:700}}>or</span>
+            <span style={{flex:1,height:1,background:T.cardBorder}}></span>
+          </div>
+          <button type="button" onClick={google} disabled={status === "loading"} style={{width:"100%",height:46,borderRadius:11,border:"none",cursor:"pointer",fontSize:13.5,fontWeight:700,fontFamily:"inherit",color:"#1f1f1f",background:"#fff",display:"flex",alignItems:"center",justifyContent:"center",gap:10,whiteSpace:"nowrap"}}>
+            <svg width="17" height="17" viewBox="0 0 48 48" aria-hidden="true"><path fill="#4285F4" d="M45.1 24.5c0-1.6-.1-2.8-.4-4H24v7.6h12c-.2 2-1.5 5-4.4 7l6.7 5.2c4-3.7 6.8-9.1 6.8-15.8z"/><path fill="#34A853" d="M24 46c5.9 0 10.9-1.9 14.3-5.3l-6.7-5.2c-1.9 1.3-4.4 2.2-7.6 2.2-5.8 0-10.7-3.8-12.5-9.1l-7 5.4C8 41.3 15.4 46 24 46z"/><path fill="#FBBC05" d="M11.5 28.6c-.5-1.4-.7-2.9-.7-4.6s.3-3.2.7-4.6l-7-5.4C3.3 17 2.5 20.4 2.5 24s.8 7 2.5 10l6.5-5.4z"/><path fill="#EA4335" d="M24 10.2c4.1 0 6.9 1.8 8.5 3.3l6.2-6C34.9 4.1 29.9 2 24 2 15.4 2 8 6.7 4.9 14l7 5.4c1.8-5.3 6.7-9.2 12.1-9.2z"/></svg>
+            Continue with Google
+          </button>
+          <button type="button" onClick={reset} style={{marginTop:12,background:"transparent",border:"none",color:T.textMuted,fontFamily:"inherit",fontSize:11.5,fontWeight:600,cursor:"pointer",padding:6}}>Forgot your password?</button>
+          <div style={{textAlign:"center",fontSize:11.5,color:T.textDim,fontWeight:600,marginTop:2}}>You'll stay signed in for {SESSION_MAX_DAYS} days</div>
+        </form>
+        </div>
+      );
+    }
+
+    function AuthGate() {
+      const [session, setSession] = useState(null);
+      const [ready, setReady] = useState(false);
+      const [authNote, setAuthNote] = useState("");
+
+      useEffect(() => {
+        let alive = true;
+        // If a ?code= survived the load, detectSessionInUrl could not redeem it
+        // (usually a cross-origin start, or a stale/replayed code). Surface it
+        // rather than leaving the user on a silent empty app, and strip the
+        // parameter so a reload does not retry the same dead code forever.
+        const params = new URLSearchParams(window.location.search);
+        const strayCode = params.get("code");
+        const oauthErr = params.get("error_description") || params.get("error");
+        // A session older than SESSION_MAX_DAYS is force-expired locally.
+        // Supabase itself keeps refreshing indefinitely, so without this the
+        // "re-ask after 30 days" choice would never actually happen.
+        const tooOld = () => {
+          const t = Number(localStorage.getItem(SIGNED_IN_AT) || 0);
+          return t > 0 && Date.now() - t > SESSION_MAX_DAYS * 86400000;
+        };
+        supabase.auth.getSession().then(async ({ data }) => {
+          if (!alive) return;
+          if (strayCode && !data.session) {
+            // one explicit attempt, so a same-origin reload still works
+            const { error } = await supabase.auth.exchangeCodeForSession(strayCode);
+            window.history.replaceState({}, "", authRedirect());
+            if (!error) {
+              const { data: d2 } = await supabase.auth.getSession();
+              if (alive && d2.session) { localStorage.setItem(SIGNED_IN_AT, String(Date.now())); setSession(d2.session); setReady(true); return; }
+            }
+            if (alive) { setAuthNote("That sign-in link could not be completed. Start the sign-in from this same address and try again."); setSession(null); setReady(true); return; }
+          }
+          if (strayCode || oauthErr) window.history.replaceState({}, "", authRedirect());
+          if (oauthErr) setAuthNote(String(oauthErr));
+          if (data.session && tooOld()) {
+            await supabase.auth.signOut();
+            localStorage.removeItem(SIGNED_IN_AT);
+            setSession(null);
+          } else {
+            if (data.session && !localStorage.getItem(SIGNED_IN_AT)) localStorage.setItem(SIGNED_IN_AT, String(Date.now()));
+            setSession(data.session || null);
+          }
+          setReady(true);
+        });
+        const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
+          if (!alive) return;
+          if (event === "SIGNED_IN") localStorage.setItem(SIGNED_IN_AT, String(Date.now()));
+          if (event === "SIGNED_OUT") localStorage.removeItem(SIGNED_IN_AT);
+          setSession(s || null);
+          setReady(true);
+        });
+        return () => { alive = false; sub.subscription.unsubscribe(); };
+      }, []);
+
+      const signOut = async () => {
+        // Cached app data and any queued writes are intentionally left in
+        // place — this is a personal device, and wiping a queue would destroy
+        // entries that exist nowhere else.
+        await supabase.auth.signOut();
+        localStorage.removeItem(SIGNED_IN_AT);
+      };
+
+      if (!ready) return <AuthSplash/>;
+      if (!session) return <LoginScreen note={authNote}/>;
+      return <App session={session} onSignOut={signOut}/>;
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<AuthGate />);
   </script>
 </body>
 </html>
