@@ -184,6 +184,7 @@
     const useTheme = () => useContext(ThemeContext);
 
     const MONTHS_SHORT = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const WEEKDAYS_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
     const MONTHS_FULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
     
     const DEFAULT_CATEGORIES = [
@@ -1267,8 +1268,19 @@
     }
 
     function CalendarView({ allExpenses = [], shopFilter = null, setShopFilter = () => {}, catFilter = "All", setCatFilter = () => {}, categories = [] }) {
-      const { theme, fetchData, getCatIcon, getTagIcon, setView, setPresetDate } = useTheme();
-      const { openEdit, requestDelete, modals } = useExpenseMutations({ onChange: fetchData });
+      const { theme, fetchData, getCatIcon, getTagIcon, setView, setPresetDate, currency } = useTheme();
+      const { openEdit, requestDelete, insertExpense, notify, modals } = useExpenseMutations({ onChange: fetchData });
+      // Quick add: with a shop filtered, the day panel only needs an amount.
+      const [quickAmt, setQuickAmt] = useState("");
+      const [quickSaving, setQuickSaving] = useState(false);
+      // Multi-day fill: pick several missing days, type all the amounts in one window.
+      const [multiMode, setMultiMode] = useState(false);
+      const [picked, setPicked] = useState([]);
+      const [batchOpen, setBatchOpen] = useState(false);
+      const [batchAmts, setBatchAmts] = useState({});
+      const [batchBusy, setBatchBusy] = useState(false);
+      const [batchMsg, setBatchMsg] = useState("");
+      const batchRefs = useRef({});
       // ── Shop + category filter (shared with History via App state) ──
       const cat = catFilter && catFilter !== "All" ? catFilter : null;
       const filtering = !!(cat || shopFilter);
@@ -1365,10 +1377,68 @@
       const panelAllCount = panelDate ? allExpenses.filter(e => e.date === panelDate).length : 0;
       const panelExpenses = panelDate ? allExpenses.filter(e => e.date === panelDate && (!filtering || matchesFilter(e))) : [];
       const panelTotal = panelExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+      // Quick-add context: shop + its category are fixed by the filter; suggest the last amount paid there.
+      const quickShop = shopFilter;
+      const quickCat = quickShop ? (cat || (allExpenses.find(e => e.shop === quickShop) || {}).category || null) : null;
+      const lastAmt = useMemo(() => { if (!quickShop) return null; const rows = allExpenses.filter(e => e.shop === quickShop).sort((a, b) => b.date.localeCompare(a.date)); return rows.length ? Number(rows[0].amount) : null; }, [allExpenses, quickShop]);
+      const quickAdd = async (amt) => {
+        const n = Number(amt); if (!(n > 0) || !panelDate || !quickShop || !quickCat || quickSaving) return;
+        setQuickSaving(true);
+        const res = await insertExpense({ region: currency, date: panelDate, category: quickCat, shop: quickShop, amount: n, notes: "", expense_type: "normal", tags: "" });
+        setQuickSaving(false);
+        if (res.ok) setQuickAmt("");
+      };
+      const openPanel = (iso) => { setPanelDate(iso); setQuickAmt(""); };
+      // ── Multi-day fill ──
+      const canMulti = !!(quickShop && quickCat);
+      const toggleDay = (iso) => setPicked(p => p.indexOf(iso) >= 0 ? p.filter(d => d !== iso) : [...p, iso]);
+      const pickedSorted = useMemo(() => [...picked].sort(), [picked]);
+      const pickedOffMonth = picked.filter(d => d.slice(0,7) !== `${viewDate.year}-${String(viewDate.month+1).padStart(2,"0")}`).length;
+      const exitMulti = () => { setMultiMode(false); setPicked([]); setBatchOpen(false); setBatchAmts({}); setBatchMsg(""); };
+      // Changing or clearing the shop mid-pick would write the old picks against a new shop — drop them.
+      useEffect(() => { if (multiMode) exitMulti(); }, [shopFilter]);
+      const pickEmptyThisMonth = () => { const out = []; for (let d = 1; d <= daysInMonth; d++) { const iso = isoOf(d); if (!matchedByDate[iso]) out.push(iso); } setPicked(out); };
+      const batchTotal = pickedSorted.reduce((s, d) => s + (Number(batchAmts[d]) || 0), 0);
+      const batchCount = pickedSorted.filter(d => Number(batchAmts[d]) > 0).length;
+      const fillAll = (v) => { const next = {}; pickedSorted.forEach(d => { next[d] = String(v); }); setBatchAmts(next); };
+      const focusNext = (iso) => { const i = pickedSorted.indexOf(iso); const nx = pickedSorted[i + 1]; if (nx && batchRefs.current[nx]) batchRefs.current[nx].focus(); };
+      const saveBatch = async () => {
+        if (!batchCount || batchBusy) return;
+        setBatchBusy(true); setBatchMsg("");
+        let ok = 0; const failed = []; let lastErr = "";
+        for (const d of pickedSorted) {
+          const n = Number(batchAmts[d]); if (!(n > 0)) continue;
+          const res = await insertExpense({ region: currency, date: d, category: quickCat, shop: quickShop, amount: n, notes: "", expense_type: "normal", tags: "" }, { quiet: true });
+          if (res && res.ok) ok++; else { failed.push(d); lastErr = (res && res.error) || ""; }
+        }
+        setBatchBusy(false);
+        if (ok) fetchData();
+        if (!failed.length) { notify("success", ok + " " + (ok === 1 ? "entry" : "entries") + " added to " + quickShop); exitMulti(); }
+        else { setBatchAmts(a => { const keep = {}; failed.forEach(d => { keep[d] = a[d]; }); return keep; }); setPicked(failed); setBatchMsg(ok + " saved · " + failed.length + " didn't save, still listed — try again." + (lastErr ? " (" + lastErr + ")" : "")); }
+      };
 
       return (
         <div>
           <div style={{background:theme.cardBg,borderRadius:12,padding:16,border:`1px solid ${theme.cardBorder}`}}>
+            {/* Add missing entries — first thing in the card, above the month nav */}
+            {canMulti && !multiMode && (
+              <button onClick={() => { setMultiMode(true); setPicked([]); }} style={{width:"100%",marginBottom:12,padding:"12px",borderRadius:11,border:"1px solid rgba(34,197,94,0.4)",background:"rgba(34,197,94,0.1)",color:"#22c55e",cursor:"pointer",fontWeight:700,fontSize:13.5,fontFamily:"inherit",textAlign:"left"}}>
+                + Add missing entries
+                <span style={{display:"block",fontWeight:500,fontSize:10.5,color:theme.textMuted,marginTop:2}}>Pick the days you visited {quickShop}, then type the amounts</span>
+              </button>
+            )}
+            {multiMode && (
+              <div style={{marginBottom:12,background:"rgba(34,197,94,0.1)",border:"1px solid rgba(34,197,94,0.35)",borderRadius:11,padding:"11px 12px"}}>
+                <div style={{fontSize:13.5,fontWeight:700,color:"#22c55e",marginBottom:2}}>Add missing entries</div>
+                <div style={{fontSize:11.5,color:"#fff",fontWeight:600,marginBottom:9}}>Tap the days you visited {quickShop} — {picked.length} selected{pickedOffMonth ? <span style={{color:theme.textMuted,fontWeight:500}}> ({pickedOffMonth} in other months)</span> : null}</div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                  <button onClick={pickEmptyThisMonth} style={{...fpill(false),fontSize:11}}>All empty days this month</button>
+                  {picked.length > 0 && <button onClick={() => setPicked([])} style={{...fpill(false),fontSize:11,color:theme.textDim}}>Clear</button>}
+                  <button onClick={exitMulti} style={{...fpill(false),fontSize:11,color:theme.textDim}}>Cancel</button>
+                  <button onClick={() => { setBatchMsg(""); setBatchOpen(true); }} disabled={!picked.length} style={{marginLeft:"auto",padding:"8px 14px",borderRadius:9,border:"none",background:"#22c55e",color:"#06210f",fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"inherit",opacity:picked.length?1:0.4}}>Enter amounts →</button>
+                </div>
+              </div>
+            )}
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
               <button onClick={() => setViewDate(v => v.month===0?{year:v.year-1,month:11}:{...v,month:v.month-1})} style={{background:theme.inputBg,border:"none",borderRadius:6,width:30,height:30,cursor:"pointer",color:theme.textMuted,display:"inline-flex",alignItems:"center",justifyContent:"center"}}><Icon name="chevronLeft" size={16}/></button>
               <div style={{fontSize:14,fontWeight:600,color:"#fff"}}>{MONTHS_FULL[viewDate.month]} {viewDate.year}</div>
@@ -1397,6 +1467,8 @@
                 <div style={{fontSize:14,fontWeight:700,color:theme.primary,whiteSpace:"nowrap"}}>{fmt(matchedTotal)}</div>
               </div>
             )}
+            {/* Multi-day fill — kept above the grid so it is reachable without scrolling */}
+
             {/* Legend */}
             {!filtering && <div style={{display:"flex",gap:12,justifyContent:"center",marginBottom:10,fontSize:10,color:theme.textDim}}>
               <span><span style={{color:"#22c55e"}}>●</span> Normal</span>
@@ -1416,12 +1488,13 @@
                 const dayOpen = dayTasks.filter(t => !t.done).length;
                 const hit = filtering ? matchedByDate[isoOf(day)] : null;
                 const faded = filtering && !hit;
+                const on = multiMode && picked.indexOf(isoOf(day)) >= 0;
                 return (
-                  <button key={day} onClick={() => setPanelDate(isoOf(day))} style={{
-                    aspectRatio:"1",borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:hit?700:400,
-                    border:"1px solid "+(hit?"rgba(96,165,250,0.45)":"transparent"),
-                    background:hit?"rgba(96,165,250,0.16)":tod?theme.inputBg:"transparent",
-                    color:tod?theme.primary:faded?theme.textDim:theme.text,opacity:faded?0.35:1,transition:"opacity .18s,background .18s",
+                  <button key={day} onClick={() => multiMode ? toggleDay(isoOf(day)) : openPanel(isoOf(day))} style={{
+                    aspectRatio:"1",borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:(hit||on)?700:400,
+                    border:on?"2px solid #22c55e":"1px solid "+(hit?"rgba(96,165,250,0.45)":"transparent"),
+                    background:on?"rgba(34,197,94,0.2)":hit?"rgba(96,165,250,0.16)":tod?theme.inputBg:"transparent",
+                    color:on?"#fff":tod?theme.primary:faded?theme.textDim:theme.text,opacity:(faded&&!on)?(multiMode?0.6:0.35):1,transition:"opacity .18s,background .18s",
                     position:"relative",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
                   }}>
                     <span>{day}</span>
@@ -1440,7 +1513,7 @@
                 );
               })}
             </div>
-            {filtering && <div style={{fontSize:10.5,color:theme.textDim,textAlign:"center",marginTop:10}}>Dimmed days have entries, just none matching this filter.</div>}
+            {filtering && !multiMode && <div style={{fontSize:10.5,color:theme.textDim,textAlign:"center",marginTop:10}}>Dimmed days have entries, just none matching this filter.</div>}
             {filtering && (
               <button onClick={() => setAuditOpen(o => !o)} style={{marginTop:10,width:"100%",padding:"10px",borderRadius:10,border:`1px solid ${theme.cardBorder}`,background:theme.inputBg,color:"#fff",cursor:"pointer",fontWeight:600,fontSize:12.5,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
                 {auditOpen ? "Hide entries" : "Check entries"}
@@ -1459,7 +1532,7 @@
                   const inMonth = d.date.slice(0,7) === `${viewDate.year}-${String(viewDate.month+1).padStart(2,"0")}`;
                   return (
                     <React.Fragment key={d.date}>
-                      <button onClick={() => { const [y,m] = d.date.split("-").map(Number); setViewDate({year:y,month:m-1}); setPanelDate(d.date); }} style={{display:"flex",alignItems:"center",gap:11,background:theme.cardBg,border:`1px solid ${d.dupe?"rgba(245,158,11,0.45)":inMonth?"rgba(96,165,250,0.3)":theme.cardBorder}`,borderRadius:11,padding:"9px 12px",cursor:"pointer",textAlign:"left",fontFamily:"inherit",width:"100%"}}>
+                      <button onClick={() => { const [y,m] = d.date.split("-").map(Number); setViewDate({year:y,month:m-1}); openPanel(d.date); }} style={{display:"flex",alignItems:"center",gap:11,background:theme.cardBg,border:`1px solid ${d.dupe?"rgba(245,158,11,0.45)":inMonth?"rgba(96,165,250,0.3)":theme.cardBorder}`,borderRadius:11,padding:"9px 12px",cursor:"pointer",textAlign:"left",fontFamily:"inherit",width:"100%"}}>
                         <span style={{textAlign:"center",minWidth:34}}>
                           <span style={{display:"block",fontSize:14,fontWeight:700,color:"#fff",lineHeight:1.1}}>{Number(d.date.slice(8))}</span>
                           <span style={{display:"block",fontSize:9,color:theme.textDim}}>{MONTHS_SHORT[Number(d.date.slice(5,7))]} {d.date.slice(0,4)}</span>
@@ -1505,6 +1578,42 @@
                   {shopCounts.map(s => <button key={s.name} onClick={() => pickShopF(s.name)} style={{display:"flex",alignItems:"center",gap:10,background:theme.inputBg,border:"none",borderRadius:10,padding:"11px 12px",cursor:"pointer",fontSize:13,fontWeight:600,fontFamily:"inherit",color:shopFilter===s.name?theme.primary:theme.text}}><span style={{fontSize:15}}>{getCatIcon(s.cat)}</span><span style={{flex:1,textAlign:"left",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.name}</span><span style={{fontSize:11,color:theme.textDim}}>{s.n}</span></button>)}
                 </>}
                 {pickSheet==="search" && (searchQ.trim() ? (searchHits.length ? searchHits.map(h => <button key={h.kind+h.value} onClick={() => h.kind==="shop" ? pickShopF(h.value) : pickCatF(h.value)} style={{display:"flex",alignItems:"center",gap:10,background:theme.inputBg,border:"none",borderRadius:10,padding:"11px 12px",cursor:"pointer",fontSize:13,fontWeight:600,fontFamily:"inherit",color:theme.text}}><span style={{fontSize:15}}>{h.icon}</span><span style={{flex:1,textAlign:"left",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{h.value}</span><span style={{fontSize:9.5,color:theme.textDim,textTransform:"uppercase",letterSpacing:0.5}}>{h.kind==="shop"?"shop":"category"}</span><span style={{fontSize:11,color:theme.textMuted,minWidth:18,textAlign:"right"}}>{h.n}</span></button>) : <div style={{fontSize:12,color:theme.textDim,padding:"8px 2px"}}>Nothing matches “{searchQ}”.</div>) : <div style={{fontSize:12,color:theme.textDim,padding:"8px 2px"}}>Type part of a shop or category name.</div>)}
+              </div>
+            </Modal>
+          )}
+          {/* Batch amount window: one row per picked day, shop + category fixed by the filter */}
+          {batchOpen && (
+            <Modal sheet onClose={() => !batchBusy && setBatchOpen(false)}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                <div>
+                  <div style={{fontSize:15,fontWeight:700,color:"#fff"}}>{getCatIcon(quickCat)} {quickShop}</div>
+                  <div style={{fontSize:11,color:theme.textMuted}}>{pickedSorted.length} days · {quickCat}</div>
+                </div>
+                <button onClick={() => !batchBusy && setBatchOpen(false)} style={{background:theme.inputBg,border:"none",borderRadius:8,width:30,height:30,cursor:"pointer",color:theme.textMuted,fontSize:16,lineHeight:1}}>×</button>
+              </div>
+              {lastAmt != null && <button onClick={() => fillAll(lastAmt)} style={{...fpill(false),fontSize:11,marginBottom:8}}>Fill every day with {fmt(lastAmt)}</button>}
+              <div style={{display:"flex",flexDirection:"column",gap:5,paddingRight:2}}>
+                {pickedSorted.map(d => {
+                  const dupe = (matchedByDate[d] || {}).n || 0;
+                  return (
+                    <div key={d} style={{display:"flex",alignItems:"center",gap:9,background:theme.inputBg,borderRadius:10,padding:"7px 10px",border:`1px solid ${dupe?"rgba(245,158,11,0.4)":"transparent"}`}}>
+                      <span style={{minWidth:52}}>
+                        <span style={{display:"block",fontSize:13,fontWeight:700,color:"#fff",lineHeight:1.1}}>{Number(d.slice(8))} {MONTHS_SHORT[Number(d.slice(5,7))]}</span>
+                        <span style={{display:"block",fontSize:9,color:dupe?"#f59e0b":theme.textDim}}>{dupe ? "already " + dupe : WEEKDAYS_SHORT[dateOfIso(d).getDay()]}</span>
+                      </span>
+                      <input ref={el => { batchRefs.current[d] = el; }} type="number" inputMode="decimal" min="0" autoFocus={d === pickedSorted[0]} value={batchAmts[d] || ""} onChange={e => setBatchAmts(a => ({ ...a, [d]: e.target.value }))} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); focusNext(d); } }} placeholder={lastAmt != null ? fmt(lastAmt) : "Amount"} style={{flex:1,minWidth:0,background:theme.cardBg,border:`1px solid ${theme.inputBorder}`,borderRadius:9,padding:"9px 11px",fontSize:15,fontWeight:600,color:theme.text,outline:"none",fontFamily:"inherit"}}/>
+                      <button onClick={() => { setPicked(p => p.filter(x => x !== d)); setBatchAmts(a => { const n = { ...a }; delete n[d]; return n; }); }} title="Drop this day" style={{background:"transparent",border:"none",color:theme.textDim,fontSize:16,cursor:"pointer",lineHeight:1,padding:"0 2px"}}>×</button>
+                    </div>
+                  );
+                })}
+              </div>
+              {batchMsg && <div style={{fontSize:11,color:"#f59e0b",marginTop:8}}>{batchMsg}</div>}
+              <div style={{display:"flex",alignItems:"center",gap:10,marginTop:12,position:"sticky",bottom:-16,background:"#1a1a2e",padding:"10px 0 4px",borderTop:`1px solid ${theme.cardBorder}`}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:16,fontWeight:700,color:"#fff"}}>{fmt(batchTotal)}</div>
+                  <div style={{fontSize:10.5,color:theme.textDim}}>{batchCount} of {pickedSorted.length} days filled{pickedSorted.length - batchCount > 0 ? " · blanks are skipped" : ""}</div>
+                </div>
+                <button onClick={saveBatch} disabled={batchBusy || !batchCount} style={{padding:"12px 18px",borderRadius:11,border:"none",background:"#22c55e",color:"#06210f",fontWeight:700,fontSize:13.5,cursor:"pointer",fontFamily:"inherit",opacity:(batchBusy||!batchCount)?0.45:1}}>{batchBusy ? "Saving…" : "Save " + batchCount + " " + (batchCount === 1 ? "entry" : "entries")}</button>
               </div>
             </Modal>
           )}
@@ -1561,10 +1670,22 @@
                   ))}
                 </div>
               )}
-              {/* Jump to the Add tab pre-dated to this day, for same-day stacking */}
+              {/* Quick add: shop + category come from the filter, so only the amount is typed here */}
+              {quickShop && quickCat && (
+                <div style={{marginTop:12,background:"rgba(96,165,250,0.09)",border:"1px solid rgba(96,165,250,0.25)",borderRadius:11,padding:"10px 12px"}}>
+                  <div style={{fontSize:10,fontWeight:700,letterSpacing:0.5,textTransform:"uppercase",color:theme.textDim,marginBottom:6}}>Add {getCatIcon(quickCat)} {quickShop} on {Number(panelDate.slice(8))} {MONTHS_SHORT[Number(panelDate.slice(5,7))]}</div>
+                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                    <input type="number" inputMode="decimal" min="0" autoFocus={panelExpenses.length===0} value={quickAmt} onChange={e => setQuickAmt(e.target.value)} onKeyDown={e => { if (e.key==="Enter") quickAdd(quickAmt); }} placeholder={lastAmt != null ? fmt(lastAmt) : "Amount"} style={{flex:1,minWidth:0,background:theme.inputBg,border:`1px solid ${theme.inputBorder}`,borderRadius:10,padding:"10px 12px",fontSize:15,fontWeight:600,color:theme.text,outline:"none",fontFamily:"inherit"}}/>
+                    {lastAmt != null && <button onClick={() => quickAdd(lastAmt)} disabled={quickSaving} title="Same as last time" style={{...fpill(false),padding:"9px 11px",whiteSpace:"nowrap",opacity:quickSaving?0.5:1}}>= {fmt(lastAmt)}</button>}
+                    <button onClick={() => quickAdd(quickAmt)} disabled={quickSaving || !(Number(quickAmt) > 0)} style={{padding:"9px 14px",borderRadius:10,border:"none",background:theme.primary,color:"#fff",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit",opacity:(quickSaving || !(Number(quickAmt) > 0))?0.45:1}}>{quickSaving ? "…" : "Save"}</button>
+                  </div>
+                  {panelExpenses.length > 0 && <div style={{fontSize:10.5,color:"#f59e0b",marginTop:6}}>Already {panelExpenses.length} {quickShop} {panelExpenses.length===1?"entry":"entries"} this day — saving adds another.</div>}
+                </div>
+              )}
+              {/* Full Add tab pre-dated to this day, for anything the quick box can't do */}
               <button onClick={() => { setPresetDate(panelDate); setView("add"); setPanelDate(null); }}
-                style={{marginTop:12,width:"100%",padding:"10px",borderRadius:10,border:`1px dashed ${theme.cardBorder}`,background:theme.inputBg,color:theme.primary,cursor:"pointer",fontWeight:600,fontSize:12}}>
-                + Add entry
+                style={{marginTop:quickShop?8:12,width:"100%",padding:"10px",borderRadius:10,border:`1px dashed ${theme.cardBorder}`,background:quickShop?"transparent":theme.inputBg,color:quickShop?theme.textMuted:theme.primary,cursor:"pointer",fontWeight:600,fontSize:12,fontFamily:"inherit"}}>
+                {quickShop ? "Open full Add form instead" : "+ Add entry"}
               </button>
             </Modal>
           )}
@@ -2663,12 +2784,13 @@
       // Canonical INSERT path for one-off entries (Fare Calc, Shop Capture) —
       // funnels every new-feature insert through this hook so there is exactly
       // one write path outside the recurring engine's dueAdd.
-      const insertExpense = async (record) => {
+      const insertExpense = async (record, opts = {}) => {
         const { error } = await supabase.from("cost_management_expenses").insert(record);
-        if (error) { setToast({ type: "error", msg: error.message }); setTimeout(() => setToast(null), 3000); return { ok: false }; }
-        setToast({ type: "success", msg: "Added" }); setTimeout(() => setToast(null), 3000); onChange();
+        if (error) { if (!opts.quiet) { setToast({ type: "error", msg: error.message }); setTimeout(() => setToast(null), 3000); } return { ok: false, error: error.message }; }
+        if (!opts.quiet) { setToast({ type: "success", msg: "Added" }); setTimeout(() => setToast(null), 3000); onChange(); }
         return { ok: true };
       };
+      const notify = (type, msg) => { setToast({ type, msg }); setTimeout(() => setToast(null), 3000); };
 
       const handleUpdate = async () => {
         const { error } = await supabase.from("cost_management_expenses")
@@ -2742,7 +2864,7 @@
         </>
       );
 
-      return { openEdit, requestDelete, insertExpense, modals };
+      return { openEdit, requestDelete, insertExpense, notify, modals };
     }
 
     // ═══════════════════════════════════════════
