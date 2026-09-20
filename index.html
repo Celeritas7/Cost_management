@@ -2574,6 +2574,7 @@
       const [err, setErr] = useState("");
       const [pos, setPos] = useState(null);
       const [posMsg, setPosMsg] = useState("");
+      const [locating, setLocating] = useState(false);
       const [scopeCat, setScopeCat] = useState("");     // "" = all categories
       const [picker, setPicker] = useState(null);       // area being filled
       const [picked, setPicked] = useState([]);
@@ -2582,8 +2583,11 @@
       const [draft, setDraft] = useState({ name: "", lat: "", lng: "" });
       const [busy, setBusy] = useState(false);
       const [toast, setToast] = useState("");
-      const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 2600); };
+      const flash = (m, ms = 2600) => { setToast(m); setTimeout(() => setToast(""), ms); };
 
+      // PostgREST reports a missing table two ways: "does not exist" (SQL) and
+      // "Could not find the table ... in the schema cache" (PGRST205). Match both.
+      const isMissingTable = (m = "") => m.includes("does not exist") || m.includes("schema cache");
       const load = useCallback(async () => {
         setLoading(true);
         const [aRes, lRes, pRes] = await Promise.all([
@@ -2591,22 +2595,26 @@
           supabase.from("cost_management_shop_locations").select("*"),
           supabase.from("cost_management_area_points").select("*"),
         ]);
-        if (aRes.error) setErr(aRes.error.message.includes("does not exist") ? "Run migration 009_areas.sql in Supabase first." : aRes.error.message);
+        if (aRes.error) setErr(isMissingTable(aRes.error.message) ? "Run migration 009_areas.sql in Supabase first." : aRes.error.message);
         else { setErr(""); setAreas(aRes.data || []); setLinks(lRes.data || []); }
-        if (pRes.error) { setPoints([]); setPtsErr(pRes.error.message.includes("does not exist") ? "Run migration 010_area_points.sql to give areas more than one spot." : pRes.error.message); }
+        if (pRes.error) { setPoints([]); setPtsErr(isMissingTable(pRes.error.message) ? "Run migration 010_area_points.sql to give areas more than one spot." : pRes.error.message); }
         else { setPoints(pRes.data || []); setPtsErr(""); }
         setLoading(false);
       }, [supabase]);
       useEffect(() => { load(); }, [load]);
-      // One fix when the panel opens — this screen is rare, so it costs little.
+      // Re-read on every modal open, with maximumAge 0 so this matches what capture() will store —
+      // a cached fix here would preview a different position than the one Add spot writes.
+      // Keyed on the area id, not the `editing` object: the name/region inputs replace that object
+      // on every keystroke, which would refire high-accuracy GPS per character.
       useEffect(() => {
-        if (!("geolocation" in navigator)) { setPosMsg("No GPS here — type coordinates instead."); return; }
+        if (!("geolocation" in navigator)) { setPosMsg("No GPS here — type coordinates instead."); setLocating(false); return; }
+        setPosMsg(""); setLocating(true);
         navigator.geolocation.getCurrentPosition(
-          (p) => setPos({ lat: p.coords.latitude, lng: p.coords.longitude }),
-          () => setPosMsg("Location unavailable — type coordinates instead."),
-          { enableHighAccuracy: true, timeout: 8000, maximumAge: 300000 }
+          (p) => { setPos({ lat: p.coords.latitude, lng: p.coords.longitude }); setPosMsg(""); setLocating(false); },
+          () => { setPosMsg("Location unavailable — type coordinates instead."); setLocating(false); },
+          { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
         );
-      }, []);
+      }, [editing && editing.id]);
 
       const usage = useMemo(() => { const m = {}; allExpenses.forEach(e => { m[e.shop] = (m[e.shop] || 0) + 1; }); return m; }, [allExpenses]);
       const sid = (s) => String(s.id);
@@ -2620,7 +2628,7 @@
       const pendingOf = (areaId) => points.filter(p => p.area_id === areaId && p.confirmed === false);
       // Report the review backlog upward so Settings can badge it without a second query.
       // Gated on `loading` so the initial empty `points` can't zero the shared count on mount.
-      useEffect(() => { if (onPending && !loading) { const ids = new Set(visible.map(a => a.id)); onPending(points.filter(p => p.confirmed === false && ids.has(p.area_id)).length); } }, [points, loading, visible]);
+      useEffect(() => { if (onPending && !loading) { const ids = new Set(areas.filter(a => !a.region || a.region === currency).map(a => a.id)); onPending(points.filter(p => p.confirmed === false && ids.has(p.area_id)).length); } }, [points, loading, areas, currency]);
       const untagged = useMemo(() => scopedShops.filter(s => !linkedIds.has(sid(s)))
         .sort((a, b) => (usage[b.name] || 0) - (usage[a.name] || 0)), [scopedShops, linkedIds, usage]);
       // Category groups inside the picker, most-used category first.
@@ -2707,13 +2715,18 @@
       const addSpotHere = async () => {
         if (busy || !editing) return;
         setBusy(true);
-        const m = spotCoord.trim().match(/^(-?\d+(\.\d+)?)\s*,\s*(-?\d+(\.\d+)?)$/);
+        const raw = spotCoord.trim();
+        const m = raw.match(/^(-?\d+(\.\d+)?)\s*,\s*(-?\d+(\.\d+)?)$/);
+        // Typed-but-unparseable must not fall through to GPS — that would file a spot at the
+        // current position and report success for coordinates the user never asked for.
+        if (raw && !m) { setBusy(false); flash("Couldn't read those coordinates — use the format 35.84201, 139.66957", 4000); return; }
         const p = m ? { lat: Number(m[1]), lng: Number(m[3]) } : await capture();
         if (!p) { setBusy(false); flash("Couldn't read your location — type lat, lng instead"); return; }
+        if (!m) setPos(p); // reconcile the preview/distance to the fix actually stored
         const { error } = await supabase.from("cost_management_area_points").insert({ area_id: editing.id, lat: p.lat, lng: p.lng, radius_m: spotRadius, label: spotLabel.trim() || null, source: "manual", confirmed: true });
         setBusy(false);
-        if (error) { flash(error.message.includes("does not exist") ? "Run migration 010_area_points.sql first." : error.message); return; }
-        setSpotLabel(""); setSpotCoord(""); flash("Spot added"); load();
+        if (error) { flash(isMissingTable(error.message) ? "Run migration 010_area_points.sql first." : error.message); return; }
+        setSpotLabel(""); setSpotCoord(""); flash(`Spot added at ${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}`, 4000); load();
       };
       const patchSpot = async (p, patch) => {
         const q = patch === null ? supabase.from("cost_management_area_points").delete().eq("id", p.id) : supabase.from("cost_management_area_points").update(patch).eq("id", p.id);
@@ -2736,7 +2749,7 @@
 
       return (
         <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 14, padding: 16 }}>
-          {toast && <div style={{ background: theme.inputBg, borderRadius: 9, padding: "8px 11px", fontSize: 11.5, color: theme.text, marginBottom: 10 }}>{toast}</div>}
+          {toast && <div style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 1200, maxWidth: "90vw", background: theme.primary, color: "#fff", borderRadius: 9, padding: "10px 16px", fontSize: 12, fontWeight: 600, boxShadow: "0 8px 24px rgba(0,0,0,.45)" }}>{toast}</div>}
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 4 }}>
             <div style={{ display: "flex", gap: 3, padding: 3, background: theme.inputBg, borderRadius: 9, border: `1px solid ${theme.cardBorder}` }}>
               <button onClick={() => setScopeCat("")} style={{ padding: "4px 11px", fontSize: 11, fontWeight: 600, borderRadius: 7, border: "none", cursor: "pointer", fontFamily: "inherit", background: scopeCat ? "transparent" : theme.primary, color: scopeCat ? theme.textMuted : "#fff" }}>All categories</button>
@@ -2855,21 +2868,34 @@
                 </select>
               </div>
               <div style={{ fontSize: 10, letterSpacing: 0.8, textTransform: "uppercase", color: theme.textDim, fontWeight: 700, margin: "4px 0 4px" }}>Spots · you're in {editing.name} inside any of these</div>
-              <div style={{ maxHeight: "28vh", overflowY: "auto", marginBottom: 8 }}>
+              {(() => {
+                // Implausible-gap check, once per area rather than once per row: the widest pair says it
+                // all, and printing it on both members is what made this read as two problems.
+                const sp = spotsOf(editing.id);
+                let worst = null;
+                for (let i = 0; i < sp.length; i++) for (let j = i + 1; j < sp.length; j++) { const d = distanceMeters(sp[i], sp[j]); if (isFinite(d) && (worst == null || d > worst.d)) worst = { d, a: sp[i], b: sp[j] }; }
+                if (!worst || worst.d <= 3000) return null;
+                return <div style={{ fontSize: 10.5, color: theme.warning, background: theme.warning + "14", border: `1px solid ${theme.warning}33`, borderRadius: 8, padding: "6px 9px", marginBottom: 6, lineHeight: 1.45 }}>{worst.a.label || "Unlabelled"} and {worst.b.label || "Unlabelled"} are {fmtDist(worst.d)} apart — check for a mistyped digit.</div>;
+              })()}
+              <div style={{ maxHeight: "28vh", overflowY: "auto", padding: "0 8px", margin: "0 -8px 8px" }}>
                 {spotsOf(editing.id).length === 0 && <div style={{ fontSize: 11.5, color: theme.textDim, padding: "6px 0" }}>{editing.lat != null ? "Using the area's original pin. Add a spot to replace it." : "No spots yet — add one from where you stand."}</div>}
-                {spotsOf(editing.id).map(p => (
-                  <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 0", borderBottom: `1px solid ${theme.cardBorder}` }}>
+                {spotsOf(editing.id).map(p => {
+                  const dHere = pos ? distanceMeters(pos, p) : null;
+                  const inside = dHere != null && isFinite(dHere) && dHere <= (p.radius_m || 200);
+                  return (
+                  <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 8px", margin: "0 -8px", borderRadius: inside ? 9 : 0, background: inside ? theme.success + "1a" : "transparent", borderBottom: `1px solid ${theme.cardBorder}` }}>
                     <Pin/>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 12.5, color: theme.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.label || `${Number(p.lat).toFixed(4)}, ${Number(p.lng).toFixed(4)}`}</div>
-                      <div style={{ fontSize: 10.5, color: theme.textDim }}>{pos ? `${fmtDist(distanceMeters(pos, p))} away` : `${Number(p.lat).toFixed(4)}, ${Number(p.lng).toFixed(4)}`}{p.source === "auto" ? " · learned" : ""}</div>
+                      <div style={{ fontSize: 12.5, color: inside ? theme.success : theme.text, fontWeight: inside ? 700 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.label || "Unlabelled spot"}{inside ? " · you're here" : ""}</div>
+                      <div style={{ fontSize: 10.5, color: theme.textDim }}>{Number(p.lat).toFixed(5)}, {Number(p.lng).toFixed(5)}{dHere != null && isFinite(dHere) && !inside ? ` · ${fmtDist(dHere)} away` : ""}{p.source === "auto" ? " · learned" : ""}</div>
                     </div>
                     <select value={p.radius_m} onChange={e => patchSpot(p, { radius_m: Number(e.target.value) })} style={{ ...S.field, width: "auto", padding: "4px 6px", fontSize: 11, cursor: "pointer" }}>
                       {[100, 150, 200, 300, 500, 800].concat([100, 150, 200, 300, 500, 800].includes(p.radius_m) ? [] : [p.radius_m]).sort((x, y) => x - y).map(r => <option key={r} value={r}>{r}m</option>)}
                     </select>
                     <button onClick={() => patchSpot(p, null)} title="Remove spot" style={{ background: "none", border: "none", color: theme.textDim, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "0 2px", fontFamily: "inherit" }}>×</button>
                   </div>
-                ))}
+                  );
+                })}
               </div>
               <div style={{ background: theme.inputBg, borderRadius: 10, padding: 8, marginBottom: 10 }}>
                 <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
@@ -2879,9 +2905,10 @@
                   </select>
                 </div>
                 <div style={{ display: "flex", gap: 6 }}>
-                  <input value={spotCoord} onChange={e => setSpotCoord(e.target.value)} placeholder="lat, lng (blank = where I stand)" inputMode="decimal" style={{ ...S.field, flex: 1, minWidth: 0 }}/>
+                  <input value={spotCoord} onChange={e => setSpotCoord(e.target.value)} placeholder={pos ? `blank = here (${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)})` : "lat, lng (blank = where I stand)"} inputMode="decimal" style={{ ...S.field, flex: 1, minWidth: 0 }}/>
                   <button onClick={addSpotHere} disabled={busy} style={{ ...S.cta, whiteSpace: "nowrap", opacity: busy ? 0.45 : 1 }}>◎ Add spot</button>
                 </div>
+                <div style={{ fontSize: 10.5, color: posMsg && !locating ? theme.warning : theme.textDim, marginTop: 5 }}>{locating ? "Locating…" : pos ? `Here: ${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)} — leave the box blank to use it` : posMsg || "No fix yet — press Add spot to retry, or type lat, lng"}</div>
               </div>
               <select onChange={e => { if (e.target.value) mergeInto(e.target.value); }} defaultValue="" style={{ ...S.field, marginBottom: 10, cursor: "pointer" }}>
                 <option value="">Merge into another area…</option>
