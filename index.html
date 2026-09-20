@@ -655,6 +655,24 @@
       const regionPending = useMemo(() => pending.filter((p) => { const r = recurring.find((x) => x.id === p.rule_id); return r ? regionOf(r) === currency : true; }), [pending, recurring, currency]);
       const regionTriggers = useMemo(() => locTriggers.filter((t) => regionOf(t) === currency), [locTriggers, currency]);
 
+      // ── Learned spots awaiting review: one count, owned here, badged on the Settings pill and
+      // the Areas chip. ShopAreasPanel writes back to it so Keep/Drop updates both at once.
+      const [pendingSpots, setPendingSpots] = useState(0);
+      useEffect(() => {
+        let dead = false;
+        (async () => {
+          const [p, a] = await Promise.all([
+            supabase.from("cost_management_area_points").select("id,area_id").eq("confirmed", false),
+            supabase.from("cost_management_areas").select("id,region"),
+          ]);
+          if (dead || p.error || a.error) return;
+          // Region-scoped to match what the Areas panel shows — a spot learned in another profile shouldn't badge this one.
+          const here = new Set((a.data || []).filter((x) => !x.region || x.region === currency).map((x) => x.id));
+          setPendingSpots((p.data || []).filter((x) => here.has(x.area_id)).length);
+        })();
+        return () => { dead = true; };
+      }, [view, currency]);
+
       const changeTheme = (t) => { setThemeName(t); setStoredTheme(t); setShowThemePicker(false); };
 
       // Supabase caps every SELECT at 1000 rows. Ordered by date ASC, that cap silently
@@ -976,7 +994,7 @@
               <div style={{display:"flex",alignItems:"center",gap:10}}><img src="icons/icon.svg" alt="" width="30" height="30" style={{borderRadius:8,display:"block"}}/><h1 style={{fontSize:18,fontWeight:700,color:"#fff",margin:0}}>Cost Management</h1></div>
               <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>
                 {(isMobile ? navTabs.filter(t => t.id === "settings") : navTabs).map(tab => (
-                  <button key={tab.id} onClick={() => { setView(tab.id); setTxPage(0); }} style={{...pillStyle(view===tab.id || (tab.id==="transactions" && view==="calendar")),padding:"5px 11px",fontSize:11,display:"inline-flex",alignItems:"center",gap:6}}><Icon name={tab.icon} size={15}/>{isMobile && tab.id==="settings" ? "" : tab.label}</button>
+                  <button key={tab.id} onClick={() => { setView(tab.id); setTxPage(0); }} style={{...pillStyle(view===tab.id || (tab.id==="transactions" && view==="calendar")),padding:"5px 11px",fontSize:11,display:"inline-flex",alignItems:"center",gap:6}}><Icon name={tab.icon} size={15}/>{isMobile && tab.id==="settings" ? "" : tab.label}{tab.id==="settings" && pendingSpots>0 && <span title={`${pendingSpots} learned ${pendingSpots===1?"spot":"spots"} to review`} style={{background:"#f59e0b",color:"#1a1000",fontSize:9,fontWeight:800,borderRadius:9,padding:"1px 5px",lineHeight:1.6}}>{pendingSpots}</span>}</button>
                 ))}
                 {!isMobile && regionPending.length>0 && (
                   <button onClick={() => setView("outstanding")} title="Outstanding payments" style={{...pillStyle(view==="outstanding"),padding:"5px 9px",fontSize:11,display:"inline-flex",alignItems:"center",gap:5}}><Icon name="inbox" size={15}/><span style={{background:theme.danger,color:"#fff",fontSize:9,fontWeight:700,borderRadius:9,padding:"1px 5px",lineHeight:1.6}}>{regionPending.length}</span></button>
@@ -1060,7 +1078,7 @@
               ) : view === "sukkiri" ? (
                 <SukkiriRequestsView requests={sukkiriReqs} reload={reloadSukkiri} />
               ) : (
-                <SettingsView allExpenses={RAW} />
+                <SettingsView allExpenses={RAW} pendingSpots={pendingSpots} onPendingSpots={setPendingSpots}/>
               )}
             </div>
 
@@ -1760,8 +1778,27 @@
     //  ADD ENTRY VIEW  (redesigned: Quick / Same shop / Different)
     // ═══════════════════════════════════════════
     let _rid = 0; // module-scoped so row ids stay stable across re-renders
+    let _areaPickMem = null; // manual area choice survives tab switches: { id, at: {lat,lng} }
+    // Distance from a fix to an area = distance to its nearest confirmed spot (legacy lat/lng when it has none).
+    const areaFix = (a, pts, pos) => {
+      const spots = pts.filter((p) => p.area_id === a.id && p.confirmed !== false);
+      const cands = spots.length ? spots : (a.lat != null ? [{ lat: a.lat, lng: a.lng, radius_m: a.radius_m || 500 }] : []);
+      let best = null;
+      if (pos) cands.forEach((p) => { const d = distanceMeters(pos, { lat: p.lat, lng: p.lng }); if (best == null || d < best._d) best = { _d: d, _in: d <= (p.radius_m || 200) }; });
+      return { ...a, _spots: spots.length, _d: best ? best._d : null, _in: !!(best && best._in) };
+    };
+    const sortByFix = (a, b) => a._d != null && b._d != null ? a._d - b._d : a._d != null ? -1 : b._d != null ? 1 : a.name.localeCompare(b.name);
+    // How far a candidate spot sits beyond the area that proposed it. Measured spot-to-area, so
+    // it is fixed at learn time and reads the same whether you review it there or at home a week later.
+    const spotGap = (p, a, pts) => {
+      const spots = pts.filter((q) => q.area_id === a.id && q.confirmed !== false);
+      const cands = spots.length ? spots : (a.lat != null ? [{ lat: a.lat, lng: a.lng }] : []);
+      let best = null;
+      cands.forEach((q) => { const d = distanceMeters(p, q); if (best == null || d < best) best = d; });
+      return best;
+    };
     function AddEntryView({ recentEntries, allExpenses }) {
-      const { theme, supabase, fetchData, categories, shops, tags, presetDate, setPresetDate } = useTheme();
+      const { theme, supabase, fetchData, categories, shops, tags, presetDate, setPresetDate, currency } = useTheme();
       const C = {
         text: theme.text, muted: theme.textMuted, dim: theme.textDim,
         card: theme.cardBg, border: theme.cardBorder, input: theme.inputBg, primary: theme.primary,
@@ -1799,6 +1836,54 @@
       const [newShop, setNewShop] = useState({ name: "", fav: false });
       const [dupDialog, setDupDialog] = useState(null); // { multi, queue: [{ record, existing, rowIdx }], idx, kept, view }
       const [removingRow, setRemovingRow] = useState(null); // row index fading out before removal
+      // ── areas: shops tagged near the current area rank first in the shop sheet ──
+      const [areas, setAreas] = useState([]);
+      const [areaPts, setAreaPts] = useState([]);
+      const [areaLinks, setAreaLinks] = useState([]);
+      const [pos, setPos] = useState(null);
+      const [areaPick, setAreaPick] = useState(() => _areaPickMem ? _areaPickMem.id : null); // null = follow GPS, "" = all areas, else area id
+      const [stripOpen, setStripOpen] = useState(false);
+      const [farOpen, setFarOpen] = useState(false);
+      useEffect(() => {
+        (async () => {
+          const [a, p, l] = await Promise.all([
+            supabase.from("cost_management_areas").select("id,name,region,lat,lng,radius_m"),
+            supabase.from("cost_management_area_points").select("id,area_id,lat,lng,radius_m,confirmed"),
+            supabase.from("cost_management_shop_locations").select("area_id,shop_id"),
+          ]);
+          if (!a.error) setAreas(a.data || []);
+          if (!p.error) setAreaPts(p.data || []);
+          if (!l.error) setAreaLinks(l.data || []);
+        })();
+        if ("geolocation" in navigator) navigator.geolocation.getCurrentPosition(
+          (p) => {
+            const here = { lat: p.coords.latitude, lng: p.coords.longitude };
+            setPos(here);
+            // A manual pick expires once you've moved on (>1km from where you made it).
+            if (_areaPickMem && _areaPickMem.at && distanceMeters(here, _areaPickMem.at) > 1000) { _areaPickMem = null; setAreaPick(null); }
+          }, () => {},
+          { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+        );
+      }, []);
+      const regionAreas = useMemo(() => areas.filter((a) => !a.region || a.region === currency).map((a) => areaFix(a, areaPts, pos)).sort(sortByFix), [areas, areaPts, currency, pos]);
+      const gpsArea = regionAreas.find((a) => a._in) || null;
+      const activeArea = areaPick === null ? gpsArea : areaPick === "" ? null : regionAreas.find((a) => a.id === areaPick) || null;
+      const stripVisible = stripOpen || (!gpsArea && areaPick === null && regionAreas.length > 0);
+      const pickArea = (id) => { vibrate(8); setAreaPick(id); _areaPickMem = id === null ? null : { id, at: pos }; setStripOpen(false); setFarOpen(false); };
+      const shopUse = useMemo(() => { const m = {}; allExpenses.forEach((e) => { m[e.shop] = (m[e.shop] || 0) + 1; }); return m; }, [allExpenses]);
+      const inActive = useMemo(() => new Set(activeArea ? areaLinks.filter((l) => l.area_id === activeArea.id).map((l) => String(l.shop_id)) : []), [activeArea, areaLinks]);
+      // Auto-learning: a same-day save at a shop tagged to exactly one area, from outside all of that
+      // area's spots but within 1.5km, records a candidate spot. Nothing changes until you Keep it.
+      const learnSpot = async (shopName, catName) => {
+        if (!pos || !areaPts.length) return;
+        const shopObj = shops.find((s) => s.name === shopName && s.category === catName); if (!shopObj) return;
+        const tagged = areaLinks.filter((l) => String(l.shop_id) === String(shopObj.id)); if (tagged.length !== 1) return;
+        const area = regionAreas.find((a) => a.id === tagged[0].area_id); if (!area) return;
+        if (area._d == null || area._d > 1500 || regionAreas.some((a) => a._in)) return;
+        if (areaPts.some((p) => p.area_id === area.id && distanceMeters(pos, p) <= 150)) return;
+        const { data } = await supabase.from("cost_management_area_points").insert({ area_id: area.id, lat: pos.lat, lng: pos.lng, radius_m: 200, label: shopName, source: "auto", confirmed: false }).select("id,area_id,lat,lng,radius_m,confirmed").single();
+        if (data) setAreaPts((ps) => [...ps, data]);
+      };
 
       // presetDate is consumed once (into `dates` above); clear it so a later
       // normal visit to the Add tab doesn't carry a stale preset date.
@@ -1819,7 +1904,10 @@
       const catObj = categories.find((c) => c.name === curCat);
       const accent = catObj ? catObj.color : theme.primary;
       const favSort = (a, b) => (b.is_favorite ? 1 : 0) - (a.is_favorite ? 1 : 0);
+      const rankShops = (a, b) => favSort(a, b) || (shopUse[b.name] || 0) - (shopUse[a.name] || 0) || a.name.localeCompare(b.name);
       const catShops = shops.filter((s) => s.category === curCat).sort(favSort);
+      const nearShops = activeArea ? catShops.filter((s) => inActive.has(String(s.id))).sort(rankShops) : [];
+      const farShops = (activeArea ? catShops.filter((s) => !inActive.has(String(s.id))) : catShops.slice()).sort(rankShops);
       const amt = Number(curAmountStr) || 0;
       const valid = amt > 0 && curCat && curShop;
 
@@ -1841,7 +1929,7 @@
       const setCurShop = (name) => { if (isDiff) updRow({ shop: name }); else setShop(name); };
       const setCurType = (t) => { if (isDiff) updRow({ type: t }); else setEtype(t); };
       const setCurTags = (list) => { if (isDiff) updRow({ tags: list }); else setEtags(list); };
-      const pickCat = (c) => { setCurCat(c.name); setNewCatOpen(false); setNewShopOpen(false); setCatSheetOpen(false); setShopSheetOpen(true); };
+      const pickCat = (c) => { setCurCat(c.name); setNewCatOpen(false); setNewShopOpen(false); setCatSheetOpen(false); setFarOpen(false); setShopSheetOpen(true); };
       const pickShop = (name) => { setCurShop(name); setNewShopOpen(false); setShopSheetOpen(false); };
 
       // the multi-date selection drives the review list: one editable row per picked day,
@@ -1893,6 +1981,7 @@
       const commitQuick = async (records) => {
         const ok = await insertExpenses(records);
         if (!ok) return;
+        if (records.length === 1 && records[0].date === isoOfDate(today)) learnSpot(records[0].shop, records[0].category);
         vibrate(10);
         setSaved(true); setFlash(fmt(records.reduce((s, r) => s + r.amount, 0)));
         setTimeout(() => { setAmount(""); setShop(null); setCat(null); setEtags([]); setEtype("normal"); setTagsOpen(false); setSaved(false); }, 900);
@@ -1969,8 +2058,13 @@
       const addShop = async () => {
         const name = newShop.name.trim(); if (!name || !curCat) return;
         if (!shops.some((s) => s.name === name && s.category === curCat)) {
-          const { error } = await supabase.from("cost_management_shops").insert({ region: CUR.code, name, category: curCat, is_favorite: newShop.fav });
+          const { data, error } = await supabase.from("cost_management_shops").insert({ region: CUR.code, name, category: curCat, is_favorite: newShop.fav }).select("id").single();
           if (error) { showToast("error", error.message.includes("duplicate") ? "Shop exists" : error.message); return; }
+          // A shop created while standing in an area belongs to it — tag it so it ranks here next time.
+          if (activeArea && data && data.id != null) {
+            const { error: le } = await supabase.from("cost_management_shop_locations").insert({ area_id: activeArea.id, shop_id: data.id });
+            if (!le) setAreaLinks((ls) => [...ls, { area_id: activeArea.id, shop_id: data.id }]);
+          }
           await fetchData();
         }
         setNewShop({ name: "", fav: false });
@@ -2076,10 +2170,50 @@
             <button onClick={() => { setShopSheetOpen(false); setNewShopOpen(false); setCatSheetOpen(true); }} style={{ border: "none", background: "none", color: C.muted, cursor: "pointer", fontSize: 12.5, fontWeight: 600, padding: 0, fontFamily: "inherit" }}>‹ Categories</button>
             <button onClick={() => { setShopSheetOpen(false); setNewShopOpen(false); }} style={closeBtn}>×</button>
           </div>
-          <div style={sLbl}>{catObj ? `${catObj.icon} ${curCat} · shops` : "Pick a category first"}</div>
+          {regionAreas.length > 0 && (
+            <div style={{ marginBottom: 14 }}>
+              {!stripVisible ? (
+                <button onClick={() => setStripOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", background: "none", border: "none", padding: "2px 0", cursor: "pointer", fontFamily: "inherit", color: C.muted, fontSize: 12.5, textAlign: "left" }}>
+                  {areaPick === null && <span style={{ fontSize: 11 }}>📍</span>}
+                  <span style={{ color: C.text, fontWeight: 600 }}>{activeArea ? activeArea.name : "All areas"}</span>
+                  {areaPick !== null && <span style={{ fontSize: 10, color: C.dim }}>chosen</span>}
+                  <span style={{ marginLeft: "auto", fontSize: 11.5, color: C.primary, fontWeight: 600 }}>change</span>
+                </button>
+              ) : (<>
+                <div style={{ ...sLbl, display: "flex", justifyContent: "space-between", gap: 8 }}>
+                  <span>Area</span>
+                  {!gpsArea && <span style={{ textTransform: "none", letterSpacing: 0, fontWeight: 500 }}>{pos ? "Not near a tagged area — pick one" : "No GPS fix yet"}</span>}
+                </div>
+                <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 2, scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}>
+                  {gpsArea && areaPick !== null && <button onClick={() => pickArea(null)} style={{ ...chip(false, C.primary), padding: "7px 11px", fontSize: 12.5 }}>📍 Auto</button>}
+                  {regionAreas.map((a) => {
+                    const on = activeArea && activeArea.id === a.id;
+                    return (
+                      <button key={a.id} onClick={() => pickArea(a.id)} style={{ ...chip(on, C.primary), padding: "7px 11px", fontSize: 12.5, display: "flex", alignItems: "center", gap: 5 }}>
+                        {a._in && <span style={{ fontSize: 11 }}>📍</span>}
+                        {a.name}
+                        {a._d != null && !a._in && <span style={{ fontSize: 10.5, opacity: 0.7 }}>{fmtDist(a._d)}</span>}
+                      </button>
+                    );
+                  })}
+                  <button onClick={() => pickArea("")} style={{ ...chip(!activeArea, C.primary), padding: "7px 11px", fontSize: 12.5 }}>All</button>
+                </div>
+              </>)}
+            </div>
+          )}
+          <div style={sLbl}>{catObj ? `${catObj.icon} ${curCat} · ${activeArea ? `shops in ${activeArea.name}` : "shops"}` : "Pick a category first"}</div>
+          {activeArea && nearShops.length === 0 && catObj && (
+            <div style={{ fontSize: 12.5, color: C.dim, margin: "0 0 10px", lineHeight: 1.5 }}>No {curCat} shops tagged in {activeArea.name} yet — pick one below or add a new shop and it'll be tagged here.</div>
+          )}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {catShops.map((s) => (
+            {nearShops.map((s) => (
               <button key={s.id || s.name} onClick={() => pickShop(s.name)} style={chip(curShop === s.name, accent)}>{s.is_favorite ? "⭐ " : ""}{s.name}</button>
+            ))}
+            {activeArea && farShops.length > 0 && (
+              <button onClick={() => { vibrate(8); setFarOpen((o) => !o); }} style={{ ...newChip(farOpen), color: C.muted }}>{farOpen ? "▴" : "▾"} Other areas · {farShops.length}</button>
+            )}
+            {(!activeArea || farOpen) && farShops.map((s) => (
+              <button key={s.id || s.name} onClick={() => pickShop(s.name)} style={{ ...chip(curShop === s.name, accent), opacity: activeArea && curShop !== s.name ? 0.72 : 1 }}>{s.is_favorite ? "⭐ " : ""}{s.name}</button>
             ))}
             <button onClick={() => { setNewShopOpen((o) => !o); setNewCatOpen(false); }} style={newChip(newShopOpen)}>＋ New shop</button>
           </div>
@@ -2422,9 +2556,352 @@
     // ═══════════════════════════════════════════
     //  SETTINGS VIEW (Categories + Tags + Recurring)
     // ═══════════════════════════════════════════
-    function SettingsView({ allExpenses }) {
+    //  AREAS — shops grouped by the places you visit them.
+    //  Phase 1: create/rename/merge/delete areas, capture a position,
+    //  and put shops in them. Ranking the Add screen comes later.
+    // ═══════════════════════════════════════════
+    const fmtDist = (m) => m == null || !isFinite(m) ? null : m < 950 ? Math.round(m / 10) * 10 + "m" : (m / 1000).toFixed(m < 9500 ? 1 : 0) + "km";
+    function ShopAreasPanel({ allExpenses = [], onPending }) {
+      const { theme, supabase, categories, shops, getCatIcon, currency } = useTheme();
+      const [areas, setAreas] = useState([]);
+      const [points, setPoints] = useState([]);
+      const [ptsErr, setPtsErr] = useState("");
+      const [spotLabel, setSpotLabel] = useState("");
+      const [spotRadius, setSpotRadius] = useState(200);
+      const [spotCoord, setSpotCoord] = useState("");
+      const [links, setLinks] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [err, setErr] = useState("");
+      const [pos, setPos] = useState(null);
+      const [posMsg, setPosMsg] = useState("");
+      const [scopeCat, setScopeCat] = useState("");     // "" = all categories
+      const [picker, setPicker] = useState(null);       // area being filled
+      const [picked, setPicked] = useState([]);
+      const [editing, setEditing] = useState(null);     // area being edited
+      const [newOpen, setNewOpen] = useState(false);
+      const [draft, setDraft] = useState({ name: "", lat: "", lng: "" });
+      const [busy, setBusy] = useState(false);
+      const [toast, setToast] = useState("");
+      const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 2600); };
+
+      const load = useCallback(async () => {
+        setLoading(true);
+        const [aRes, lRes, pRes] = await Promise.all([
+          supabase.from("cost_management_areas").select("*"),
+          supabase.from("cost_management_shop_locations").select("*"),
+          supabase.from("cost_management_area_points").select("*"),
+        ]);
+        if (aRes.error) setErr(aRes.error.message.includes("does not exist") ? "Run migration 009_areas.sql in Supabase first." : aRes.error.message);
+        else { setErr(""); setAreas(aRes.data || []); setLinks(lRes.data || []); }
+        if (pRes.error) { setPoints([]); setPtsErr(pRes.error.message.includes("does not exist") ? "Run migration 010_area_points.sql to give areas more than one spot." : pRes.error.message); }
+        else { setPoints(pRes.data || []); setPtsErr(""); }
+        setLoading(false);
+      }, [supabase]);
+      useEffect(() => { load(); }, [load]);
+      // One fix when the panel opens — this screen is rare, so it costs little.
+      useEffect(() => {
+        if (!("geolocation" in navigator)) { setPosMsg("No GPS here — type coordinates instead."); return; }
+        navigator.geolocation.getCurrentPosition(
+          (p) => setPos({ lat: p.coords.latitude, lng: p.coords.longitude }),
+          () => setPosMsg("Location unavailable — type coordinates instead."),
+          { enableHighAccuracy: true, timeout: 8000, maximumAge: 300000 }
+        );
+      }, []);
+
+      const usage = useMemo(() => { const m = {}; allExpenses.forEach(e => { m[e.shop] = (m[e.shop] || 0) + 1; }); return m; }, [allExpenses]);
+      const sid = (s) => String(s.id);
+      const scopedShops = useMemo(() => scopeCat ? shops.filter(s => s.category === scopeCat) : shops, [shops, scopeCat]);
+      const shopById = useMemo(() => { const m = {}; shops.forEach(s => { m[sid(s)] = s; }); return m; }, [shops]);
+      const byArea = useMemo(() => { const m = {}; links.forEach(l => { (m[l.area_id] = m[l.area_id] || []).push(String(l.shop_id)); }); return m; }, [links]);
+      const linkedIds = useMemo(() => new Set(links.map(l => String(l.shop_id))), [links]);
+      // Region-less areas show in every profile until tagged. Distance = nearest confirmed spot.
+      const visible = useMemo(() => areas.filter(a => !a.region || a.region === currency).map(a => areaFix(a, points, pos)).sort(sortByFix), [areas, points, currency, pos]);
+      const spotsOf = (areaId) => points.filter(p => p.area_id === areaId && p.confirmed !== false);
+      const pendingOf = (areaId) => points.filter(p => p.area_id === areaId && p.confirmed === false);
+      // Report the review backlog upward so Settings can badge it without a second query.
+      // Gated on `loading` so the initial empty `points` can't zero the shared count on mount.
+      useEffect(() => { if (onPending && !loading) { const ids = new Set(visible.map(a => a.id)); onPending(points.filter(p => p.confirmed === false && ids.has(p.area_id)).length); } }, [points, loading, visible]);
+      const untagged = useMemo(() => scopedShops.filter(s => !linkedIds.has(sid(s)))
+        .sort((a, b) => (usage[b.name] || 0) - (usage[a.name] || 0)), [scopedShops, linkedIds, usage]);
+      // Category groups inside the picker, most-used category first.
+      const pickerGroups = useMemo(() => {
+        if (!picker) return [];
+        const inArea = new Set(byArea[picker.id] || []);
+        const m = {};
+        scopedShops.forEach(s => { (m[s.category] = m[s.category] || []).push(s); });
+        return Object.entries(m).map(([cat, list]) => ({
+          cat, weight: list.reduce((n, s) => n + (usage[s.name] || 0), 0),
+          list: list.sort((a, b) => (usage[b.name] || 0) - (usage[a.name] || 0)).map(s => ({ ...s, _in: inArea.has(sid(s)) })),
+        })).sort((a, b) => b.weight - a.weight);
+      }, [picker, scopedShops, byArea, usage]);
+
+      const capture = () => new Promise((res) => {
+        if (!("geolocation" in navigator)) { res(null); return; }
+        navigator.geolocation.getCurrentPosition(
+          (p) => res({ lat: p.coords.latitude, lng: p.coords.longitude }), () => res(null),
+          { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+        );
+      });
+      const createArea = async () => {
+        const name = draft.name.trim(); if (!name || busy) return;
+        setBusy(true);
+        let lat = draft.lat === "" ? null : Number(draft.lat), lng = draft.lng === "" ? null : Number(draft.lng);
+        const { data, error } = await supabase.from("cost_management_areas").insert({ name, region: currency, lat, lng }).select("id").single();
+        if (!error && data && lat != null && lng != null && !ptsErr) await supabase.from("cost_management_area_points").insert({ area_id: data.id, lat, lng, radius_m: 500, label: name, source: "manual", confirmed: true });
+        setBusy(false);
+        if (error) { flash(error.message.includes("duplicate") ? "That area already exists" : error.message); return; }
+        setDraft({ name: "", lat: "", lng: "" }); setNewOpen(false); flash("Area added"); load();
+      };
+      const useHere = async () => {
+        setBusy(true); const p = await capture(); setBusy(false);
+        if (!p) { flash("Couldn't read your location"); return; }
+        setDraft(d => ({ ...d, lat: p.lat.toFixed(5), lng: p.lng.toFixed(5) }));
+      };
+      const saveEdit = async (patch) => {
+        setBusy(true);
+        const { error } = await supabase.from("cost_management_areas").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", editing.id);
+        setBusy(false);
+        if (error) { flash(error.message); return; }
+        setEditing(null); load();
+      };
+      const removeArea = async () => {
+        if (!confirm(`Delete ${editing.name}? Its shops go back to "No area yet".`)) return;
+        setBusy(true);
+        const { error } = await supabase.from("cost_management_areas").delete().eq("id", editing.id);
+        setBusy(false);
+        if (error) { flash(error.message); return; }
+        setEditing(null); flash("Area deleted"); load();
+      };
+      // Merge keeps the target's coordinates; links move across, duplicates are dropped.
+      const mergeInto = async (targetId) => {
+        const target = areas.find(a => a.id === targetId); if (!target) return;
+        setBusy(true);
+        const here = new Set(byArea[targetId] || []);
+        const moving = (byArea[editing.id] || []).filter(id => !here.has(id));
+        if (moving.length) {
+          const { error } = await supabase.from("cost_management_shop_locations")
+            .insert(moving.map(shop_id => ({ area_id: targetId, shop_id })));
+          if (error) { setBusy(false); flash(error.message); return; }
+        }
+        if (!ptsErr) await supabase.from("cost_management_area_points").update({ area_id: targetId }).eq("area_id", editing.id);
+        const { error } = await supabase.from("cost_management_areas").delete().eq("id", editing.id);
+        setBusy(false);
+        if (error) { flash(error.message); return; }
+        setEditing(null); flash(`Merged into ${target.name}`); load();
+      };
+      const addPicked = async () => {
+        if (!picked.length || busy) return;
+        setBusy(true);
+        const { error } = await supabase.from("cost_management_shop_locations")
+          .insert(picked.map(shop_id => ({ area_id: picker.id, shop_id })));
+        setBusy(false);
+        if (error) { flash(error.message); return; }
+        flash(`${picked.length} added to ${picker.name}`); setPicker(null); setPicked([]); load();
+      };
+      const unlink = async (areaId, shopId) => {
+        const { error } = await supabase.from("cost_management_shop_locations").delete().eq("area_id", areaId).eq("shop_id", shopId);
+        if (error) { flash(error.message); return; }
+        load();
+      };
+      // Spots: an area matches when you stand inside any of them.
+      const addSpotHere = async () => {
+        if (busy || !editing) return;
+        setBusy(true);
+        const m = spotCoord.trim().match(/^(-?\d+(\.\d+)?)\s*,\s*(-?\d+(\.\d+)?)$/);
+        const p = m ? { lat: Number(m[1]), lng: Number(m[3]) } : await capture();
+        if (!p) { setBusy(false); flash("Couldn't read your location — type lat, lng instead"); return; }
+        const { error } = await supabase.from("cost_management_area_points").insert({ area_id: editing.id, lat: p.lat, lng: p.lng, radius_m: spotRadius, label: spotLabel.trim() || null, source: "manual", confirmed: true });
+        setBusy(false);
+        if (error) { flash(error.message.includes("does not exist") ? "Run migration 010_area_points.sql first." : error.message); return; }
+        setSpotLabel(""); setSpotCoord(""); flash("Spot added"); load();
+      };
+      const patchSpot = async (p, patch) => {
+        const q = patch === null ? supabase.from("cost_management_area_points").delete().eq("id", p.id) : supabase.from("cost_management_area_points").update(patch).eq("id", p.id);
+        const { error } = await q;
+        if (error) { flash(error.message); return; }
+        load();
+      };
+
+      const S = {
+        head: { display: "flex", alignItems: "center", gap: 8, margin: "14px 0 7px" },
+        rule: { flex: 1, height: 1, background: theme.cardBorder },
+        chip: { display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 11px", borderRadius: 14, fontSize: 12, fontWeight: 500, background: theme.inputBg, color: theme.text, border: `1px solid ${theme.cardBorder}`, fontFamily: "inherit", cursor: "pointer" },
+        add: { display: "inline-flex", alignItems: "center", gap: 5, padding: "7px 11px", borderRadius: 14, fontSize: 12, fontWeight: 600, background: "transparent", color: theme.textDim, border: `1px dashed ${theme.cardBorder}`, fontFamily: "inherit", cursor: "pointer" },
+        field: { width: "100%", padding: "9px 11px", borderRadius: 9, border: `1px solid ${theme.inputBorder}`, background: theme.inputBg, color: theme.text, fontSize: 13, outline: "none", fontFamily: "inherit", boxSizing: "border-box" },
+        cta: { padding: "10px 16px", borderRadius: 10, border: "none", background: "#22c55e", color: "#06210f", fontWeight: 700, fontSize: 12.5, cursor: "pointer", fontFamily: "inherit" },
+      };
+      const Pin = ({ c = "#22c55e", s = 11 }) => (<svg width={s} height={s} viewBox="0 0 24 24" fill={c} aria-hidden="true"><path d="M12 2C8.7 2 6 4.7 6 8c0 4.5 6 14 6 14s6-9.5 6-14c0-3.3-2.7-6-6-6zm0 8.5A2.5 2.5 0 1 1 12 5.5a2.5 2.5 0 0 1 0 5z"/></svg>);
+
+      if (err) return <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 14, padding: 16, fontSize: 12, color: theme.textMuted }}>{err}</div>;
+
+      return (
+        <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 14, padding: 16 }}>
+          {toast && <div style={{ background: theme.inputBg, borderRadius: 9, padding: "8px 11px", fontSize: 11.5, color: theme.text, marginBottom: 10 }}>{toast}</div>}
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 4 }}>
+            <div style={{ display: "flex", gap: 3, padding: 3, background: theme.inputBg, borderRadius: 9, border: `1px solid ${theme.cardBorder}` }}>
+              <button onClick={() => setScopeCat("")} style={{ padding: "4px 11px", fontSize: 11, fontWeight: 600, borderRadius: 7, border: "none", cursor: "pointer", fontFamily: "inherit", background: scopeCat ? "transparent" : theme.primary, color: scopeCat ? theme.textMuted : "#fff" }}>All categories</button>
+              <button onClick={() => setScopeCat(scopeCat || (categories[0] || {}).name || "")} style={{ padding: "4px 11px", fontSize: 11, fontWeight: 600, borderRadius: 7, border: "none", cursor: "pointer", fontFamily: "inherit", background: scopeCat ? theme.primary : "transparent", color: scopeCat ? "#fff" : theme.textMuted }}>One category</button>
+            </div>
+            {scopeCat && (
+              <select value={scopeCat} onChange={e => setScopeCat(e.target.value)} style={{ ...S.field, width: "auto", padding: "5px 9px", fontSize: 11.5, cursor: "pointer" }}>
+                {categories.map(c => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
+              </select>
+            )}
+          </div>
+          <p style={{ fontSize: 10.5, color: theme.textDim, margin: "6px 0 2px" }}>{pos ? "Sorted by distance from you." : posMsg || "Locating…"}{ptsErr ? ` ${ptsErr}` : ""}</p>
+
+          {loading ? <div style={{ fontSize: 12, color: theme.textDim, padding: "18px 0", textAlign: "center" }}>Loading areas…</div> : <>
+            {visible.map(a => {
+              const ids = byArea[a.id] || [];
+              const list = ids.map(id => shopById[id]).filter(s => s && (!scopeCat || s.category === scopeCat));
+              const d = fmtDist(a._d);
+              const pending = pendingOf(a.id);
+              const nSpots = a._spots || (a.lat != null ? 1 : 0);
+              return (
+                <div key={a.id}>
+                  <div style={S.head}>
+                    <b style={{ fontSize: 12.5, color: "#22c55e", fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 5 }}><Pin/>{a.name}</b>
+                    <span style={{ fontSize: 10.5, color: theme.textDim }}>{a._in ? "· here " : d ? `· ${d} ` : nSpots === 0 ? "· no position " : ""}· {nSpots} {nSpots === 1 ? "spot" : "spots"} · {list.length} {list.length === 1 ? "shop" : "shops"}</span>
+                    {!a.region && <span title="Captured without a region" style={{ fontSize: 9.5, fontWeight: 700, color: "#f59e0b", border: "1px solid rgba(245,158,11,0.4)", borderRadius: 8, padding: "1px 6px" }}>set region</span>}
+                    <i style={S.rule}></i>
+                    <button onClick={() => setEditing(a)} style={{ background: "none", border: "none", color: theme.primary, fontSize: 10.5, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>edit</button>
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {list.map(s => (
+                      <span key={sid(s)} style={S.chip}>{getCatIcon(s.category)} {s.name}
+                        <button onClick={() => unlink(a.id, s.id)} title="Remove from this area" style={{ background: "none", border: "none", color: theme.textDim, cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0, fontFamily: "inherit" }}>×</button>
+                      </span>
+                    ))}
+                    <button onClick={() => { setPicked([]); setPicker(a); }} style={S.add}>+ shop</button>
+                  </div>
+                  {pending.map(p => {
+                    const gap = spotGap(p, a, points);
+                    return (
+                    <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, padding: "8px 10px", borderRadius: 10, background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.3)" }}>
+                      <span style={{ fontSize: 11.5, color: theme.text, flex: 1, minWidth: 0 }}>Learned a spot near <b>{p.label || "a shop"}</b>{gap != null && isFinite(gap) ? ` · ${fmtDist(gap)} past ${a.name}'s nearest spot` : ""}</span>
+                      <button onClick={() => patchSpot(p, { confirmed: true })} style={{ ...S.cta, padding: "6px 11px", fontSize: 11.5 }}>Keep</button>
+                      <button onClick={() => patchSpot(p, null)} style={{ padding: "6px 10px", borderRadius: 9, border: `1px solid ${theme.cardBorder}`, background: "transparent", color: theme.textMuted, cursor: "pointer", fontSize: 11.5, fontFamily: "inherit" }}>Drop</button>
+                    </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+            <div style={S.head}>
+              <b style={{ fontSize: 12.5, color: theme.textDim, fontWeight: 700 }}>No area yet</b>
+              <span style={{ fontSize: 10.5, color: theme.textDim }}>· {untagged.length}</span>
+              <i style={S.rule}></i>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {untagged.length === 0 ? <span style={{ fontSize: 11.5, color: theme.textDim }}>Everything is tagged.</span>
+                : untagged.map(s => <span key={sid(s)} style={{ ...S.chip, opacity: 0.7 }}>{getCatIcon(s.category)} {s.name}<span style={{ fontSize: 9.5, color: theme.textDim }}>{usage[s.name] || 0}</span></span>)}
+            </div>
+
+            {!newOpen ? (
+              <button onClick={() => setNewOpen(true)} style={{ marginTop: 14, width: "100%", padding: "10px", borderRadius: 10, border: "1px solid rgba(34,197,94,0.4)", background: "rgba(34,197,94,0.1)", color: "#22c55e", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>◎ New area</button>
+            ) : (
+              <div style={{ marginTop: 14, background: theme.inputBg, borderRadius: 11, padding: 12 }}>
+                <input value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })} placeholder="Area name (西船橋)" style={{ ...S.field, marginBottom: 8 }}/>
+                <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                  <input value={draft.lat} onChange={e => setDraft({ ...draft, lat: e.target.value })} placeholder="lat" inputMode="decimal" style={{ ...S.field, flex: 1, minWidth: 0 }}/>
+                  <input value={draft.lng} onChange={e => setDraft({ ...draft, lng: e.target.value })} placeholder="lng" inputMode="decimal" style={{ ...S.field, flex: 1, minWidth: 0 }}/>
+                </div>
+                <button onClick={useHere} disabled={busy} style={{ ...S.add, width: "100%", justifyContent: "center", marginBottom: 8, padding: "9px" }}>◎ Use my location</button>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={() => { setNewOpen(false); setDraft({ name: "", lat: "", lng: "" }); }} style={{ flex: 1, padding: "9px", borderRadius: 9, border: `1px solid ${theme.cardBorder}`, background: "transparent", color: theme.textMuted, cursor: "pointer", fontSize: 11.5, fontFamily: "inherit" }}>Cancel</button>
+                  <button onClick={createArea} disabled={busy || !draft.name.trim()} style={{ ...S.cta, flex: 1, opacity: (busy || !draft.name.trim()) ? 0.45 : 1 }}>Create</button>
+                </div>
+              </div>
+            )}
+          </>}
+
+          {picker && (
+            <Modal sheet onClose={() => setPicker(null)}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", gap: 6 }}><Pin s={13}/>Add shops to {picker.name}</div>
+              <p style={{ fontSize: 11, color: theme.textMuted, margin: "2px 0 12px" }}>Tap to tick · already-added shops are ticked</p>
+              <div style={{ maxHeight: "52vh", overflowY: "auto" }}>
+                {pickerGroups.map(g => (
+                  <div key={g.cat}>
+                    <div style={{ fontSize: 10, letterSpacing: 0.8, textTransform: "uppercase", color: theme.textDim, fontWeight: 700, margin: "10px 0 6px" }}>{getCatIcon(g.cat)} {g.cat}</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {g.list.map(s => {
+                        const on = s._in || picked.indexOf(sid(s)) >= 0;
+                        return (
+                          <button key={sid(s)} disabled={s._in} onClick={() => setPicked(p => p.indexOf(sid(s)) >= 0 ? p.filter(x => x !== sid(s)) : [...p, sid(s)])}
+                            style={{ ...S.chip, cursor: s._in ? "default" : "pointer", background: on ? "rgba(34,197,94,0.14)" : theme.inputBg, borderColor: on ? "#22c55e" : theme.cardBorder, color: on ? "#fff" : theme.text, fontWeight: on ? 600 : 500, opacity: s._in ? 0.6 : 1 }}>
+                            {on && <span style={{ color: "#22c55e", fontSize: 11 }}>✓</span>}{s.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, paddingTop: 10, borderTop: `1px solid ${theme.cardBorder}` }}>
+                <span style={{ flex: 1, fontSize: 11, color: theme.textDim }}>{picked.length} selected</span>
+                <button onClick={addPicked} disabled={!picked.length || busy} style={{ ...S.cta, opacity: (!picked.length || busy) ? 0.45 : 1 }}>{busy ? "Adding…" : `Add ${picked.length || ""}`.trim()}</button>
+              </div>
+            </Modal>
+          )}
+
+          {editing && (
+            <Modal sheet onClose={() => setEditing(null)}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#fff", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}><Pin s={13}/>{editing.name}</div>
+              <input value={editing.name} onChange={e => setEditing({ ...editing, name: e.target.value })} style={{ ...S.field, marginBottom: 8 }}/>
+              <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                <select value={editing.region || ""} onChange={e => setEditing({ ...editing, region: e.target.value || null })} style={{ ...S.field, flex: 1, cursor: "pointer" }}>
+                  <option value="">No region — shows everywhere</option>
+                  {CURRENCY_KEYS.map(k => <option key={k} value={k}>{k} · {CURRENCIES[k].name}</option>)}
+                </select>
+              </div>
+              <div style={{ fontSize: 10, letterSpacing: 0.8, textTransform: "uppercase", color: theme.textDim, fontWeight: 700, margin: "4px 0 4px" }}>Spots · you're in {editing.name} inside any of these</div>
+              <div style={{ maxHeight: "28vh", overflowY: "auto", marginBottom: 8 }}>
+                {spotsOf(editing.id).length === 0 && <div style={{ fontSize: 11.5, color: theme.textDim, padding: "6px 0" }}>{editing.lat != null ? "Using the area's original pin. Add a spot to replace it." : "No spots yet — add one from where you stand."}</div>}
+                {spotsOf(editing.id).map(p => (
+                  <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 0", borderBottom: `1px solid ${theme.cardBorder}` }}>
+                    <Pin/>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12.5, color: theme.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.label || `${Number(p.lat).toFixed(4)}, ${Number(p.lng).toFixed(4)}`}</div>
+                      <div style={{ fontSize: 10.5, color: theme.textDim }}>{pos ? `${fmtDist(distanceMeters(pos, p))} away` : `${Number(p.lat).toFixed(4)}, ${Number(p.lng).toFixed(4)}`}{p.source === "auto" ? " · learned" : ""}</div>
+                    </div>
+                    <select value={p.radius_m} onChange={e => patchSpot(p, { radius_m: Number(e.target.value) })} style={{ ...S.field, width: "auto", padding: "4px 6px", fontSize: 11, cursor: "pointer" }}>
+                      {[100, 150, 200, 300, 500, 800].concat([100, 150, 200, 300, 500, 800].includes(p.radius_m) ? [] : [p.radius_m]).sort((x, y) => x - y).map(r => <option key={r} value={r}>{r}m</option>)}
+                    </select>
+                    <button onClick={() => patchSpot(p, null)} title="Remove spot" style={{ background: "none", border: "none", color: theme.textDim, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "0 2px", fontFamily: "inherit" }}>×</button>
+                  </div>
+                ))}
+              </div>
+              <div style={{ background: theme.inputBg, borderRadius: 10, padding: 8, marginBottom: 10 }}>
+                <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                  <input value={spotLabel} onChange={e => setSpotLabel(e.target.value)} placeholder="Label (home, station…)" style={{ ...S.field, flex: 1, minWidth: 0 }}/>
+                  <select value={spotRadius} onChange={e => setSpotRadius(Number(e.target.value))} style={{ ...S.field, width: "auto", cursor: "pointer" }}>
+                    {[100, 150, 200, 300, 500].map(r => <option key={r} value={r}>{r}m</option>)}
+                  </select>
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input value={spotCoord} onChange={e => setSpotCoord(e.target.value)} placeholder="lat, lng (blank = where I stand)" inputMode="decimal" style={{ ...S.field, flex: 1, minWidth: 0 }}/>
+                  <button onClick={addSpotHere} disabled={busy} style={{ ...S.cta, whiteSpace: "nowrap", opacity: busy ? 0.45 : 1 }}>◎ Add spot</button>
+                </div>
+              </div>
+              <select onChange={e => { if (e.target.value) mergeInto(e.target.value); }} defaultValue="" style={{ ...S.field, marginBottom: 10, cursor: "pointer" }}>
+                <option value="">Merge into another area…</option>
+                {visible.filter(a => a.id !== editing.id).map(a => <option key={a.id} value={a.id}>{a.name} — spots move across</option>)}
+              </select>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={removeArea} style={{ padding: "9px 13px", borderRadius: 9, border: `1px solid ${theme.danger}55`, background: "transparent", color: theme.danger, cursor: "pointer", fontSize: 11.5, fontWeight: 600, fontFamily: "inherit" }}>Delete</button>
+                <button onClick={() => setEditing(null)} style={{ flex: 1, padding: "9px", borderRadius: 9, border: `1px solid ${theme.cardBorder}`, background: "transparent", color: theme.textMuted, cursor: "pointer", fontSize: 11.5, fontFamily: "inherit" }}>Cancel</button>
+                <button onClick={() => saveEdit({ name: editing.name.trim(), region: editing.region })} disabled={busy || !editing.name.trim()} style={{ ...S.cta, opacity: (busy || !editing.name.trim()) ? 0.45 : 1 }}>Save</button>
+              </div>
+            </Modal>
+          )}
+        </div>
+      );
+    }
+
+    function SettingsView({ allExpenses, pendingSpots = 0, onPendingSpots }) {
       const { theme, themeName, changeTheme, inputStyle, labelStyle, supabase, fetchData, categories, tags, shops, getCatIcon } = useTheme();
       const [activeTab, setActiveTab] = useState("categories");
+      const [shopSubTab, setShopSubTab] = useState("list"); // list | areas
       const [toast, setToast] = useState(null);
 
       // Category state
@@ -2455,6 +2932,16 @@
         if (!selectedShopCategory) return shops;
         return shops.filter(s => s.category === selectedShopCategory);
       }, [shops, selectedShopCategory]);
+      // Grouped by category, busiest category first — matches the "+ shop" picker in Areas.
+      const shopUsage = useMemo(() => { const m = {}; allExpenses.forEach(e => { m[e.shop] = (m[e.shop] || 0) + 1; }); return m; }, [allExpenses]);
+      const shopGroups = useMemo(() => {
+        const m = {};
+        filteredShops.forEach(s => { (m[s.category] = m[s.category] || []).push(s); });
+        return Object.entries(m).map(([cat, list]) => ({
+          cat, weight: list.reduce((n, s) => n + (shopUsage[s.name] || 0), 0),
+          list: list.slice().sort((a, b) => (shopUsage[b.name] || 0) - (shopUsage[a.name] || 0) || a.name.localeCompare(b.name)),
+        })).sort((a, b) => b.weight - a.weight);
+      }, [filteredShops, shopUsage]);
 
       // Category handlers
       const handleAddCategory = async () => {
@@ -2593,6 +3080,12 @@
 
           {/* SHOPS TAB */}
           {activeTab === "shops" && (
+            <><div style={{display:"flex",gap:3,padding:3,background:theme.cardBg,borderRadius:10,border:`1px solid ${theme.cardBorder}`,marginBottom:10,width:"fit-content"}}>
+              {[["list","All shops"],["areas","Areas"]].map(([k,label]) => (
+                <button key={k} onClick={() => setShopSubTab(k)} style={{padding:"4px 13px",fontSize:11.5,fontWeight:600,borderRadius:7,border:"none",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:6,background:shopSubTab===k?theme.primary:"transparent",color:shopSubTab===k?"#fff":theme.textMuted}}>{label}{k==="areas" && pendingSpots>0 && <span title={`${pendingSpots} learned ${pendingSpots===1?"spot":"spots"} to review`} style={{background:"#f59e0b",color:"#1a1000",fontSize:9.5,fontWeight:800,borderRadius:99,minWidth:15,height:15,padding:"0 4px",lineHeight:"15px",textAlign:"center"}}>{pendingSpots}</span>}</button>
+              ))}
+            </div>
+            {shopSubTab === "areas" ? <ShopAreasPanel allExpenses={allExpenses} onPending={onPendingSpots}/> : (
             <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:14,padding:"16px"}}>
               <p style={{fontSize:11,color:theme.textDim,marginTop:0,marginBottom:12}}>Manage shops for each category. Favorite shops appear first when adding expenses.</p>
               
@@ -2607,8 +3100,15 @@
 
               {/* Shop List */}
               {filteredShops.length > 0 ? (
-                <div style={{maxHeight:300,overflowY:"auto",marginBottom:12}}>
-                  {filteredShops.map(shop => (
+                <div style={{marginBottom:12}}>
+                  <div style={{fontSize:10.5,color:theme.textDim,marginBottom:8}}>{filteredShops.length} {filteredShops.length===1?"shop":"shops"}{selectedShopCategory?` in ${selectedShopCategory}`:""} · grouped by category, most-used first</div>
+                  {shopGroups.map(g => (<div key={g.cat}>
+                    <div style={{display:"flex",alignItems:"center",gap:7,margin:"14px 0 7px"}}>
+                      <span style={{fontSize:10,letterSpacing:0.8,textTransform:"uppercase",color:theme.textMuted,fontWeight:700}}>{getCatIcon(g.cat)} {g.cat}</span>
+                      <span style={{fontSize:10,color:theme.textDim}}>{g.list.length}</span>
+                      <i style={{flex:1,height:1,background:theme.cardBorder}}></i>
+                    </div>
+                  {g.list.map(shop => (
                     <div key={shop.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 12px",background:theme.inputBg,borderRadius:8,marginBottom:6}}>
                       <div style={{display:"flex",alignItems:"center",gap:10}}>
                         <button onClick={() => handleToggleFavorite(shop)} style={{background:"none",border:"none",cursor:"pointer",fontSize:14}}>
@@ -2624,7 +3124,7 @@
                         <button onClick={() => handleDeleteShop(shop.id)} style={{background:"none",border:"none",cursor:"pointer",padding:"3px 5px",color:theme.danger,display:"inline-flex"}}><Icon name="trash" size={15}/></button>
                       </div>
                     </div>
-                  ))}
+                  ))}</div>))}
                 </div>
               ) : (
                 <div style={{color:theme.textDim,textAlign:"center",padding:20,fontSize:12}}>
@@ -2658,6 +3158,7 @@
                 </div>
               )}
             </div>
+            )}</>
           )}
 
           {/* TAGS TAB */}
