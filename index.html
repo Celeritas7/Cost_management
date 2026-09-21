@@ -1029,8 +1029,12 @@
       const logStop = async (s, { shop, category, amount }) => {
         if (!shop || !(Number(amount) > 0)) return { ok: false };
         const record = { region: s.region || currency, date: ymdLocal(new Date(s.startedAt)), category: category || "Other", shop, amount: Number(amount), notes: "", expense_type: "normal", tags: "" };
+        // Offline (or the request dies mid-flight): queue the expense and mark the stop
+        // logged anyway, so filling in a basement konbini isn't lost work.
+        const queueIt = () => { enqueue({ table: "cost_management_expenses", op: "insert", row: record }); updateStop(s.id, { status: "logged", loggedAt: Date.now() }); flashDue(`Saved ${shop} · will sync`); return { ok: true }; };
+        if (!navigator.onLine && !syncOff) return queueIt();
         const { error } = await supabase.from("cost_management_expenses").insert(record);
-        if (error) return { ok: false, msg: error.message };
+        if (error) { if (!syncOff && netError(error.message)) return queueIt(); return { ok: false, msg: error.message }; }
         updateStop(s.id, { status: "logged", loggedAt: Date.now() });
         await fetchData(); flashDue(`Added ${shop}`); return { ok: true };
       };
@@ -1039,6 +1043,21 @@
       // Same warning rule as the Add flow: date + shop + amount all matching is a
       // flag, never a block — the panel offers "Log anyway".
       const stopDup = (s, shop, amount) => RAW.find((e) => e.date === ymdLocal(new Date(s.startedAt)) && e.shop === shop && Number(e.amount) === Number(amount));
+
+      // Sync loop: on load, on reconnect, and every minute while open. Queue first,
+      // pull second — syncNow() enforces that order.
+      const outbox = useOutbox();
+      const [syncedAt, setSyncedAt] = useState(0);
+      useEffect(() => {
+        if (loading) return;
+        let dead = false;
+        const run = async () => { await syncNow(); if (!dead) setSyncedAt(Date.now()); };
+        run();
+        const onOnline = () => run();
+        window.addEventListener("online", onOnline);
+        const iv = setInterval(run, 60000);
+        return () => { dead = true; window.removeEventListener("online", onOnline); clearInterval(iv); };
+      }, [loading]);
 
       const RAW = useMemo(() => data.filter((r) => regionOf(r) === currency), [data, currency]);
       const catList = useMemo(() => [...new Set(RAW.map(r => r.category))].sort(), [RAW]);
@@ -1257,6 +1276,15 @@
               </div>
             )}
 
+            {/* Offline / unsent-work badge — above the stops pill, which sits above the requests reminder */}
+            {(outbox.pending > 0 || !outbox.online) && (
+              <div style={{ position: "fixed", bottom: (isMobile ? 84 : 18) + ((sukkiriPending.length > 0 && !reqReminderHidden && view !== "sukkiri") ? 56 : 0) + ((openStops.length > 0 && !stopsOpen) ? 56 : 0), left: "50%", transform: "translateX(-50%)", zIndex: 82, display: "flex", alignItems: "center", gap: 10, background: theme.headerBg, border: `1px solid ${outbox.online ? theme.cardBorder : "rgba(239,68,68,0.45)"}`, borderRadius: 14, padding: "9px 13px", boxShadow: "0 8px 30px rgba(0,0,0,0.45)", maxWidth: "92vw" }}>
+                <span style={{ width: 8, height: 8, borderRadius: 4, background: outbox.online ? theme.warning : theme.danger, flexShrink: 0 }}/>
+                <span style={{ fontSize: 12, color: "#fff" }}>{!outbox.online ? (outbox.pending > 0 ? `Offline · ${outbox.pending} waiting to sync` : "Offline · saving on this device") : `${outbox.pending} waiting to sync`}</span>
+                {outbox.online && <button onClick={() => syncNow()} style={{ border: "none", borderRadius: 8, background: theme.primary, color: "#fff", fontSize: 11.5, fontWeight: 700, padding: "5px 11px", cursor: "pointer", fontFamily: "inherit" }}>Sync now</button>}
+              </div>
+            )}
+
             {/* Stops waiting to be filled in — sits above the requests reminder when both are up */}
             {openStops.length > 0 && !stopsOpen && (
               <div style={{ position: "fixed", bottom: (isMobile ? 84 : 18) + ((sukkiriPending.length > 0 && !reqReminderHidden && view !== "sukkiri") ? 56 : 0), left: "50%", transform: "translateX(-50%)", zIndex: 81, display: "flex", alignItems: "center", gap: 10, background: theme.headerBg, border: "1px solid rgba(245,158,11,0.45)", borderRadius: 14, padding: "10px 14px", boxShadow: "0 8px 30px rgba(0,0,0,0.45)", maxWidth: "92vw" }}>
@@ -1289,6 +1317,76 @@
     }
 
     // ═══════════════════════════════════════════
+    //  OFFLINE QUEUE + CROSS-DEVICE SYNC
+    //
+    //  Every write the stop and budget features make goes to localStorage FIRST
+    //  and is queued for Supabase second, so the app stays usable in a basement
+    //  konbini with no signal. The queue drains in order on reconnect.
+    //
+    //  Sync order matters: drain the queue, and only when it is empty adopt the
+    //  server as truth. That is what makes deletes work — a "never here" you
+    //  removed on the phone is gone from the server before the laptop reads it
+    //  back, so a pull cannot resurrect it.
+    // ═══════════════════════════════════════════
+    const OUTBOX_KEY = "cm_outbox", OUTBOX_EVT = "cm-outbox-changed";
+    const missingTable = (m) => /does not exist|schema cache|could not find the table/i.test(String(m || ""));
+    const netError = (m) => /fetch|network|timeout|failed to send|load failed/i.test(String(m || ""));
+    let syncOff = false; // set when 011/012 aren't applied — the app then behaves exactly as before
+    const getOutbox = () => { try { const a = JSON.parse(localStorage.getItem(OUTBOX_KEY)); return Array.isArray(a) ? a : []; } catch (e) { return []; } };
+    // Cap is generous: the seed alone can be ~600 ops (150 stops + 60 blocks + 400
+    // corners), and it must never evict an unsent expense sitting ahead of it.
+    const OUTBOX_CAP = 2000;
+    const writeOutbox = (l) => { try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(l.slice(-OUTBOX_CAP))); } catch (e) {} window.dispatchEvent(new Event(OUTBOX_EVT)); };
+    const enqueue = (op) => {
+      if (syncOff) return null;
+      const item = { qid: "q" + Date.now() + Math.random().toString(36).slice(2, 6), ts: Date.now(), tries: 0, ...op };
+      writeOutbox([...getOutbox(), item]);
+      if (navigator.onLine) setTimeout(drainOutbox, 0);
+      return item;
+    };
+    // Temp-id remap: an insert whose real id later ops depend on carries tempId.
+    // Rewriting the queued JSON is crude but exact — a temp id is a unique string
+    // that appears nowhere else, so every reference is caught wherever it sits.
+    const remapTemp = (list, tempId, realId) => {
+      const from = JSON.stringify(tempId), to = typeof realId === "number" ? String(realId) : JSON.stringify(realId);
+      try { return JSON.parse(JSON.stringify(list).split(from).join(to)); } catch (e) { return list; }
+    };
+    let draining = false;
+    async function drainOutbox() {
+      if (draining || syncOff || !navigator.onLine || !getOutbox().length) return;
+      const { data: sess } = await supabase.auth.getSession();
+      if (!sess || !sess.session) return; // signed out: keep the queue rather than lose it
+      draining = true;
+      try {
+        while (getOutbox().length) {
+          const it = getOutbox()[0];
+          let error = null, data = null;
+          try {
+            const t = supabase.from(it.table);
+            if (it.op === "upsert") { const r = await t.upsert(it.row, it.onConflict ? { onConflict: it.onConflict } : undefined); error = r.error; }
+            else if (it.op === "insert") { const r = await t.insert(it.row).select("id").single(); error = r.error; data = r.data; }
+            else if (it.op === "update") { const r = await t.update(it.row).match(it.match); error = r.error; }
+            else if (it.op === "delete") { const r = await t.delete().match(it.match); error = r.error; }
+          } catch (e) { error = e; }
+          if (error) {
+            const msg = error.message || String(error);
+            if (missingTable(msg)) { syncOff = true; console.warn("sync off — run migrations 011_stops.sql / 012_places_budget.sql:", msg); break; }
+            if (netError(msg) || !navigator.onLine) break; // still offline: stop, keep order, retry later
+            // A rejected row must not wedge everything behind it: send it to the back,
+            // and drop it after three tries rather than blocking the queue forever.
+            const rest = getOutbox().slice(1), tries = (it.tries || 0) + 1;
+            if (tries >= 3) { console.warn("dropped queued write after 3 tries", it.table, msg); writeOutbox(rest); }
+            else writeOutbox([...rest, { ...it, tries, err: msg }]);
+            continue;
+          }
+          let rest = getOutbox().slice(1);
+          if (it.tempId && data && data.id != null) rest = remapTemp(rest, it.tempId, data.id);
+          writeOutbox(rest);
+        }
+      } finally { draining = false; }
+    }
+
+    // ═══════════════════════════════════════════
     //  STOP LOGGING — dwell-detected stops, filled in whenever you have time
     //
     //  Detection is browser geolocation only: free, unlimited, no Google. A stop
@@ -1308,7 +1406,7 @@
     // you pay FOR, not places a dwell means anything, so they stay off unless switched on.
     const stopCatOn = (name, cfg) => { const o = (cfg.cats || {})[name]; return o == null ? STOP_CAT_SEED[name] != null : !!o; };
     const getStopCfg = () => { try { return { ...STOP_CFG_DEFAULT, ...(JSON.parse(localStorage.getItem(STOP_CFG_KEY)) || {}) }; } catch (e) { return { ...STOP_CFG_DEFAULT }; } };
-    const setStopCfg = (c) => { try { localStorage.setItem(STOP_CFG_KEY, JSON.stringify(c)); } catch (e) {} };
+    const setStopCfg = (c) => { try { localStorage.setItem(STOP_CFG_KEY, JSON.stringify(c)); } catch (e) {} enqueue({ table: "cost_management_stop_settings", op: "upsert", row: { cfg: c, updated_at: new Date().toISOString() }, onConflict: "user_id" }); };
     const stopMinutesFor = (cat, cfg) => {
       const per = cfg.perCat || {};
       if (cat && per[cat] != null && per[cat] !== "") return Math.max(0, Number(per[cat]));
@@ -1318,8 +1416,8 @@
     const getStops = () => { try { const a = JSON.parse(localStorage.getItem(STOPS_KEY)); return Array.isArray(a) ? a : []; } catch (e) { return []; } };
     // Keep the tail only: logged/dismissed rows are history, not a queue.
     const writeStops = (list) => { try { localStorage.setItem(STOPS_KEY, JSON.stringify(list.slice(-150))); } catch (e) {} window.dispatchEvent(new Event(STOPS_EVT)); };
-    const pushStop = (s) => { const l = getStops(); if (l.some((x) => x.id === s.id)) return; l.push(s); writeStops(l); };
-    const updateStop = (id, patch) => writeStops(getStops().map((x) => (x.id === id ? { ...x, ...patch } : x)));
+    const pushStop = (s) => { const l = getStops(); if (l.some((x) => x.id === s.id)) return; const row = { ...s, updatedAt: Date.now() }; l.push(row); writeStops(l); enqueue({ table: "cost_management_stops", op: "upsert", row: stopToRow(row), onConflict: "user_id,id" }); };
+    const updateStop = (id, patch) => { const p = { ...patch, updatedAt: Date.now() }; writeStops(getStops().map((x) => (x.id === id ? { ...x, ...p } : x))); const full = getStops().find((x) => x.id === id); if (full) enqueue({ table: "cost_management_stops", op: "upsert", row: stopToRow(full), onConflict: "user_id,id" }); };
     const hhmm = (ms) => { const d = new Date(ms); return pad2(d.getHours()) + ":" + pad2(d.getMinutes()); };
     const stopMins = (s) => Math.max(1, Math.round(((s.endedAt || Date.now()) - s.startedAt) / 60000));
     const stopCoords = (s) => Number(s.lat).toFixed(4) + ", " + Number(s.lng).toFixed(4);
@@ -1327,8 +1425,8 @@
     // Nothing is ever added automatically — no auto-learning of ignored places.
     const getStopBlocks = () => { try { const a = JSON.parse(localStorage.getItem(STOP_BLOCKS_KEY)); return Array.isArray(a) ? a : []; } catch (e) { return []; } };
     const writeStopBlocks = (l) => { try { localStorage.setItem(STOP_BLOCKS_KEY, JSON.stringify(l.slice(-60))); } catch (e) {} window.dispatchEvent(new Event(STOPS_EVT)); };
-    const addStopBlock = (pos, label) => writeStopBlocks([...getStopBlocks(), { id: "b" + Date.now(), lat: Number(pos.lat), lng: Number(pos.lng), label: label || null, ts: Date.now() }]);
-    const removeStopBlock = (id) => writeStopBlocks(getStopBlocks().filter((b) => b.id !== id));
+    const addStopBlock = (pos, label) => { const b = { id: "b" + Date.now(), lat: Number(pos.lat), lng: Number(pos.lng), label: label || null, ts: Date.now() }; writeStopBlocks([...getStopBlocks(), b]); enqueue({ table: "cost_management_stop_blocks", op: "upsert", row: { id: b.id, lat: b.lat, lng: b.lng, label: b.label }, onConflict: "user_id,id" }); };
+    const removeStopBlock = (id) => { writeStopBlocks(getStopBlocks().filter((b) => b.id !== id)); enqueue({ table: "cost_management_stop_blocks", op: "delete", match: { id } }); };
     const blockedAt = (pos, cfg) => { const R = Number((cfg || getStopCfg()).blockRadius) || 80; return getStopBlocks().find((b) => distanceMeters(pos, b) <= R) || null; };
     const stopDayLabel = (s) => { const d = new Date(s.startedAt), t = new Date(); const sameDay = ymdLocal(d) === ymdLocal(t);
       return sameDay ? "today" : `${WEEKDAYS_SHORT[d.getDay()]} ${d.getDate()} ${MONTHS_SHORT[d.getMonth() + 1]}`; };
@@ -1414,10 +1512,19 @@
 
     // Settings block: switch, thresholds, and a test stop (GPS dwell can't be waited out in a preview).
     function StopSettings() {
-      const { theme, inputStyle, labelStyle, categories, simulateStop, stopStatus } = useTheme();
+      const { theme, inputStyle, labelStyle, categories, simulateStop, stopStatus, stopPins } = useTheme();
       const [cfg, setCfgState] = useState(getStopCfg);
       const [history, setHistory] = useState(() => getStops().filter((s) => s.status !== "open").length);
       const [blocks, setBlocks] = useState(getStopBlocks);
+      const [picking, setPicking] = useState(false);
+      // You can also block a place you aren't standing in: any pinned spot, or any stop
+      // you've already seen. Nothing here is automatic — each entry is one deliberate tap.
+      const blockable = useMemo(() => {
+        const seen = new Set(), out = [];
+        getStops().slice().reverse().forEach((s) => { const k = Number(s.lat).toFixed(3) + "," + Number(s.lng).toFixed(3); if (seen.has(k)) return; seen.add(k); out.push({ key: "s" + s.id, lat: s.lat, lng: s.lng, label: s.place || s.near || "Unnamed stop", sub: stopDayLabel(s) + " · " + stopCoords(s) }); });
+        (stopPins || []).forEach((p, i) => { const k = Number(p.lat).toFixed(3) + "," + Number(p.lng).toFixed(3); if (seen.has(k)) return; seen.add(k); out.push({ key: "p" + i, lat: p.lat, lng: p.lng, label: p.shop || p.label || p.areaName || "Pinned spot", sub: "pinned · " + Number(p.lat).toFixed(4) + ", " + Number(p.lng).toFixed(4) }); });
+        return out.filter((x) => !blockedAt(x)).slice(0, 25);
+      }, [blocks, stopPins, picking]);
       useEffect(() => { const h = () => setBlocks(getStopBlocks()); window.addEventListener(STOPS_EVT, h); return () => window.removeEventListener(STOPS_EVT, h); }, []);
       useEffect(() => { const h = () => setHistory(getStops().filter((s) => s.status !== "open").length); window.addEventListener(STOPS_EVT, h); return () => window.removeEventListener(STOPS_EVT, h); }, []);
       const save = (patch) => { const n = { ...cfg, ...patch }; setCfgState(n); setStopCfg(n); };
@@ -1470,9 +1577,31 @@
             {history > 0 && <button onClick={clearHistory} style={{ border: "none", background: "none", color: theme.textDim, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Clear {history} finished</button>}
             {stopStatus && <span style={{ fontSize: 11.5, color: theme.textMuted }}>{stopStatus}</span>}
           </div>
+          <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${theme.cardBorder}` }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
+              <span style={{ ...labelStyle, marginBottom: 0 }}>Never here{blocks.length ? " · " + blocks.length : ""}</span>
+              <button onClick={() => setPicking((v) => !v)} style={{ border: `1px solid ${theme.cardBorder}`, background: picking ? theme.inputBg : "transparent", color: picking ? "#fff" : theme.primary, borderRadius: 8, padding: "4px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>{picking ? "Done" : "+ Add a place"}</button>
+            </div>
+            {!blocks.length && !picking && <div style={{ fontSize: 10.5, color: theme.textDim, lineHeight: 1.5 }}>Nowhere is blocked yet. Add home or the office here, or press “Never here” on a stop when one appears.</div>}
+            {picking && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 8 }}>
+                <div style={{ fontSize: 10.5, color: theme.textDim, marginBottom: 2 }}>Pick a place you never spend at — no need to be standing there.</div>
+                {blockable.length === 0 && <div style={{ fontSize: 11.5, color: theme.textMuted }}>No stops or pins to choose from yet.</div>}
+                {blockable.map((x) => (
+                  <button key={x.key} onClick={() => { addStopBlock(x, x.label); }} style={{ display: "flex", alignItems: "center", gap: 9, background: theme.inputBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 10, padding: "7px 10px", cursor: "pointer", fontFamily: "inherit", textAlign: "left", width: "100%" }}>
+                    <span style={{ fontSize: 14 }}>📍</span>
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ display: "block", fontSize: 12.5, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{x.label}</span>
+                      <span style={{ display: "block", fontSize: 10, color: theme.textDim }}>{x.sub}</span>
+                    </span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: theme.primary, whiteSpace: "nowrap" }}>Never here</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           {blocks.length > 0 && (
-            <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${theme.cardBorder}` }}>
-              <span style={labelStyle}>Never here · {blocks.length}</span>
+            <div style={{ marginTop: 6 }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                 {blocks.map((b) => (
                   <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 9, background: theme.inputBg, borderRadius: 10, padding: "6px 10px" }}>
@@ -1495,7 +1624,9 @@
     // unit). Three guards keep volume flat: (1) pinned shops answer first, no call;
     // (2) a coordinate cache answers a corner once ever, not once per visit;
     // (3) a per-month counter with a hard cap — at cap, pins and typing only.
-    // The counter is per device; the console quota is what makes a charge impossible.
+    // The counter and the cache are shared across devices once 012 is applied (the
+    // cap is then one real cap, not one per device); the console quota is still what
+    // makes a charge impossible.
     const PLACES_CACHE_KEY = "cm_places_cache", PLACES_CALLS_KEY = "cm_places_calls", PLACES_CFG_KEY = "cm_places_cfg", PLACES_EVT = "cm-places-changed";
     const PLACES_CFG_DEFAULT = { cap: 1000, cacheRadius: 100 };
     const getPlacesCfg = () => { try { return { ...PLACES_CFG_DEFAULT, ...(JSON.parse(localStorage.getItem(PLACES_CFG_KEY)) || {}) }; } catch (e) { return { ...PLACES_CFG_DEFAULT }; } };
@@ -1505,20 +1636,118 @@
     const setPlacesCfg = (c) => { const clean = { cap: Math.max(0, parseInt(c.cap, 10) || 0), cacheRadius: Math.max(20, parseInt(c.cacheRadius, 10) || PLACES_CFG_DEFAULT.cacheRadius) }; try { localStorage.setItem(PLACES_CFG_KEY, JSON.stringify(clean)); } catch (e) {} window.dispatchEvent(new Event(PLACES_EVT)); };
     const monthKey = () => { const d = new Date(); return d.getFullYear() + "-" + pad2(d.getMonth() + 1); };
     const getPlacesCalls = () => { try { const o = JSON.parse(localStorage.getItem(PLACES_CALLS_KEY)); return o && o.month === monthKey() ? Number(o.n) || 0 : 0; } catch (e) { return 0; } };
-    const bumpPlacesCalls = () => { const n = getPlacesCalls() + 1; try { localStorage.setItem(PLACES_CALLS_KEY, JSON.stringify({ month: monthKey(), n })); } catch (e) {} window.dispatchEvent(new Event(PLACES_EVT)); return n; };
+    const bumpPlacesCalls = () => { const n = getPlacesCalls() + 1; try { localStorage.setItem(PLACES_CALLS_KEY, JSON.stringify({ month: monthKey(), n })); } catch (e) {} window.dispatchEvent(new Event(PLACES_EVT)); enqueue({ table: "cost_management_places_usage", op: "upsert", row: { month: monthKey(), calls: n, updated_at: new Date().toISOString() }, onConflict: "user_id,month" }); return n; };
     const placesCap = () => Math.max(0, Number(getPlacesCfg().cap) || 0);
     const placesAtCap = () => getPlacesCalls() >= placesCap();
     const getPlacesCache = () => { try { const a = JSON.parse(localStorage.getItem(PLACES_CACHE_KEY)); return Array.isArray(a) ? a : []; } catch (e) { return []; } };
     // Nearest cached lookup within cacheRadius of here; the same corner never asks twice.
     const placesCacheGet = (pos) => { const R = Number(getPlacesCfg().cacheRadius) || 100; let best = null, bd = Infinity; getPlacesCache().forEach((e) => { const d = distanceMeters(pos, e); if (d <= R && d < bd) { best = e; bd = d; } }); return best ? { ...best, _d: Math.round(bd) } : null; };
-    const placesCachePut = (pos, candidates) => { const l = getPlacesCache(); l.push({ lat: pos.lat, lng: pos.lng, ts: Date.now(), candidates }); try { localStorage.setItem(PLACES_CACHE_KEY, JSON.stringify(l.slice(-400))); } catch (e) {} window.dispatchEvent(new Event(PLACES_EVT)); };
-    const clearPlacesCache = () => { try { localStorage.removeItem(PLACES_CACHE_KEY); } catch (e) {} window.dispatchEvent(new Event(PLACES_EVT)); };
+    const placesCachePut = (pos, candidates) => { const id = "c" + Date.now(); const e2 = { id, lat: pos.lat, lng: pos.lng, ts: Date.now(), candidates }; const l = getPlacesCache(); l.push(e2); try { localStorage.setItem(PLACES_CACHE_KEY, JSON.stringify(l.slice(-400))); } catch (e) {} window.dispatchEvent(new Event(PLACES_EVT)); enqueue({ table: "cost_management_places_cache", op: "upsert", row: { id, lat: pos.lat, lng: pos.lng, candidates }, onConflict: "user_id,id" }); };
+    // Forgetting corners is scoped explicitly rather than relying on RLS alone to
+    // narrow a filter-less DELETE — PostgREST rejects those, and a rejected op would
+    // leave the server cache populated for the next pull to restore.
+    const clearPlacesCache = () => { const ids = getPlacesCache().map((c) => c.id).filter(Boolean); try { localStorage.removeItem(PLACES_CACHE_KEY); } catch (e) {} window.dispatchEvent(new Event(PLACES_EVT)); ids.forEach((id) => enqueue({ table: "cost_management_places_cache", op: "delete", match: { id } })); };
     // Live counter hook: re-renders on every call, cache write or cap change.
     const usePlacesBudget = () => {
       const read = () => ({ calls: getPlacesCalls(), cap: placesCap(), cached: getPlacesCache().length });
       const [b, setB] = useState(read);
       useEffect(() => { const h = () => setB(read()); window.addEventListener(PLACES_EVT, h); return () => window.removeEventListener(PLACES_EVT, h); }, []);
       return b;
+    };
+
+    // ── Sync mapping and the pull half of the loop (queue-drain half is above) ──
+    const stopToRow = (s) => ({ id: s.id, region: s.region || "JPY", lat: s.lat, lng: s.lng, started_at: new Date(s.startedAt).toISOString(), ended_at: s.endedAt ? new Date(s.endedAt).toISOString() : null, status: s.status || "open", shop: s.shop || null, category: s.category || null, place: s.place || null, near: s.near || null, pinned: !!s.pinned, blocked: !!s.blocked, updated_at: new Date(s.updatedAt || Date.now()).toISOString() });
+    const rowToStop = (r) => ({ id: r.id, region: r.region, lat: r.lat, lng: r.lng, startedAt: new Date(r.started_at).getTime(), endedAt: r.ended_at ? new Date(r.ended_at).getTime() : null, status: r.status, shop: r.shop, category: r.category, place: r.place, near: r.near, pinned: !!r.pinned, blocked: !!r.blocked, updatedAt: new Date(r.updated_at).getTime() });
+
+    async function syncPull() {
+      if (syncOff || !navigator.onLine) return false;
+      const [s, b, cfgRes, u, pc] = await Promise.all([
+        supabase.from("cost_management_stops").select("*"),
+        supabase.from("cost_management_stop_blocks").select("*"),
+        supabase.from("cost_management_stop_settings").select("cfg").maybeSingle(),
+        supabase.from("cost_management_places_usage").select("month,calls"),
+        supabase.from("cost_management_places_cache").select("*"),
+      ]);
+      const firstErr = [s, b, cfgRes, u, pc].map((r) => r && r.error && r.error.message).find(Boolean);
+      if (firstErr && missingTable(firstErr)) { syncOff = true; console.warn("sync off — run migrations 011_stops.sql / 012_places_budget.sql:", firstErr); return false; }
+      if (s.error || b.error || u.error || pc.error) return false;
+      // Stops: union by id, newest change wins — so a stop logged on the laptop
+      // leaves the phone's panel on its next pull.
+      const byId = {};
+      getStops().forEach((x) => { byId[x.id] = x; });
+      (s.data || []).forEach((r) => { const rs = rowToStop(r), cur = byId[rs.id]; if (!cur || (rs.updatedAt || 0) >= (cur.updatedAt || 0)) byId[rs.id] = rs; });
+      writeStops(Object.values(byId).sort((a, b2) => a.startedAt - b2.startedAt));
+      // Blocks and cache: the queue is empty by the time we get here, so the server
+      // is authoritative — that is what lets a removal propagate instead of coming back.
+      writeStopBlocks((b.data || []).map((r) => ({ id: r.id, lat: r.lat, lng: r.lng, label: r.label, ts: new Date(r.created_at).getTime() })));
+      if (cfgRes && cfgRes.data && cfgRes.data.cfg) { try { localStorage.setItem(STOP_CFG_KEY, JSON.stringify({ ...STOP_CFG_DEFAULT, ...cfgRes.data.cfg })); } catch (e) {} window.dispatchEvent(new Event(STOPS_EVT)); }
+      try { localStorage.setItem(PLACES_CACHE_KEY, JSON.stringify((pc.data || []).map((r) => ({ id: r.id, lat: r.lat, lng: r.lng, ts: new Date(r.created_at).getTime(), candidates: r.candidates || [] })).slice(-400))); } catch (e) {}
+      // Counter: MAX, never a sum — a replayed queue must not double-count.
+      const row = (u.data || []).find((x) => x.month === monthKey());
+      if (row) { const merged = Math.max(Number(row.calls) || 0, getPlacesCalls()); try { localStorage.setItem(PLACES_CALLS_KEY, JSON.stringify({ month: monthKey(), n: merged })); } catch (e) {} }
+      window.dispatchEvent(new Event(PLACES_EVT));
+      return true;
+    }
+    const SYNC_SEEDED_KEY = "cm_sync_seeded";
+    // One-time backfill. Everything created before v27 was written locally with no
+    // queue behind it, so the server starts empty — and syncPull() deliberately
+    // replaces blocks and the corner cache wholesale (that is what makes a delete on
+    // one device propagate to the other). Without this, the first device to pull
+    // would erase its own pre-v27 "never here" list and remembered corners.
+    //
+    // Two guards keep it a ONE-time thing: `seedTried` means it is attempted at most
+    // once per page load; the persistent flag is only set once the drain confirmed
+    // the writes landed. The seed appends behind whatever is already queued — the cap
+    // (2,000) is sized so it can never evict those — and it is the ONLY route to the
+    // flag, so a pull can never happen on a device whose seed has not landed.
+    let seedTried = false;
+    function seedSyncFromLocal() {
+      if (syncOff || seedTried || localStorage.getItem(SYNC_SEEDED_KEY)) return false;
+      seedTried = true;
+      try {
+        getStops().forEach((s) => enqueue({ table: "cost_management_stops", op: "upsert", row: stopToRow({ ...s, updatedAt: s.updatedAt || s.startedAt || Date.now() }), onConflict: "user_id,id" }));
+        getStopBlocks().forEach((b) => enqueue({ table: "cost_management_stop_blocks", op: "upsert", row: { id: b.id, lat: b.lat, lng: b.lng, label: b.label || null }, onConflict: "user_id,id" }));
+        // Corners cached before v27 have no id (the column came with the sync work).
+        // Mint one and write it BACK locally, so "Forget corners" can later delete the
+        // matching server row — otherwise the next pull would restore what you forgot.
+        const cache = getPlacesCache().map((c, i) => ({ ...c, id: c.id || "c" + ((c.ts || Date.now()) + i) }));
+        try { localStorage.setItem(PLACES_CACHE_KEY, JSON.stringify(cache)); } catch (e) {}
+        cache.forEach((c) => enqueue({ table: "cost_management_places_cache", op: "upsert", row: { id: c.id, lat: c.lat, lng: c.lng, candidates: c.candidates || [] }, onConflict: "user_id,id" }));
+        enqueue({ table: "cost_management_stop_settings", op: "upsert", row: { cfg: getStopCfg(), updated_at: new Date().toISOString() }, onConflict: "user_id" });
+        const calls = getPlacesCalls();
+        if (calls > 0) enqueue({ table: "cost_management_places_usage", op: "upsert", row: { month: monthKey(), calls, updated_at: new Date().toISOString() }, onConflict: "user_id,month" });
+        return true;
+      } catch (e) { console.warn("sync seed failed — will retry next load", e); return false; }
+    }
+    async function syncNow() {
+      if (syncOff || !navigator.onLine) return;
+      // Seed only once signed in — a signed-out drain sends nothing, and seeding into a
+      // queue that cannot move would just sit there.
+      const { data: sess } = await supabase.auth.getSession();
+      if (!sess || !sess.session) return;
+      seedSyncFromLocal();
+      await drainOutbox();
+      if (syncOff) { seedTried = false; return; } // tables missing: nothing landed; allow the seed again after migrations + reload
+      if (getOutbox().length) return; // unsent local work (seed included): a pull here would overwrite it
+      // The flag is set ONLY when the seed was enqueued (this load) and the queue it
+      // sat in has fully drained. A device whose flag is unset and whose seed has not
+      // run this load never reaches the pull below.
+      if (!localStorage.getItem(SYNC_SEEDED_KEY)) {
+        if (!seedTried) return;
+        try { localStorage.setItem(SYNC_SEEDED_KEY, String(Date.now())); } catch (e) { return; }
+      }
+      await syncPull();
+    }
+    const useOutbox = () => {
+      const read = () => ({ pending: getOutbox().length, online: navigator.onLine, off: syncOff });
+      const [v, setV] = useState(read);
+      useEffect(() => {
+        const h = () => setV(read());
+        window.addEventListener(OUTBOX_EVT, h); window.addEventListener("online", h); window.addEventListener("offline", h);
+        const iv = setInterval(h, 5000);
+        return () => { window.removeEventListener(OUTBOX_EVT, h); window.removeEventListener("online", h); window.removeEventListener("offline", h); clearInterval(iv); };
+      }, []);
+      return v;
     };
 
     function PlacesBudgetSettings() {
@@ -1546,7 +1775,7 @@
             <div style={{ flex: 1 }}/>
             {b.cached > 0 && <button onClick={() => { if (confirm(`Forget ${b.cached} remembered corner${b.cached === 1 ? "" : "s"}? The next visit to each will cost one lookup.`)) clearPlacesCache(); }} style={{ border: "none", background: "none", color: theme.textDim, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", alignSelf: "center" }}>Forget {b.cached} corner{b.cached === 1 ? "" : "s"}</button>}
           </div>
-          <div style={{ fontSize: 10.5, color: theme.textDim, marginTop: 10, lineHeight: 1.5 }}>{b.cap === 0 ? "Google is switched off: only pinned shops, remembered corners and typing. Raise the cap to allow lookups again." : `Nearby Search bills at the Pro tier; the first 5,000 calls a month are free, so ${b.cap} stays at ¥0 with room to spare.`} This counter is per device — the quota you set in the Google Cloud console is the guard that makes a charge impossible.</div>
+          <div style={{ fontSize: 10.5, color: theme.textDim, marginTop: 10, lineHeight: 1.5 }}>{b.cap === 0 ? "Google is switched off: only pinned shops, remembered corners and typing. Raise the cap to allow lookups again." : `Nearby Search bills at the Pro tier; the first 5,000 calls a month are free, so ${b.cap} stays at ¥0 with room to spare.`} The count is shared across your devices, and remembered corners with it. The quota you set in the Google Cloud console is the guard that makes a charge impossible.</div>
         </div>
       );
     }
