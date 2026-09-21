@@ -849,7 +849,7 @@
         let watchId = null;
         if ("geolocation" in navigator) {
           watchId = navigator.geolocation.watchPosition(
-            (p) => { posRef.current = { lat: p.coords.latitude, lng: p.coords.longitude }; },
+            (p) => { posRef.current = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy, t: Date.now() }; },
             () => {}, { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 }
           );
         }
@@ -898,6 +898,147 @@
       const locSkip = (t) => { stampLocFired(t.id); flashDue(`Skipped ${t.name}`); return { ok: true }; };
       const locSnooze = (t) => setLocDismissed((prev) => prev.includes(t.id) ? prev : [...prev, t.id]);
       const locClose = () => { setLocDismissed((prev) => [...new Set([...prev, ...locDueList.map((t) => t.id)])]); setLocDueOpen(false); };
+
+      // ── Stop logging: pins → thresholds → dwell detector → the fill-in-later panel ──
+      const [stops, setStops] = useState(getStops);
+      const [stopsOpen, setStopsOpen] = useState(false);
+      const [stopStatus, setStopStatus] = useState("");
+      const [stopPins, setStopPins] = useState([]);
+      useEffect(() => { const h = () => setStops(getStops()); window.addEventListener(STOPS_EVT, h); return () => window.removeEventListener(STOPS_EVT, h); }, []);
+      const openStops = useMemo(() => stops.filter((s) => s.status === "open" && (s.region || "JPY") === currency).sort((a, b) => a.startedAt - b.startedAt), [stops, currency]);
+      useEffect(() => { if (stopsOpen && openStops.length === 0) setStopsOpen(false); }, [stopsOpen, openStops]);
+
+      // Pins are the free naming layer: every confirmed area spot, plus every located
+      // trigger. A spot names its shop by matching label, or by being the area's only shop.
+      // Pins only change when a shop's identity, name or category changes — not on every
+      // refetch that hands back a fresh `shops` array. Keyed so the three selects stay put.
+      const shopKey = useMemo(() => shops.map((s) => s.id + ":" + s.name + ":" + s.category).join("|"), [shops]);
+      useEffect(() => {
+        let dead = false;
+        (async () => {
+          const [p, a, l] = await Promise.all([
+            supabase.from("cost_management_area_points").select("id,area_id,lat,lng,radius_m,label,confirmed"),
+            supabase.from("cost_management_areas").select("id,name,region"),
+            supabase.from("cost_management_shop_locations").select("area_id,shop_id"),
+          ]);
+          if (dead) return;
+          const areaById = {}; (a.data || []).forEach((x) => { areaById[x.id] = x; });
+          const shopById = {}, shopByName = {};
+          shops.forEach((s) => { shopById[String(s.id)] = s; shopByName[s.name] = s; });
+          const inArea = {}; (l.data || []).forEach((x) => { (inArea[x.area_id] = inArea[x.area_id] || []).push(String(x.shop_id)); });
+          const out = [];
+          (p.data || []).forEach((pt) => {
+            if (pt.lat == null || pt.lng == null || pt.confirmed === false) return;
+            const ar = areaById[pt.area_id];
+            if (ar && ar.region && ar.region !== currency) return;
+            const linked = (inArea[pt.area_id] || []).map((id) => shopById[id]).filter(Boolean);
+            const sh = (pt.label && shopByName[pt.label]) || (linked.length === 1 ? linked[0] : null);
+            out.push({ lat: Number(pt.lat), lng: Number(pt.lng), radius: Number(pt.radius_m) || 200, shop: sh ? sh.name : null, category: sh ? sh.category : null, label: pt.label || null, areaName: ar ? ar.name : null });
+          });
+          locTriggers.forEach((t) => {
+            if (t.lat == null || t.lng == null || regionOf(t) !== currency) return;
+            out.push({ lat: Number(t.lat), lng: Number(t.lng), radius: Number(t.radius) || 150, shop: t.shop || null, category: t.category || null, label: t.name || null, areaName: null });
+          });
+          setStopPins(out);
+        })();
+        return () => { dead = true; };
+      }, [currency, shopKey, locTriggers]);
+
+      // Dwell evaluator, independent of triggers: it reads the position the trigger
+      // watch already keeps in posRef (no second GPS subscription, no extra battery).
+      // An anchor is held while you stay inside cfg.radius of it; crossing the
+      // category's stay threshold records ONE stop, which then tracks its own end time.
+      const stopRef = useRef({ anchor: null, since: 0, id: null, miss: 0, lastEnd: 0 });
+      useEffect(() => {
+        if (loading) return;
+        const tick = () => {
+          const cfg = getStopCfg();
+          if (!cfg.enabled) return;
+          const pos = posRef.current;
+          // Stale or sloppy fixes are skipped, not trusted: a phone in a pocket that stops
+          // reporting must not keep accruing dwell, and a 200 m indoor fix says nothing.
+          if (!pos || (pos.t && Date.now() - pos.t > 120000) || (pos.acc != null && pos.acc > 150)) return;
+          const st = stopRef.current;
+          const R = Number(cfg.radius) || 70;
+          if (!st.anchor) { stopRef.current = { anchor: { lat: pos.lat, lng: pos.lng }, since: Date.now(), id: null, miss: 0, lastEnd: 0 }; return; }
+          if (distanceMeters(pos, st.anchor) > R) {
+            // Indoor GPS jumps: one stray fix outside the radius is ignored; two in a row
+            // (40 s) means you really left, which ends any open stop and re-anchors.
+            if (st.miss < 1) { st.miss += 1; return; }
+            if (st.id) updateStop(st.id, { endedAt: Date.now() });
+            stopRef.current = { anchor: { lat: pos.lat, lng: pos.lng }, since: Date.now(), id: null, miss: 0, lastEnd: 0 };
+            return;
+          }
+          st.miss = 0;
+          // A place you marked "never here" — home, the office — raises nothing, ever.
+          if (blockedAt(st.anchor, cfg)) return;
+          // Ease the anchor toward the latest fix so it settles on where you actually stand.
+          st.anchor = { lat: st.anchor.lat * 0.8 + pos.lat * 0.2, lng: st.anchor.lng * 0.8 + pos.lng * 0.2 };
+          // While the stop is open, stamp a last-seen time every 2 min so a stop you close
+          // the app inside shows its real length instead of growing forever.
+          if (st.id && Date.now() - st.lastEnd > 120000) { st.lastEnd = Date.now(); updateStop(st.id, { endedAt: st.lastEnd }); }
+          // A pin only RESOLVES a stop when it names a real shop with a category.
+          // Area-level spots (the area's own 500 m point, or an area holding 0 or 2+ shops)
+          // resolve nothing: they can label a stop "near X" but the stop is treated as
+          // unrecognised, so the category switches can never be bypassed by them.
+          const pin = matchPin(st.anchor, stopPins.filter((p) => p.shop && p.category));
+          const hint = pin ? null : matchPin(st.anchor, stopPins.filter((p) => !p.shop || !p.category));
+          if (pin) { if (!stopCatOn(pin.category, cfg)) return; }
+          else if (!cfg.unknown) return;
+          const need = stopMinutesFor(pin && pin.category, cfg);
+          if (!st.id && (Date.now() - st.since) / 60000 >= need) {
+            const id = "s" + st.since;
+            // A reload resets the anchor, so the same visit could qualify twice.
+            // Re-adopt any open stop already sitting within the radius from the last 2h.
+            const already = getStops().find((x) => x.status === "open" && Date.now() - x.startedAt < 7200000 && distanceMeters(x, st.anchor) <= R);
+            if (already) { stopRef.current = { ...st, id: already.id }; return; }
+            pushStop({ id, region: currency, lat: st.anchor.lat, lng: st.anchor.lng, startedAt: st.since, endedAt: null, status: "open",
+              shop: pin ? pin.shop : null, category: pin ? pin.category : null,
+              place: pin ? pin.shop : null, near: hint ? (hint.areaName || hint.label) : null, pinned: !!pin });
+            vibrate(12);
+            stopRef.current = { ...st, id, lastEnd: Date.now() };
+          }
+        };
+        tick();
+        const iv = setInterval(tick, 20000);
+        return () => clearInterval(iv);
+      }, [loading, currency, stopPins]);
+
+      // Test stop: dwell can't be waited out in an embedded preview, and GPS is often
+      // blocked there — this records the current position as an already-qualified stop.
+      const simulateStop = useCallback(() => {
+        if (!("geolocation" in navigator)) { setStopStatus("No GPS here — can't place a test stop."); return; }
+        setStopStatus("Locating…");
+        navigator.geolocation.getCurrentPosition(
+          (p) => {
+            const pos = { lat: p.coords.latitude, lng: p.coords.longitude };
+            const pin = matchPin(pos, stopPins.filter((x) => x.shop && x.category));
+            const hint = pin ? null : matchPin(pos, stopPins.filter((x) => !x.shop || !x.category));
+            const need = stopMinutesFor(pin && pin.category, getStopCfg());
+            pushStop({ id: "s" + Date.now(), region: currency, lat: pos.lat, lng: pos.lng, startedAt: Date.now() - Math.max(1, need) * 60000, endedAt: Date.now(), status: "open",
+              shop: pin ? pin.shop : null, category: pin ? pin.category : null,
+              place: pin ? pin.shop : null, near: hint ? (hint.areaName || hint.label) : null, pinned: !!pin });
+            setStopStatus(pin ? `Stop added · ${pin.shop}${!stopCatOn(pin.category, getStopCfg()) ? ` (${pin.category} is off for automatic stops)` : ""}` : `Stop added · unknown place${hint ? " near " + (hint.areaName || hint.label) : ""}`);
+            setStopsOpen(true);
+          },
+          () => setStopStatus("Couldn't read your location."),
+          { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+        );
+      }, [stopPins, currency]);
+
+      const logStop = async (s, { shop, category, amount }) => {
+        if (!shop || !(Number(amount) > 0)) return { ok: false };
+        const record = { region: s.region || currency, date: ymdLocal(new Date(s.startedAt)), category: category || "Other", shop, amount: Number(amount), notes: "", expense_type: "normal", tags: "" };
+        const { error } = await supabase.from("cost_management_expenses").insert(record);
+        if (error) return { ok: false, msg: error.message };
+        updateStop(s.id, { status: "logged", loggedAt: Date.now() });
+        await fetchData(); flashDue(`Added ${shop}`); return { ok: true };
+      };
+      const dismissStop = (s) => { updateStop(s.id, { status: "dismissed" }); vibrate(8); };
+      const blockStop = (s) => { addStopBlock(s, s.place || s.near || null); updateStop(s.id, { status: "dismissed", blocked: true }); vibrate(8); };
+      // Same warning rule as the Add flow: date + shop + amount all matching is a
+      // flag, never a block — the panel offers "Log anyway".
+      const stopDup = (s, shop, amount) => RAW.find((e) => e.date === ymdLocal(new Date(s.startedAt)) && e.shop === shop && Number(e.amount) === Number(amount));
 
       const RAW = useMemo(() => data.filter((r) => regionOf(r) === currency), [data, currency]);
       const catList = useMemo(() => [...new Set(RAW.map(r => r.category))].sort(), [RAW]);
@@ -986,7 +1127,7 @@
       const bottomTabs = [tabById("add"), tabById("transactions"), tabById("overview"), tabById("smart")];
 
       return (
-        <ThemeContext.Provider value={{ theme, themeName, inputStyle, labelStyle, pillStyle, supabase, fetchData, categories, tags, getCatIcon, getCatColor, getTagIcon, getTagColor, shops: regionShops, recurring: regionRecurring, currency, changeTheme, setView, presetDate, setPresetDate, locTriggers: regionTriggers, reloadTriggers, checkLocation, locStatus }}>
+        <ThemeContext.Provider value={{ theme, themeName, inputStyle, labelStyle, pillStyle, supabase, fetchData, categories, tags, getCatIcon, getCatColor, getTagIcon, getTagColor, shops: regionShops, recurring: regionRecurring, currency, changeTheme, setView, presetDate, setPresetDate, locTriggers: regionTriggers, reloadTriggers, checkLocation, locStatus, simulateStop, stopStatus, stopPins }}>
           <div style={{minHeight:"100vh",background:theme.bg,color:theme.text,fontFamily:"'Noto Sans JP', system-ui, sans-serif"}}>
             {/* Header */}
             <div style={{background:theme.headerBg,borderBottom:`1px solid ${theme.cardBorder}`,padding:"14px 16px"}}>
@@ -1116,6 +1257,19 @@
               </div>
             )}
 
+            {/* Stops waiting to be filled in — sits above the requests reminder when both are up */}
+            {openStops.length > 0 && !stopsOpen && (
+              <div style={{ position: "fixed", bottom: (isMobile ? 84 : 18) + ((sukkiriPending.length > 0 && !reqReminderHidden && view !== "sukkiri") ? 56 : 0), left: "50%", transform: "translateX(-50%)", zIndex: 81, display: "flex", alignItems: "center", gap: 10, background: theme.headerBg, border: "1px solid rgba(245,158,11,0.45)", borderRadius: 14, padding: "10px 14px", boxShadow: "0 8px 30px rgba(0,0,0,0.45)", maxWidth: "92vw" }}>
+                <Icon name="thumbtack" size={15} style={{ color: "#f59e0b" }}/>
+                <span style={{ fontSize: 12.5, color: "#fff" }}><b>{openStops.length} stop{openStops.length === 1 ? "" : "s"} to log</b>{(() => { const u = openStops.filter((s) => !s.shop).length; return u ? ` · ${u} unnamed` : ""; })()}</span>
+                <button onClick={() => setStopsOpen(true)} style={{ border: "none", borderRadius: 8, background: theme.primary, color: "#fff", fontSize: 11.5, fontWeight: 700, padding: "6px 12px", cursor: "pointer", fontFamily: "inherit" }}>Fill in</button>
+              </div>
+            )}
+
+            {stopsOpen && openStops.length > 0 && (
+              <StopsPanel stops={openStops} onLog={logStop} onDismiss={dismissStop} onBlock={blockStop} onCheckDup={stopDup} onClose={() => setStopsOpen(false)} />
+            )}
+
             {dueModalOpen && dueList.length > 0 && (
               <RecurringDueModal items={dueList} onAdd={dueAdd} onSkip={dueSkip} onSnooze={dueSnooze} onResolve={resolveDue} onClose={dueClose} />
             )}
@@ -1131,6 +1285,269 @@
             )}
           </div>
         </ThemeContext.Provider>
+      );
+    }
+
+    // ═══════════════════════════════════════════
+    //  STOP LOGGING — dwell-detected stops, filled in whenever you have time
+    //
+    //  Detection is browser geolocation only: free, unlimited, no Google. A stop
+    //  is NAMED from your own pins (area spots + location triggers) or stays an
+    //  "unknown stop" showing its coordinates — no Places lookup is ever fired,
+    //  so an automatic collector costs nothing. Stops live in localStorage and
+    //  persist until logged or dismissed (they survive reloads and offline use).
+    // ═══════════════════════════════════════════
+    const STOPS_KEY = "cm_stops", STOP_CFG_KEY = "cm_stop_cfg", STOPS_EVT = "cm-stops-changed", STOP_BLOCKS_KEY = "cm_stop_blocks";
+    // Per-category dwell minutes, seeded from the triage decision: konbini 1,
+    // supermarket 5, clothing 10, restaurant 20. Categories not listed here use
+    // cfg.defaultMinutes (4). Every real category is editable in Settings → Triggers.
+    const STOP_CAT_SEED = { "Convenience": 1, "Konbini": 1, "コンビニ": 1, "Supermarket": 5, "Asian shop": 5, "Café": 5, "Cafe": 5, "Clothing": 10, "Shopping": 10, "Restaurant": 20, "Daily need stuffs": 4 };
+    const STOP_CFG_DEFAULT = { enabled: true, defaultMinutes: 4, radius: 70, perCat: {}, cats: {}, unknown: true, blockRadius: 80 };
+    // Stops are opt-in per category. Only categories you actually walk into and stand
+    // in are seeded on — Housing, Medical, Gifts, Transportation and the like are places
+    // you pay FOR, not places a dwell means anything, so they stay off unless switched on.
+    const stopCatOn = (name, cfg) => { const o = (cfg.cats || {})[name]; return o == null ? STOP_CAT_SEED[name] != null : !!o; };
+    const getStopCfg = () => { try { return { ...STOP_CFG_DEFAULT, ...(JSON.parse(localStorage.getItem(STOP_CFG_KEY)) || {}) }; } catch (e) { return { ...STOP_CFG_DEFAULT }; } };
+    const setStopCfg = (c) => { try { localStorage.setItem(STOP_CFG_KEY, JSON.stringify(c)); } catch (e) {} };
+    const stopMinutesFor = (cat, cfg) => {
+      const per = cfg.perCat || {};
+      if (cat && per[cat] != null && per[cat] !== "") return Math.max(0, Number(per[cat]));
+      if (cat && STOP_CAT_SEED[cat] != null) return STOP_CAT_SEED[cat];
+      return Number(cfg.defaultMinutes) || 4;
+    };
+    const getStops = () => { try { const a = JSON.parse(localStorage.getItem(STOPS_KEY)); return Array.isArray(a) ? a : []; } catch (e) { return []; } };
+    // Keep the tail only: logged/dismissed rows are history, not a queue.
+    const writeStops = (list) => { try { localStorage.setItem(STOPS_KEY, JSON.stringify(list.slice(-150))); } catch (e) {} window.dispatchEvent(new Event(STOPS_EVT)); };
+    const pushStop = (s) => { const l = getStops(); if (l.some((x) => x.id === s.id)) return; l.push(s); writeStops(l); };
+    const updateStop = (id, patch) => writeStops(getStops().map((x) => (x.id === id ? { ...x, ...patch } : x)));
+    const hhmm = (ms) => { const d = new Date(ms); return pad2(d.getHours()) + ":" + pad2(d.getMinutes()); };
+    const stopMins = (s) => Math.max(1, Math.round(((s.endedAt || Date.now()) - s.startedAt) / 60000));
+    const stopCoords = (s) => Number(s.lat).toFixed(4) + ", " + Number(s.lng).toFixed(4);
+    // "Never here" list: places YOU pointed at, one tap on the stop in front of you.
+    // Nothing is ever added automatically — no auto-learning of ignored places.
+    const getStopBlocks = () => { try { const a = JSON.parse(localStorage.getItem(STOP_BLOCKS_KEY)); return Array.isArray(a) ? a : []; } catch (e) { return []; } };
+    const writeStopBlocks = (l) => { try { localStorage.setItem(STOP_BLOCKS_KEY, JSON.stringify(l.slice(-60))); } catch (e) {} window.dispatchEvent(new Event(STOPS_EVT)); };
+    const addStopBlock = (pos, label) => writeStopBlocks([...getStopBlocks(), { id: "b" + Date.now(), lat: Number(pos.lat), lng: Number(pos.lng), label: label || null, ts: Date.now() }]);
+    const removeStopBlock = (id) => writeStopBlocks(getStopBlocks().filter((b) => b.id !== id));
+    const blockedAt = (pos, cfg) => { const R = Number((cfg || getStopCfg()).blockRadius) || 80; return getStopBlocks().find((b) => distanceMeters(pos, b) <= R) || null; };
+    const stopDayLabel = (s) => { const d = new Date(s.startedAt), t = new Date(); const sameDay = ymdLocal(d) === ymdLocal(t);
+      return sameDay ? "today" : `${WEEKDAYS_SHORT[d.getDay()]} ${d.getDate()} ${MONTHS_SHORT[d.getMonth() + 1]}`; };
+    // Nearest pin whose own radius contains the position. Pins are free to match — pure maths.
+    const matchPin = (pos, pins) => {
+      let best = null, bestD = Infinity;
+      (pins || []).forEach((p) => { const d = distanceMeters(pos, p); if (d <= (p.radius || 200) && d < bestD) { best = p; bestD = d; } });
+      return best ? { ...best, _d: Math.round(bestD) } : null;
+    };
+
+    // The panel: every unlogged stop, oldest first, each one an amount away from being an expense.
+    function StopsPanel({ stops, onLog, onDismiss, onBlock, onCheckDup, onClose }) {
+      const { theme, shops, getCatIcon, getCatColor, inputStyle } = useTheme();
+      const [drafts, setDrafts] = useState({});
+      const [busyId, setBusyId] = useState(null);
+      const [fadingId, setFadingId] = useState(null);
+      const [err, setErr] = useState("");
+      const draftOf = (s) => drafts[s.id] || { shop: s.shop || "", amount: "" };
+      const setDraft = (s, patch) => setDrafts((p) => ({ ...p, [s.id]: { ...draftOf(s), ...patch } }));
+      const catOf = (name) => { const sh = shops.find((x) => x.name === name); return sh ? sh.category : null; };
+      const shopList = useMemo(() => [...shops].sort((a, b) => (b.is_favorite ? 1 : 0) - (a.is_favorite ? 1 : 0) || a.name.localeCompare(b.name)), [shops]);
+      const doLog = async (s) => {
+        const dr = draftOf(s), amt = parseInt(dr.amount, 10);
+        if (busyId || !dr.shop || !(amt > 0)) return;
+        setBusyId(s.id); setErr("");
+        const res = await onLog(s, { shop: dr.shop, amount: amt, category: catOf(dr.shop) || s.category || "Other" });
+        setBusyId(null);
+        if (!res || !res.ok) { setErr(res && res.msg ? res.msg : "Couldn't save that one."); return; }
+        setFadingId(s.id); setTimeout(() => setFadingId(null), 300);
+      };
+      const logBtn = { flex: 1, padding: "9px 6px", borderRadius: 9, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})` };
+      const dropBtn = { padding: "9px 12px", borderRadius: 9, cursor: "pointer", fontSize: 12, fontWeight: 600, color: theme.textMuted, background: "transparent", border: `1px solid ${theme.cardBorder}`, fontFamily: "inherit" };
+      return (
+        <Modal sheet onClose={onClose}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", gap: 8 }}><Icon name="thumbtack" size={16}/>Stops to log</div>
+              <div style={{ fontSize: 11.5, color: theme.textMuted, marginTop: 3 }}>{stops.length} {stops.length === 1 ? "place" : "places"} you stopped at · they wait here until you log or drop them</div>
+            </div>
+            <button onClick={onClose} style={{ border: "none", background: theme.inputBg, color: theme.textMuted, width: 30, height: 30, borderRadius: 15, fontSize: 17, cursor: "pointer", boxShadow: `inset 0 0 0 1px ${theme.cardBorder}`, flexShrink: 0 }}>×</button>
+          </div>
+          {err && <div style={{ fontSize: 11.5, color: theme.danger, marginBottom: 9 }}>{err}</div>}
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: "62vh", overflowY: "auto" }}>
+            {stops.map((s) => {
+              const dr = draftOf(s), busy = busyId === s.id, amt = parseInt(dr.amount, 10);
+              const cat = catOf(dr.shop) || s.category;
+              const col = getCatColor(cat);
+              const ready = !!dr.shop && amt > 0;
+              const dup = ready && onCheckDup ? onCheckDup(s, dr.shop, amt) : null;
+              return (
+                <div key={s.id} className={fadingId === s.id ? "cm-fade-out" : undefined} style={{ borderRadius: 12, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${s.pinned ? theme.cardBorder : "rgba(245,158,11,0.35)"}`, padding: "11px 12px", opacity: busy ? 0.6 : 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 9 }}>
+                    <span style={{ width: 30, height: 30, borderRadius: 9, background: `${col}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>{cat ? getCatIcon(cat) : "📍"}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13.5, fontWeight: 600, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.place || "Unknown stop"}</div>
+                      <div style={{ fontSize: 10.5, color: theme.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{stopDayLabel(s)} {hhmm(s.startedAt)}{s.endedAt ? "–" + hhmm(s.endedAt) : ""} · {stopMins(s)} min · {s.pinned ? "pinned shop" : (s.near ? "near " + s.near + " · " + stopCoords(s) : stopCoords(s))}</div>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                    <select value={dr.shop} onChange={(e) => setDraft(s, { shop: e.target.value })} disabled={busy} style={{ ...inputStyle, flex: 1, minWidth: 0, padding: "9px 10px", fontSize: 13 }}>
+                      <option value="">Which shop?</option>
+                      {dr.shop && !shopList.some((sh) => sh.name === dr.shop) && <option value={dr.shop}>{dr.shop}</option>}
+                      {shopList.map((sh) => <option key={sh.id} value={sh.name}>{sh.name}</option>)}
+                    </select>
+                    <input type="number" inputMode="numeric" value={dr.amount} onChange={(e) => setDraft(s, { amount: e.target.value })} placeholder={CUR.symbol + " amount"} disabled={busy} style={{ ...inputStyle, width: 118, flexShrink: 0, padding: "9px 10px", fontSize: 13, fontWeight: 600 }} />
+                  </div>
+                  {dup && <div style={{ fontSize: 10.5, fontWeight: 600, color: theme.warning, marginBottom: 6 }}>⚠ possible duplicate — {fmt(dup.amount)} at {dup.shop} already logged on {dup.date}</div>}
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={() => doLog(s)} disabled={busy || !ready} style={{ ...logBtn, opacity: ready ? 1 : 0.5, cursor: ready ? "pointer" : "not-allowed", background: dup ? theme.warning : logBtn.background, color: dup ? "#1a1000" : "#fff" }}>{dup ? "Log anyway" : "Log"}{ready && !dup ? " " + fmt(amt) : ""}</button>
+                    <button onClick={() => onDismiss(s)} disabled={busy} style={dropBtn}>Didn't spend</button>
+                    <button onClick={() => { if (confirm(`Never raise a stop here again?\n\n${s.place || "This place"} · ${stopCoords(s)}\n\nUndo it any time in Settings → Triggers.`)) onBlock(s); }} disabled={busy} title="Home, the office — somewhere you never spend" style={{ ...dropBtn, padding: "9px 11px" }}>Never here</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <button onClick={onClose} style={{ width: "100%", marginTop: 14, padding: "11px", borderRadius: 11, border: `1px solid ${theme.cardBorder}`, background: theme.inputBg, color: theme.textMuted, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+            Close — keep them for later
+          </button>
+        </Modal>
+      );
+    }
+
+    // Settings block: switch, thresholds, and a test stop (GPS dwell can't be waited out in a preview).
+    function StopSettings() {
+      const { theme, inputStyle, labelStyle, categories, simulateStop, stopStatus } = useTheme();
+      const [cfg, setCfgState] = useState(getStopCfg);
+      const [history, setHistory] = useState(() => getStops().filter((s) => s.status !== "open").length);
+      const [blocks, setBlocks] = useState(getStopBlocks);
+      useEffect(() => { const h = () => setBlocks(getStopBlocks()); window.addEventListener(STOPS_EVT, h); return () => window.removeEventListener(STOPS_EVT, h); }, []);
+      useEffect(() => { const h = () => setHistory(getStops().filter((s) => s.status !== "open").length); window.addEventListener(STOPS_EVT, h); return () => window.removeEventListener(STOPS_EVT, h); }, []);
+      const save = (patch) => { const n = { ...cfg, ...patch }; setCfgState(n); setStopCfg(n); };
+      const savePer = (cat, v) => { const per = { ...(cfg.perCat || {}) }; if (v === "" || v == null) delete per[cat]; else per[cat] = Math.max(0, Number(v)); save({ perCat: per }); };
+      const saveCat = (cat, on) => { const cats = { ...(cfg.cats || {}) }; if (on === (STOP_CAT_SEED[cat] != null)) delete cats[cat]; else cats[cat] = on; save({ cats }); };
+      const clearHistory = () => writeStops(getStops().filter((s) => s.status === "open"));
+      const num = { ...inputStyle, width: 74, padding: "7px 9px", fontSize: 13, textAlign: "center" };
+      return (
+        <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 14, padding: "14px 14px 12px", marginBottom: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 4 }}>
+            <Icon name="thumbtack" size={15} style={{ color: "#f59e0b" }}/>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: "#fff" }}>Stop logging</div>
+              <div style={{ fontSize: 11, color: theme.textDim }}>Notices where you stay put, then waits for you to fill in the amount.</div>
+            </div>
+            <button onClick={() => save({ enabled: !cfg.enabled })} style={{ border: "none", cursor: "pointer", fontFamily: "inherit", borderRadius: 999, padding: "6px 13px", fontSize: 11.5, fontWeight: 700, flexShrink: 0, background: cfg.enabled ? theme.primary : theme.inputBg, color: cfg.enabled ? "#fff" : theme.textMuted, boxShadow: cfg.enabled ? "none" : `inset 0 0 0 1px ${theme.cardBorder}` }}>{cfg.enabled ? "On" : "Off"}</button>
+          </div>
+          <div style={{ fontSize: 10.5, color: theme.textDim, margin: "8px 0 12px", lineHeight: 1.5 }}>Names come from your pinned spots and triggers only — no place lookups, so this adds nothing to the Google bill. Unrecognised stops show their coordinates and you pick the shop.</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 12 }}>
+            <div><span style={labelStyle}>Default stay</span><div style={{ display: "flex", alignItems: "center", gap: 6 }}><input type="number" min="0" value={cfg.defaultMinutes} onChange={(e) => save({ defaultMinutes: e.target.value })} style={num}/><span style={{ fontSize: 11.5, color: theme.textMuted }}>min</span></div></div>
+            <div><span style={labelStyle}>Same-place radius</span><div style={{ display: "flex", alignItems: "center", gap: 6 }}><input type="number" min="20" value={cfg.radius} onChange={(e) => save({ radius: e.target.value })} style={num}/><span style={{ fontSize: 11.5, color: theme.textMuted }}>m</span></div></div>
+          </div>
+          <span style={labelStyle}>Which categories make a stop</span>
+          <div style={{ fontSize: 10.5, color: theme.textDim, margin: "-2px 0 8px", lineHeight: 1.5 }}>Only shops in the categories switched on here can raise a stop. Standing still at a Housing or Medical spot means nothing, so those stay off.</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 10 }}>
+            {categories.map((c) => {
+              const seeded = STOP_CAT_SEED[c.name];
+              const val = (cfg.perCat || {})[c.name];
+              const on = stopCatOn(c.name, cfg);
+              return (
+                <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 9, background: theme.inputBg, borderRadius: 10, padding: "6px 10px", opacity: on ? 1 : 0.5 }}>
+                  <span style={{ fontSize: 15 }}>{c.icon}</span>
+                  <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: theme.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
+                  {on ? <><input type="number" min="0" value={val == null ? "" : val} onChange={(e) => savePer(c.name, e.target.value)} placeholder={String(seeded != null ? seeded : cfg.defaultMinutes)} style={{ ...num, width: 62, padding: "5px 7px" }}/>
+                    <span style={{ fontSize: 11, color: theme.textDim, width: 24 }}>min</span></>
+                    : <span style={{ fontSize: 11, color: theme.textDim, width: 90, textAlign: "right" }}>no stops</span>}
+                  <button onClick={() => saveCat(c.name, !on)} title={on ? "Stop noticing this category" : "Notice stops in this category"} style={{ border: "none", cursor: "pointer", fontFamily: "inherit", borderRadius: 999, padding: "4px 10px", fontSize: 10.5, fontWeight: 700, flexShrink: 0, background: on ? theme.primary : "transparent", color: on ? "#fff" : theme.textMuted, boxShadow: on ? "none" : `inset 0 0 0 1px ${theme.cardBorder}` }}>{on ? "On" : "Off"}</button>
+                </div>
+              );
+            })}
+            <div style={{ display: "flex", alignItems: "center", gap: 9, background: theme.inputBg, borderRadius: 10, padding: "6px 10px", opacity: cfg.unknown ? 1 : 0.5 }}>
+              <span style={{ fontSize: 15 }}>📍</span>
+              <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: theme.text }}>Somewhere not pinned yet</span>
+              <span style={{ fontSize: 11, color: theme.textDim, width: 90, textAlign: "right" }}>{cfg.unknown ? `after ${Number(cfg.defaultMinutes) || 4} min` : "no stops"}</span>
+              <button onClick={() => save({ unknown: !cfg.unknown })} style={{ border: "none", cursor: "pointer", fontFamily: "inherit", borderRadius: 999, padding: "4px 10px", fontSize: 10.5, fontWeight: 700, flexShrink: 0, background: cfg.unknown ? theme.primary : "transparent", color: cfg.unknown ? "#fff" : theme.textMuted, boxShadow: cfg.unknown ? "none" : `inset 0 0 0 1px ${theme.cardBorder}` }}>{cfg.unknown ? "On" : "Off"}</button>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center" }}>
+            <button onClick={simulateStop} style={{ border: `1px solid ${theme.cardBorder}`, background: theme.inputBg, color: "#fff", borderRadius: 10, padding: "8px 13px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}><Icon name="crosshair" size={13}/>Add a stop here now</button>
+            {history > 0 && <button onClick={clearHistory} style={{ border: "none", background: "none", color: theme.textDim, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Clear {history} finished</button>}
+            {stopStatus && <span style={{ fontSize: 11.5, color: theme.textMuted }}>{stopStatus}</span>}
+          </div>
+          {blocks.length > 0 && (
+            <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${theme.cardBorder}` }}>
+              <span style={labelStyle}>Never here · {blocks.length}</span>
+              <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                {blocks.map((b) => (
+                  <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 9, background: theme.inputBg, borderRadius: 10, padding: "6px 10px" }}>
+                    <span style={{ fontSize: 14 }}>🚫</span>
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: theme.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.label || "Unnamed place"} <span style={{ color: theme.textDim, fontSize: 10.5 }}>{Number(b.lat).toFixed(4)}, {Number(b.lng).toFixed(4)}</span></span>
+                    <button onClick={() => removeStopBlock(b.id)} style={{ border: "none", background: "none", color: theme.primary, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>Notice again</button>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: 10, color: theme.textDim, marginTop: 6 }}>Anything within {Number(cfg.blockRadius) || 80} m of these never raises a stop. Only you add to this list — nothing is learned automatically.</div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ── Google Places budget guards ──
+    // Only ShopCaptureView ever calls Google (the places-nearby edge function, field
+    // mask displayName + types + location — all Pro-tier, so one call = one Pro SKU
+    // unit). Three guards keep volume flat: (1) pinned shops answer first, no call;
+    // (2) a coordinate cache answers a corner once ever, not once per visit;
+    // (3) a per-month counter with a hard cap — at cap, pins and typing only.
+    // The counter is per device; the console quota is what makes a charge impossible.
+    const PLACES_CACHE_KEY = "cm_places_cache", PLACES_CALLS_KEY = "cm_places_calls", PLACES_CFG_KEY = "cm_places_cfg", PLACES_EVT = "cm-places-changed";
+    const PLACES_CFG_DEFAULT = { cap: 1000, cacheRadius: 100 };
+    const getPlacesCfg = () => { try { return { ...PLACES_CFG_DEFAULT, ...(JSON.parse(localStorage.getItem(PLACES_CFG_KEY)) || {}) }; } catch (e) { return { ...PLACES_CFG_DEFAULT }; } };
+    // Both numbers are coerced on write, so a cleared field can never persist "" and
+    // leave the gate and the indicators disagreeing. cap 0 is legitimate and means
+    // "never call Google" — every indicator reads it that way.
+    const setPlacesCfg = (c) => { const clean = { cap: Math.max(0, parseInt(c.cap, 10) || 0), cacheRadius: Math.max(20, parseInt(c.cacheRadius, 10) || PLACES_CFG_DEFAULT.cacheRadius) }; try { localStorage.setItem(PLACES_CFG_KEY, JSON.stringify(clean)); } catch (e) {} window.dispatchEvent(new Event(PLACES_EVT)); };
+    const monthKey = () => { const d = new Date(); return d.getFullYear() + "-" + pad2(d.getMonth() + 1); };
+    const getPlacesCalls = () => { try { const o = JSON.parse(localStorage.getItem(PLACES_CALLS_KEY)); return o && o.month === monthKey() ? Number(o.n) || 0 : 0; } catch (e) { return 0; } };
+    const bumpPlacesCalls = () => { const n = getPlacesCalls() + 1; try { localStorage.setItem(PLACES_CALLS_KEY, JSON.stringify({ month: monthKey(), n })); } catch (e) {} window.dispatchEvent(new Event(PLACES_EVT)); return n; };
+    const placesCap = () => Math.max(0, Number(getPlacesCfg().cap) || 0);
+    const placesAtCap = () => getPlacesCalls() >= placesCap();
+    const getPlacesCache = () => { try { const a = JSON.parse(localStorage.getItem(PLACES_CACHE_KEY)); return Array.isArray(a) ? a : []; } catch (e) { return []; } };
+    // Nearest cached lookup within cacheRadius of here; the same corner never asks twice.
+    const placesCacheGet = (pos) => { const R = Number(getPlacesCfg().cacheRadius) || 100; let best = null, bd = Infinity; getPlacesCache().forEach((e) => { const d = distanceMeters(pos, e); if (d <= R && d < bd) { best = e; bd = d; } }); return best ? { ...best, _d: Math.round(bd) } : null; };
+    const placesCachePut = (pos, candidates) => { const l = getPlacesCache(); l.push({ lat: pos.lat, lng: pos.lng, ts: Date.now(), candidates }); try { localStorage.setItem(PLACES_CACHE_KEY, JSON.stringify(l.slice(-400))); } catch (e) {} window.dispatchEvent(new Event(PLACES_EVT)); };
+    const clearPlacesCache = () => { try { localStorage.removeItem(PLACES_CACHE_KEY); } catch (e) {} window.dispatchEvent(new Event(PLACES_EVT)); };
+    // Live counter hook: re-renders on every call, cache write or cap change.
+    const usePlacesBudget = () => {
+      const read = () => ({ calls: getPlacesCalls(), cap: placesCap(), cached: getPlacesCache().length });
+      const [b, setB] = useState(read);
+      useEffect(() => { const h = () => setB(read()); window.addEventListener(PLACES_EVT, h); return () => window.removeEventListener(PLACES_EVT, h); }, []);
+      return b;
+    };
+
+    function PlacesBudgetSettings() {
+      const { theme, inputStyle, labelStyle } = useTheme();
+      const b = usePlacesBudget();
+      const [cfg, setCfgState] = useState(getPlacesCfg);
+      const save = (patch) => { const n = { ...cfg, ...patch }; setCfgState({ cap: Math.max(0, parseInt(n.cap, 10) || 0), cacheRadius: Math.max(20, parseInt(n.cacheRadius, 10) || PLACES_CFG_DEFAULT.cacheRadius) }); setPlacesCfg(n); };
+      const pct = b.cap > 0 ? Math.min(100, Math.round((b.calls / b.cap) * 100)) : 100;
+      const at = b.calls >= b.cap;
+      const num = { ...inputStyle, width: 84, padding: "7px 9px", fontSize: 13, textAlign: "center" };
+      return (
+        <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 14, padding: "14px 14px 12px", marginBottom: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 8 }}>
+            <Icon name="crosshair" size={15} style={{ color: theme.primary }}/>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: "#fff" }}>Google lookups</div>
+              <div style={{ fontSize: 11, color: theme.textDim }}>Only “Find shops near me” asks Google. Pinned shops and remembered corners answer first, for free.</div>
+            </div>
+            <span style={{ fontSize: 13, fontWeight: 700, color: at ? theme.danger : "#fff", whiteSpace: "nowrap" }}>{b.cap === 0 ? "never ask" : <>{b.calls} <span style={{ fontSize: 11, color: theme.textMuted, fontWeight: 600 }}>/ {b.cap} this month</span></>}</span>
+          </div>
+          <div style={{ height: 6, borderRadius: 3, background: theme.inputBg, overflow: "hidden", marginBottom: 12 }}><div style={{ width: pct + "%", height: "100%", background: at ? theme.danger : pct >= 80 ? theme.warning : theme.primary, transition: "width .3s" }}/></div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <div><span style={labelStyle}>Monthly cap</span><input type="number" min="0" value={cfg.cap} onChange={(e) => save({ cap: e.target.value })} style={num}/><div style={{ fontSize: 10, color: theme.textDim, marginTop: 3 }}>0 = never ask Google</div></div>
+            <div><span style={labelStyle}>Remember corners within</span><div style={{ display: "flex", alignItems: "center", gap: 6 }}><input type="number" min="20" value={cfg.cacheRadius} onChange={(e) => save({ cacheRadius: e.target.value })} style={num}/><span style={{ fontSize: 11.5, color: theme.textMuted }}>m</span></div></div>
+            <div style={{ flex: 1 }}/>
+            {b.cached > 0 && <button onClick={() => { if (confirm(`Forget ${b.cached} remembered corner${b.cached === 1 ? "" : "s"}? The next visit to each will cost one lookup.`)) clearPlacesCache(); }} style={{ border: "none", background: "none", color: theme.textDim, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", alignSelf: "center" }}>Forget {b.cached} corner{b.cached === 1 ? "" : "s"}</button>}
+          </div>
+          <div style={{ fontSize: 10.5, color: theme.textDim, marginTop: 10, lineHeight: 1.5 }}>{b.cap === 0 ? "Google is switched off: only pinned shops, remembered corners and typing. Raise the cap to allow lookups again." : `Nearby Search bills at the Pro tier; the first 5,000 calls a month are free, so ${b.cap} stays at ¥0 with room to spare.`} This counter is per device — the quota you set in the Google Cloud console is the guard that makes a charge impossible.</div>
+        </div>
       );
     }
 
@@ -3077,7 +3494,7 @@
 
           {activeTab === "rules" && <RecurringView />}
 
-          {activeTab === "triggers" && <LocationTriggersView />}
+          {activeTab === "triggers" && <><StopSettings /><PlacesBudgetSettings /><LocationTriggersView /></>}
 
           {activeTab === "farebook" && <FareBookView />}
 
@@ -4339,7 +4756,10 @@
 
     // ═══ PHASE C — Location-based Shop Capture + category inference ═══
     function ShopCaptureView({ allExpenses }) {
-      const { theme, inputStyle, labelStyle, supabase, fetchData, categories, currency, getCatIcon } = useTheme();
+      const { theme, inputStyle, labelStyle, supabase, fetchData, categories, currency, getCatIcon, stopPins = [] } = useTheme();
+      const budget = usePlacesBudget();
+      const [candSource, setCandSource] = useState(null); // "pins" | "cache" | "google"
+      const [lastPos, setLastPos] = useState(null);
       const { insertExpense, modals } = useExpenseMutations({ onChange: fetchData });
       const [locState, setLocState] = useState("idle"); // idle | locating | picked
       const [cands, setCands] = useState(null);
@@ -4356,18 +4776,46 @@
         setInfer(inf); setSaved(false);
         setForm({ shop: name, category: inf.category, amount: "", date: ymdToday(), notes: "" });
       };
-      const locate = () => {
-        setLocErr(""); setCands(null); setForm(null);
+      // Guard order: pinned shops → remembered corner → (under cap) Google. `force`
+      // skips the first two so a mis-pinned corner can still be re-asked — it costs one call.
+      const askGoogle = async (pos) => {
+        if (placesAtCap()) { setLocErr(placesCap() === 0 ? "Google lookups are switched off — pick a pinned shop or type the name." : `Monthly Google budget used (${getPlacesCalls()}/${placesCap()}) — pick a pinned shop or type the name.`); return; }
+        setLocState("locating");
+        let res = null, err = null;
+        try { const r = await supabase.functions.invoke("places-nearby", { body: { lat: pos.lat, lng: pos.lng } }); res = r.data; err = r.error; }
+        catch (e) { err = e; }
+        setLocState("idle");
+        if (err || !res || res.error || !Array.isArray(res.candidates)) { setLocErr((res && res.reason) || (err && err.message) || "Shop lookup failed — type the name instead."); return; }
+        bumpPlacesCalls(); // the request reached Google; an empty answer still cost a unit
+        placesCachePut(pos, res.candidates);
+        if (!res.candidates.length) { setLocErr("No shops found nearby — type the name instead."); return; }
+        setCands(res.candidates.map((c) => ({ ...c, source: "google" }))); setCandSource("google"); // pick-list, never auto-select (GPS drift indoors)
+      };
+      const locate = (force = false) => {
+        setLocErr(""); setCands(null); setCandSource(null); setForm(null);
+        if (force && lastPos) { askGoogle(lastPos); return; }
         if (!("geolocation" in navigator)) { setLocErr("Location isn't available here — type the shop name instead."); return; }
         setLocState("locating");
         navigator.geolocation.getCurrentPosition(async (p) => {
-          let res = null, err = null;
-          try { const r = await supabase.functions.invoke("places-nearby", { body: { lat: p.coords.latitude, lng: p.coords.longitude } }); res = r.data; err = r.error; }
-          catch (e) { err = e; }
-          setLocState("idle");
-          if (err || !res || res.error || !Array.isArray(res.candidates)) { setLocErr((res && res.reason) || (err && err.message) || "Shop lookup failed — type the name instead."); return; }
-          if (!res.candidates.length) { setLocErr("No shops found nearby — type the name instead."); return; }
-          setCands(res.candidates); // pick-list, never auto-select (GPS drift indoors)
+          const pos = { lat: p.coords.latitude, lng: p.coords.longitude };
+          setLastPos(pos);
+          if (force) { await askGoogle(pos); return; }
+          // 1. Pinned shops within reach — pure maths, free.
+          const pinned = stopPins.filter((x) => x.shop && x.category)
+            .map((x) => ({ name: x.shop, place_types: [], distance_m: Math.round(distanceMeters(pos, x)), radius: x.radius, source: "pin" }))
+            .filter((x) => x.distance_m <= Math.max(150, x.radius || 0)).sort((a, b) => a.distance_m - b.distance_m);
+          const seen = new Set(); const uniq = pinned.filter((x) => (seen.has(x.name) ? false : (seen.add(x.name), true)));
+          if (uniq.length) { setLocState("idle"); setCands(uniq.slice(0, 6)); setCandSource("pins"); return; }
+          // 2. A corner already asked about — answer from memory.
+          const hit = placesCacheGet(pos);
+          if (hit) {
+            setLocState("idle");
+            const list = (hit.candidates || []).map((c) => ({ ...c, source: "cache" }));
+            if (list.length) { setCands(list); setCandSource("cache"); } else setLocErr("Nothing was found at this corner last time either — type the name, or search Google again.");
+            return;
+          }
+          // 3. Google, under the cap.
+          await askGoogle(pos);
         }, (e) => { setLocState("idle"); setLocErr(e.code === 1 ? "Location permission denied — type the shop name instead." : "Couldn't get your location — type the shop name instead."); }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 });
       };
       const confirm = async () => {
@@ -4389,17 +4837,26 @@
           <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 12, padding: 16 }}>
             <div style={{ fontSize: 13.5, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}><Icon name="crosshair" size={15}/>Capture this shop</div>
             <div style={{ fontSize: 11, color: theme.textDim, marginBottom: 12 }}>One tap resolves where you are, infers the category, and pre-fills the entry for you to confirm.</div>
-            <button onClick={locate} disabled={locState === "locating"} style={{ width: "100%", padding: "12px", borderRadius: 10, border: "none", cursor: locState === "locating" ? "wait" : "pointer", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})`, opacity: locState === "locating" ? 0.6 : 1 }}>{locState === "locating" ? "Finding shops near you…" : "📍 Find shops near me"}</button>
+            <button onClick={() => locate(false)} disabled={locState === "locating"} style={{ width: "100%", padding: "12px", borderRadius: 10, border: "none", cursor: locState === "locating" ? "wait" : "pointer", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})`, opacity: locState === "locating" ? 0.6 : 1 }}>{locState === "locating" ? "Finding shops near you…" : "📍 Find shops near me"}</button>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 7, fontSize: 10.5, color: theme.textDim }}>
+              <span>Pinned shops and remembered corners answer free; Google only when neither knows.</span>
+              <span style={{ whiteSpace: "nowrap", fontWeight: 600, color: budget.calls >= budget.cap ? theme.danger : theme.textMuted }}>{budget.cap === 0 ? "Google off" : `${budget.calls}/${budget.cap} lookups`}</span>
+            </div>
             {locErr && <div style={{ fontSize: 11.5, color: theme.warning, marginTop: 8 }}>{locErr}</div>}
+            {locErr && lastPos && !placesAtCap() && locErr.indexOf("Monthly") !== 0 && <button onClick={() => locate(true)} style={{ marginTop: 6, border: "none", background: "none", color: theme.primary, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>Search Google again · 1 lookup</button>}
             {cands && !form && (
               <div className="cm-slide-in" style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12 }}>
-                <div style={{ fontSize: 10.5, color: theme.textDim, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>Pick the right one — nearest isn't auto-selected</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <div style={{ fontSize: 10.5, color: theme.textDim, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>Pick the right one — nearest isn't auto-selected</div>
+                  <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 6, padding: "2px 7px", whiteSpace: "nowrap", color: candSource === "google" ? theme.warning : theme.success, background: `${candSource === "google" ? theme.warning : theme.success}16`, border: `1px solid ${candSource === "google" ? theme.warning : theme.success}44` }}>{candSource === "pins" ? "your pins · free" : candSource === "cache" ? "remembered · free" : "Google · 1 lookup"}</span>
+                </div>
                 {cands.map((c, i) => (
                   <button key={i} onClick={() => startForm(c.name, c.place_types || [])} style={{ display: "flex", alignItems: "center", gap: 10, textAlign: "left", width: "100%", padding: "10px 12px", borderRadius: 10, border: `1px solid ${theme.cardBorder}`, background: theme.inputBg, cursor: "pointer", fontFamily: "inherit" }}>
                     <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
                     {c.distance_m != null && <span style={{ fontSize: 10.5, color: theme.textMuted, whiteSpace: "nowrap" }}>{c.distance_m} m</span>}
                   </button>
                 ))}
+                {candSource !== "google" && !placesAtCap() && <button onClick={() => locate(true)} style={{ alignSelf: "flex-start", border: "none", background: "none", color: theme.textDim, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", padding: "2px 0" }}>Not here? Search Google · 1 lookup</button>}
               </div>
             )}
             <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
