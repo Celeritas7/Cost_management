@@ -286,7 +286,10 @@ function hubToRequest(h) {
   const items = Array.isArray(p.items) ? p.items.map((it) => ({ ...it })) : (p.item ? [{ name: p.quantity != null && p.quantity !== 1 ? `${p.item} ×${p.quantity}${p.unit ? " " + p.unit : ""}` : p.item, price: p.budget_cap ?? p.price ?? null, category: p.category || null, reason: p.notes || null }] : []);
   const id = p.id ?? (h.src_addr && h.src_addr.id) ?? String(h.seq);
   const itShop = (it) => it && (it.preferred_shop || it.shop);
-  const shop = (items.find(itShop) && itShop(items.find(itShop))) || p.preferred_shop || p.shop || null;
+  const shopItem = items.find(itShop);
+  let shop = null;
+  try { shop = costHub.suggestedShop(h, shopItem ? { ...shopItem, shop: itShop(shopItem) } : items[0]); } catch (e) {}
+  shop = shop || (shopItem && itShop(shopItem)) || p.preferred_shop || p.shop || null;
   items.forEach((it) => { if (it && !it.category && p.category) it.category = p.category; });
   return { ...p, id: String(id), items, from: h.from_app || "sukkiri", source: p.source || null, shop, requestedAt: p.requestedAt || h.created_at, status: h.reply && h.reply.status ? h.reply.status : "pending", resolvedAt: h.reply && h.reply.at, hub: h };
 }
@@ -6688,9 +6691,9 @@ function SukkiriRequestsView({ requests, reload }) {
 
   // Cost owns purchase_request.status. Hub rows: reply to the sender by address
   // (the row's src_addr, untouched). Pasted rows have no hub row — local only.
-  const setStatus = async (req, status, expenseIds) => {
+  const setStatus = async (req, status, expenseIds, logged) => {
     if (req.hub) {
-      try { await costHub.purchaseResolved(req.hub, status, expenseIds); }
+      try { await costHub.purchaseResolved(req.hub, status, expenseIds, logged); } // R016: logged = { shop, category } actually used
       catch (e) { flash("Couldn't reply to " + senderLabel(req.from) + ": " + e.message); return false; }
     } else {
       setPurchaseRequests(getPurchaseRequests().map((r) => String(r.id) === String(req.id) ? { ...r, status, resolvedAt: new Date().toISOString() } : r));
@@ -6715,7 +6718,7 @@ function SukkiriRequestsView({ requests, reload }) {
     setConfLoc("");
     if (!reqShop) fillFromLocation(req.id, false);
     const amts = {};
-    (req.items || []).forEach((it, i) => { amts[i] = it.priceYen != null ? it.priceYen : (it.price != null ? it.price : ""); });
+    (req.items || []).forEach((it, i) => { amts[i] = it.yen != null ? it.yen : it.priceYen != null ? it.priceYen : (it.price != null ? it.price : ""); });
     setConfAmts(amts);
   };
   const approve = async (req) => {
@@ -6725,9 +6728,10 @@ function SukkiriRequestsView({ requests, reload }) {
       const catOf = (it) => it.category || confCat || ""; // no category given → left empty, not "Other"
       const catNames = [...new Set((req.items || []).map(catOf).filter(Boolean))];
       for (const c of catNames) { if (!(await ensureCategory(c))) return; }
-      if (!(confShop || req.shop || "").trim()) { flash("Enter the shop"); return; }
+      const loggedShop = (confShop || req.shop || "").trim();
+      if (!loggedShop) { flash("Enter the shop"); return; }
       const rows = (req.items || []).map((it, i) => ({
-        region, date: confDate || ymdToday(), category: catOf(it), shop: (it.preferred_shop || it.shop || confShop || req.shop).trim(),
+        region, date: confDate || ymdToday(), category: catOf(it), shop: loggedShop,
         amount: Number(confAmts[i]) || 0,
         notes: [it.name, it.reason].filter(Boolean).join(" — "),
         expense_type: "normal", tags: "",
@@ -6740,7 +6744,8 @@ function SukkiriRequestsView({ requests, reload }) {
         if (!isTempId(res.id)) ids.push(res.id);
       }
       if (!ids.length && navigator.onLine) return;
-      if (!(await setStatus(req, "logged", ids))) return;
+      const loggedCat = rows[0].category || "";
+      if (!(await setStatus(req, "logged", ids, { shop: loggedShop, category: loggedCat || undefined }))) return;
       setConfirmId(null);
       await fetchData();
       flash(`Approved — ${rows.length} expense${rows.length === 1 ? "" : "s"} added`);
@@ -6758,7 +6763,7 @@ function SukkiriRequestsView({ requests, reload }) {
   };
 
   const reqDate = (r) => { try { const d = new Date(r.requestedAt); return `${MONTHS_SHORT[d.getMonth() + 1]} ${d.getDate()}, ${d.getFullYear()}`; } catch (e) { return ""; } };
-  const total = (r) => r.totalYen != null ? r.totalYen : (r.items || []).reduce((s, it) => s + (Number(it.priceYen != null ? it.priceYen : it.price) || 0), 0);
+  const total = (r) => r.totalYen ? r.totalYen : (r.items || []).reduce((s, it) => s + (Number(it.yen != null ? it.yen : it.priceYen != null ? it.priceYen : it.price) || 0), 0);
   const curSym = (r) => (r.currency && CURRENCIES[r.currency]) ? CURRENCIES[r.currency].symbol : "¥";
   const miniBtn = (bg, fg) => ({ padding: "7px 13px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit", background: bg, color: fg });
 
@@ -6778,7 +6783,7 @@ function SukkiriRequestsView({ requests, reload }) {
               <div style={{ color: "#fff", fontWeight: 600 }}>{it.name}{it.link ? <> · <a href={it.link} target="_blank" rel="noreferrer" style={{ color: theme.primary, fontSize: 11 }}>link</a></> : null}</div>
               {it.reason && <div style={{ color: theme.textDim, fontSize: 11, marginTop: 1 }}>{it.reason}</div>}
             </div>
-            <span style={{ color: theme.textMuted, whiteSpace: "nowrap", fontWeight: 600 }}>{curSym(req)}{Number(it.priceYen != null ? it.priceYen : it.price || 0).toLocaleString()}</span>
+            <span style={{ color: theme.textMuted, whiteSpace: "nowrap", fontWeight: 600 }}>{curSym(req)}{(Number(it.yen != null ? it.yen : it.priceYen != null ? it.priceYen : it.price) || 0).toLocaleString()}</span>
           </div>
         ))}
       </div>

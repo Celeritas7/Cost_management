@@ -86,11 +86,11 @@
       /** R013 — Cost's purchase list IS the hub rows, not a localStorage copy, so a
        *  request is visible on every device. Open = no reply yet, or reply pending/approved
        *  (approved still awaits logging). Pass { all: true } for history.
-       *  R014 — any sender (sukkiri, wf, …). Show row.from_app in the panel. */
+       *  R014 — any sender (sukkiri, wf, …). Show row.from_app in the panel.
+       *  R016 — reads akatsuki_purchases: each row also carries plan_shop (WF's plan). */
       async purchaseInbox({ all = false } = {}) {
-        const { data, error } = await supabase.from('akatsuki_requests')
-          .select('seq,from_app,src_addr,payload,reply,reply_seq,created_at')
-          .eq('to_app', APP).eq('kind', 'purchase_request')
+        const { data, error } = await supabase.from('akatsuki_purchases')
+          .select('seq,from_app,src_addr,payload,reply,reply_seq,created_at,plan_shop')
           .order('seq', { ascending: false });
         if (error) throw new Error(error.message);
         const open = (r) => !r.reply || ['pending', 'approved'].includes(r.reply.status);
@@ -100,10 +100,18 @@
       /** Cost owns purchase_request.status. Call on approve / reject / log.
        *  R013: by address (the row's src_addr, passed through untouched), not by seq —
        *  approved → logged is two replies on one row, each with a new reply_seq. */
-      async purchaseResolved(row, status, expenseIds) {
-        return hub.reply(row.from_app || 'sukkiri', 'purchase_request', row.src_addr, {
-          id: row.payload.id, status, expense_ids: expenseIds || [], at: new Date().toISOString()
-        });
+      async purchaseResolved(row, status, expenseIds, { shop, category } = {}) {
+        const reply = { id: row.payload.id, status, expense_ids: expenseIds || [], at: new Date().toISOString() };
+        if (shop) reply.shop = shop;               // R016 — the shop it was LOGGED at
+        if (category) reply.category = category;
+        return hub.reply(row.from_app || 'sukkiri', 'purchase_request', row.src_addr, reply);
+      },
+
+      /** R016 — the shop to pre-fill at logging. The user may still change it.
+       *  Order: WF plan → item shop → payload preferred_shop → null (then location). */
+      suggestedShop(row, item) {
+        const p = row.payload || {};
+        return row.plan_shop || (item && item.shop) || p.preferred_shop || p.shop || null;
       },
 
       /* ---- inbound ---------------------------------------------------------
@@ -172,7 +180,9 @@
  *                                 the cost_management_purchase_requests read)
  *   purchase approve     6277   → costHub.purchaseResolved(row, 'approved', [])
  *   purchase reject             → costHub.purchaseResolved(row, 'rejected')
- *   expense logged from request → costHub.purchaseResolved(row, 'logged', ids)   after insert
+ *   expense logged from request → costHub.purchaseResolved(row, 'logged', ids, { shop, category })
+ *                                 after insert; shop = what was actually logged (R016)
+ *   log form pre-fill           → costHub.suggestedShop(row, item)   then location fallback
  *   costHub.listen({ onPurchaseRequest: () => renderPurchases() })   once, after sign-in
  *   mergePurchaseRequests 335   → DELETE once listen() is live; the localStorage
  *                                 keys cost_management_purchase_requests and
