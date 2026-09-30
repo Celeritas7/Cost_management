@@ -281,6 +281,7 @@ function setPurchaseRequests(list) {
 // until every sender publishes; a pasted copy of a hub row is dropped.
 const SENDER_LABEL = { sukkiri: "Sukkiri", wf: "Weekly Focus", cost: "Cost", paste: "Pasted" };
 const senderLabel = (k) => SENDER_LABEL[k] || (k ? k.charAt(0).toUpperCase() + k.slice(1) : "App");
+const lineYen = (it) => it.yen != null ? it.yen : (it.price != null ? it.price : null);
 function hubToRequest(h) {
   const p = h.payload || {};
   const items = Array.isArray(p.items) ? p.items.map((it) => ({ ...it })) : (p.item ? [{ name: p.quantity != null && p.quantity !== 1 ? `${p.item} ×${p.quantity}${p.unit ? " " + p.unit : ""}` : p.item, price: p.budget_cap ?? p.price ?? null, category: p.category || null, reason: p.notes || null }] : []);
@@ -6693,9 +6694,10 @@ function SukkiriRequestsView({ requests, reload }) {
   // (the row's src_addr, untouched). Pasted rows have no hub row — local only.
   const setStatus = async (req, status, expenseIds, logged) => {
     if (req.hub) {
-      try { await costHub.purchaseResolved(req.hub, status, expenseIds, logged); } // R016: logged = { shop, category } actually used
-      catch (e) { flash("Couldn't reply to " + senderLabel(req.from) + ": " + e.message); return false; }
+      try { const r = await costHub.purchaseResolved(req.hub, status, expenseIds, logged); console.info("[AK2] akatsuki_reply ok", { req: req.id, seq: req.hub.seq, status, result: r }); } // R016: logged = { shop, category } actually used
+      catch (e) { console.error("[AK3] akatsuki_reply failed", { req: req.id, seq: req.hub.seq, status, error: e.message, code: e.code }); flash("Couldn't reply to " + senderLabel(req.from) + ": " + e.message); return false; }
     } else {
+      console.warn("[AK3] no hub row — local-only status, no reply sent", { req: req.id, status });
       setPurchaseRequests(getPurchaseRequests().map((r) => String(r.id) === String(req.id) ? { ...r, status, resolvedAt: new Date().toISOString() } : r));
     }
     reload(); return true;
@@ -6718,7 +6720,7 @@ function SukkiriRequestsView({ requests, reload }) {
     setConfLoc("");
     if (!reqShop) fillFromLocation(req.id, false);
     const amts = {};
-    (req.items || []).forEach((it, i) => { amts[i] = it.yen != null ? it.yen : it.priceYen != null ? it.priceYen : (it.price != null ? it.price : ""); });
+    (req.items || []).forEach((it, i) => { amts[i] = (lineYen(it) != null ? lineYen(it) : ""); });
     setConfAmts(amts);
   };
   const approve = async (req) => {
@@ -6741,11 +6743,16 @@ function SukkiriRequestsView({ requests, reload }) {
       for (const row of rows) { // one at a time: the reply carries the expense ids
         const res = await insertExpenseWithId(row);
         if (!res.ok) { flash("Insert failed: " + res.error); break; }
-        if (!isTempId(res.id)) ids.push(res.id);
+        ids.push(res.id);
       }
-      if (!ids.length && navigator.onLine) return;
+      if (!ids.length) return;
+      // Inserts that queued behind the outbox come back as tmp_ ids. Give the flush a few
+      // seconds to map them, then reply regardless — the reply must never be skipped.
+      const real = () => ids.map((i) => isTempId(i) ? TEMP_IDS[i] : i).filter((i) => i != null && !isTempId(i));
+      for (let w = 0; w < 20 && navigator.onLine && real().length < ids.length; w++) await new Promise((r) => setTimeout(r, 500));
       const loggedCat = rows[0].category || "";
-      if (!(await setStatus(req, "logged", ids, { shop: loggedShop, category: loggedCat || undefined }))) return;
+      console.info("[AK1] confirm logged", { req: req.id, seq: req.hub && req.hub.seq, shop: loggedShop, category: loggedCat, expense_ids: real(), queued: ids.length - real().length });
+      if (!(await setStatus(req, "logged", real(), { shop: loggedShop, category: loggedCat || undefined }))) return;
       setConfirmId(null);
       await fetchData();
       flash(`Approved — ${rows.length} expense${rows.length === 1 ? "" : "s"} added`);
@@ -6763,7 +6770,7 @@ function SukkiriRequestsView({ requests, reload }) {
   };
 
   const reqDate = (r) => { try { const d = new Date(r.requestedAt); return `${MONTHS_SHORT[d.getMonth() + 1]} ${d.getDate()}, ${d.getFullYear()}`; } catch (e) { return ""; } };
-  const total = (r) => r.totalYen ? r.totalYen : (r.items || []).reduce((s, it) => s + (Number(it.yen != null ? it.yen : it.priceYen != null ? it.priceYen : it.price) || 0), 0);
+  const total = (r) => r.totalYen ? r.totalYen : (r.items || []).reduce((s, it) => s + (Number(lineYen(it)) || 0), 0);
   const curSym = (r) => (r.currency && CURRENCIES[r.currency]) ? CURRENCIES[r.currency].symbol : "¥";
   const miniBtn = (bg, fg) => ({ padding: "7px 13px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit", background: bg, color: fg });
 
@@ -6783,7 +6790,7 @@ function SukkiriRequestsView({ requests, reload }) {
               <div style={{ color: "#fff", fontWeight: 600 }}>{it.name}{it.link ? <> · <a href={it.link} target="_blank" rel="noreferrer" style={{ color: theme.primary, fontSize: 11 }}>link</a></> : null}</div>
               {it.reason && <div style={{ color: theme.textDim, fontSize: 11, marginTop: 1 }}>{it.reason}</div>}
             </div>
-            <span style={{ color: theme.textMuted, whiteSpace: "nowrap", fontWeight: 600 }}>{curSym(req)}{(Number(it.yen != null ? it.yen : it.priceYen != null ? it.priceYen : it.price) || 0).toLocaleString()}</span>
+            <span style={{ color: theme.textMuted, whiteSpace: "nowrap", fontWeight: 600 }}>{lineYen(it) != null ? curSym(req) + Number(lineYen(it)).toLocaleString() : "—"}</span>
           </div>
         ))}
       </div>
