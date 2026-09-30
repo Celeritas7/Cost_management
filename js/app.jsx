@@ -254,34 +254,17 @@ function isRecurringDue(rec, today, sessionSnoozed) {
 // "things to buy" here via localStorage or pasted JSON. Requests hold items
 // to purchase; approving logs them as expenses. A periodic reminder banner
 // surfaces pending requests on every screen.
-const REQUESTS_KEY = "cost_management_purchase_requests";
-const LEGACY_REQUEST_KEYS = ["sukkiri_cost_requests"]; // older per-app keys, absorbed on read
-function getPurchaseRequests() {
-  let list;
-  try { const v = JSON.parse(localStorage.getItem(REQUESTS_KEY)); list = Array.isArray(v) ? v : []; }
-  catch (e) { list = []; }
-  // absorb legacy per-app keys so old senders keep working
-  LEGACY_REQUEST_KEYS.forEach((k) => {
-    try {
-      const v = JSON.parse(localStorage.getItem(k));
-      if (Array.isArray(v) && v.length) {
-        v.forEach((r) => { if (r && r.id && !list.some((x) => x.id === r.id)) list.push(r); });
-        localStorage.removeItem(k);
-        localStorage.setItem(REQUESTS_KEY, JSON.stringify(list));
-      }
-    } catch (e) {}
-  });
-  return list;
-}
-function setPurchaseRequests(list) {
-  try { localStorage.setItem(REQUESTS_KEY, JSON.stringify(list)); } catch (e) {}
-}
+// The paste fallback is gone: every sender publishes through the hub. Drop its two keys once.
+["cost_management_purchase_requests", "sukkiri_cost_requests"].forEach((k) => { try { localStorage.removeItem(k); } catch (e) {} });
 // R014 — the hub is the source of truth: akatsuki_requests rows to_app='cost',
-// kind='purchase_request', from any sender (sukkiri, wf, …). Pasted JSON stays
-// until every sender publishes; a pasted copy of a hub row is dropped.
-const SENDER_LABEL = { sukkiri: "Sukkiri", wf: "Weekly Focus", cost: "Cost", paste: "Pasted" };
+// kind='purchase_request', from any sender (sukkiri, wf, …).
+const SENDER_LABEL = { sukkiri: "Sukkiri", wf: "Weekly Focus", cost: "Cost" };
 const senderLabel = (k) => SENDER_LABEL[k] || (k ? k.charAt(0).toUpperCase() + k.slice(1) : "App");
 const lineYen = (it) => it.yen != null ? it.yen : (it.price != null ? it.price : null);
+// A shop changed here without logging (the request stays open). Local to this phone; never sent to the hub.
+const SHOP_OVERRIDE_KEY = "cm_req_shop";
+const shopOverrides = () => readJSON(SHOP_OVERRIDE_KEY, {});
+const setShopOverride = (id, shop, category) => { try { const m = shopOverrides(); if (shop) m[String(id)] = { shop, category: category || "" }; else delete m[String(id)]; localStorage.setItem(SHOP_OVERRIDE_KEY, JSON.stringify(m)); } catch (e) {} };
 function hubToRequest(h) {
   const p = h.payload || {};
   const items = Array.isArray(p.items) ? p.items.map((it) => ({ ...it })) : (p.item ? [{ name: p.quantity != null && p.quantity !== 1 ? `${p.item} ×${p.quantity}${p.unit ? " " + p.unit : ""}` : p.item, price: p.budget_cap ?? p.price ?? null, category: p.category || null, reason: p.notes || null }] : []);
@@ -292,23 +275,11 @@ function hubToRequest(h) {
   try { shop = costHub.suggestedShop(h, shopItem ? { ...shopItem, shop: itShop(shopItem) } : items[0]); } catch (e) {}
   shop = shop || (shopItem && itShop(shopItem)) || p.preferred_shop || p.shop || null;
   items.forEach((it) => { if (it && !it.category && p.category) it.category = p.category; });
-  return { ...p, id: String(id), items, from: h.from_app || "sukkiri", source: p.source || null, shop, requestedAt: p.requestedAt || h.created_at, status: h.reply && h.reply.status ? h.reply.status : "pending", resolvedAt: h.reply && h.reply.at, hub: h };
+  const ov = shopOverrides()[String(id)];
+  if (ov && ov.shop) shop = ov.shop;
+  return { ...p, id: String(id), items, from: h.from_app || "sukkiri", source: p.source || null, shop, shopOverride: ov || null, requestedAt: p.requestedAt || h.created_at, status: h.reply && h.reply.status ? h.reply.status : "pending", resolvedAt: h.reply && h.reply.at, hub: h };
 }
 const reqIsOpen = (r) => !r.status || r.status === "pending" || r.status === "approved";
-function mergeRequestSources(hubRows, pasted) {
-  const seen = new Set(hubRows.map((h) => String((h.payload && h.payload.id) ?? (h.src_addr && h.src_addr.id) ?? h.seq)));
-  return [...hubRows.map(hubToRequest), ...pasted.filter((r) => !seen.has(String(r.id))).map((r) => ({ ...r, id: String(r.id), from: "paste" }))];
-}
-function mergePurchaseRequests(incoming) {
-  const arr = Array.isArray(incoming) ? incoming : [incoming];
-  const valid = arr.filter((r) => r && r.type === "purchase_request" && r.id && Array.isArray(r.items));
-  if (!valid.length) return { list: getPurchaseRequests(), added: 0 };
-  const list = getPurchaseRequests();
-  let added = 0;
-  valid.forEach((r) => { if (!list.some((x) => x.id === r.id)) { list.push({ source: "unknown", ...r }); added++; } });
-  setPurchaseRequests(list);
-  return { list, added };
-}
 
 // ═════════════════════════════════════════════════════════════
 //  WEEKLY FOCUS TASKS — tasks authored in the Weekly Focus app arrive
@@ -577,14 +548,12 @@ function App({ session, onSignOut }) {
   const dueShownRef = useRef(false); // open the due modal at most once per session
   // ── Location triggers (geofence + time-of-day window) ──
   const [locTriggers, setLocTriggers] = useState(() => getStoredTriggers());
-  const [pastedReqs, setPastedReqs] = useState(() => getPurchaseRequests());
   const [hubReqRows, setHubReqRows] = useState([]);
   const reloadSukkiri = useCallback(async () => {
-    setPastedReqs(getPurchaseRequests());
     if (!navigator.onLine) return;
     try { setHubReqRows(await costHub.purchaseInbox({ all: true })); } catch (e) { console.warn("[akatsuki] purchase inbox failed", e.message); }
   }, []);
-  const sukkiriReqs = useMemo(() => mergeRequestSources(hubReqRows, pastedReqs), [hubReqRows, pastedReqs]);
+  const sukkiriReqs = useMemo(() => hubReqRows.map(hubToRequest), [hubReqRows]);
   const sukkiriPending = useMemo(() => sukkiriReqs.filter(reqIsOpen), [sukkiriReqs]);
   useEffect(() => startRequestHub(), []); // hub needs the signed-in session; App only mounts with one
   useEffect(() => { reloadSukkiri(); return costHub.listen({ onPurchaseRequest: () => reloadSukkiri() }); }, []); // acks new purchase_requests, then re-reads the inbox
@@ -1220,7 +1189,10 @@ function App({ session, onSignOut }) {
           {loading ? (
             <div style={{textAlign:"center",padding:50,color:theme.textMuted}}>Loading…</div>
           ) : view === "add" ? (
-            <AddEntryView recentEntries={recentEntries} allExpenses={RAW} />
+            <>
+              <ToLogStrip requests={sukkiriPending} reload={reloadSukkiri} onOpenRequests={() => { reloadSukkiri(); setView("sukkiri"); }} />
+              <AddEntryView recentEntries={recentEntries} allExpenses={RAW} />
+            </>
           ) : view === "overview" ? (
             <OverviewView {...{filtered,totalSpend,monthlyAvg,dailyAvg,monthlyData,catData,topShops}} allExpenses={RAW} />
           ) : view === "calendar" ? (
@@ -1267,7 +1239,7 @@ function App({ session, onSignOut }) {
         )}
 
         {/* Purchase-requests reminder — floats on every screen while requests are pending */}
-        {sukkiriPending.length > 0 && !reqReminderHidden && view !== "sukkiri" && (
+        {sukkiriPending.length > 0 && !reqReminderHidden && view !== "sukkiri" && view !== "add" && (
           <div style={{ position: "fixed", bottom: isMobile ? 84 : 18, left: "50%", transform: "translateX(-50%)", zIndex: 80, display: "flex", alignItems: "center", gap: 10, background: theme.headerBg, border: `1px solid ${theme.primary}55`, borderRadius: 14, padding: "10px 14px", boxShadow: `0 8px 30px rgba(0,0,0,0.45)`, maxWidth: "92vw" }}>
             <span style={{ fontSize: 16 }}>🛒</span>
             <span style={{ fontSize: 12.5, color: "#fff" }}><b>{sukkiriPending.reduce((s, r) => s + (r.items ? r.items.length : 0), 0)} item{sukkiriPending.reduce((s, r) => s + (r.items ? r.items.length : 0), 0) === 1 ? "" : "s"} to buy</b> · {sukkiriPending.length} request{sukkiriPending.length === 1 ? "" : "s"} waiting</span>
@@ -1278,7 +1250,7 @@ function App({ session, onSignOut }) {
 
         {/* Offline / unsent-work badge — above the stops pill, which sits above the requests reminder */}
         {(outbox.pending > 0 || !outbox.online) && (
-          <div style={{ position: "fixed", bottom: (isMobile ? 84 : 18) + ((sukkiriPending.length > 0 && !reqReminderHidden && view !== "sukkiri") ? 56 : 0) + ((openStops.length > 0 && !stopsOpen) ? 56 : 0), left: "50%", transform: "translateX(-50%)", zIndex: 82, display: "flex", alignItems: "center", gap: 10, background: theme.headerBg, border: `1px solid ${outbox.online ? theme.cardBorder : "rgba(239,68,68,0.45)"}`, borderRadius: 14, padding: "9px 13px", boxShadow: "0 8px 30px rgba(0,0,0,0.45)", maxWidth: "92vw" }}>
+          <div style={{ position: "fixed", bottom: (isMobile ? 84 : 18) + ((sukkiriPending.length > 0 && !reqReminderHidden && view !== "sukkiri" && view !== "add") ? 56 : 0) + ((openStops.length > 0 && !stopsOpen) ? 56 : 0), left: "50%", transform: "translateX(-50%)", zIndex: 82, display: "flex", alignItems: "center", gap: 10, background: theme.headerBg, border: `1px solid ${outbox.online ? theme.cardBorder : "rgba(239,68,68,0.45)"}`, borderRadius: 14, padding: "9px 13px", boxShadow: "0 8px 30px rgba(0,0,0,0.45)", maxWidth: "92vw" }}>
             <span style={{ width: 8, height: 8, borderRadius: 4, background: outbox.online ? theme.warning : theme.danger, flexShrink: 0 }}/>
             <span style={{ fontSize: 12, color: "#fff" }}>{!outbox.online ? (outbox.pending > 0 ? `Offline · ${outbox.pending} waiting to sync` : "Offline · saving on this device") : `${outbox.pending} waiting to sync`}</span>
             {outbox.online && <button onClick={() => syncNow()} style={{ border: "none", borderRadius: 8, background: theme.primary, color: "#fff", fontSize: 11.5, fontWeight: 700, padding: "5px 11px", cursor: "pointer", fontFamily: "inherit" }}>Sync now</button>}
@@ -1287,7 +1259,7 @@ function App({ session, onSignOut }) {
 
         {/* Stops waiting to be filled in — sits above the requests reminder when both are up */}
         {openStops.length > 0 && !stopsOpen && (
-          <div style={{ position: "fixed", bottom: (isMobile ? 84 : 18) + ((sukkiriPending.length > 0 && !reqReminderHidden && view !== "sukkiri") ? 56 : 0), left: "50%", transform: "translateX(-50%)", zIndex: 81, display: "flex", alignItems: "center", gap: 10, background: theme.headerBg, border: "1px solid rgba(245,158,11,0.45)", borderRadius: 14, padding: "10px 14px", boxShadow: "0 8px 30px rgba(0,0,0,0.45)", maxWidth: "92vw" }}>
+          <div style={{ position: "fixed", bottom: (isMobile ? 84 : 18) + ((sukkiriPending.length > 0 && !reqReminderHidden && view !== "sukkiri" && view !== "add") ? 56 : 0), left: "50%", transform: "translateX(-50%)", zIndex: 81, display: "flex", alignItems: "center", gap: 10, background: theme.headerBg, border: "1px solid rgba(245,158,11,0.45)", borderRadius: 14, padding: "10px 14px", boxShadow: "0 8px 30px rgba(0,0,0,0.45)", maxWidth: "92vw" }}>
             <Icon name="thumbtack" size={15} style={{ color: "#f59e0b" }}/>
             <span style={{ fontSize: 12.5, color: "#fff" }}><b>{openStops.length} stop{openStops.length === 1 ? "" : "s"} to log</b>{(() => { const u = openStops.filter((s) => !s.shop).length; return u ? ` · ${u} unnamed` : ""; })()}</span>
             <button onClick={() => setStopsOpen(true)} style={{ border: "none", borderRadius: 8, background: theme.primary, color: "#fff", fontSize: 11.5, fontWeight: 700, padding: "6px 12px", cursor: "pointer", fontFamily: "inherit" }}>Fill in</button>
@@ -6647,16 +6619,203 @@ function RequestInboxView() {
   );
 }
 
+//  PURCHASE LOGGING — shared by the Requests tab and the Add screen's "To log" strip.
+//  One request → its expenses inserted → exactly one `logged` reply to the sender.
+const LOGGED_KEY = "cm_req_logged"; // requests that already produced expenses here (last 500)
+const loggedMark = () => readJSON(LOGGED_KEY, {});
+const markLogged = (id, ids, shop, category) => { try { const m = loggedMark(); m[String(id)] = { ids, shop, category, at: new Date().toISOString() }; const k = Object.keys(m); k.slice(0, Math.max(0, k.length - 500)).forEach((x) => delete m[x]); localStorage.setItem(LOGGED_KEY, JSON.stringify(m)); } catch (e) {} };
+const loggedHere = (req) => { const m = loggedMark()[String(req.id)]; return m ? (Array.isArray(m) ? { ids: m } : m) : null; }; // older marks were a bare id array
+function usePurchaseLogger(reload) {
+  const { supabase, fetchData, categories } = useTheme();
+  const ensureCategory = async (name) => {
+    if (categories.some((c) => c.name === name)) return true;
+    const { error } = await supabase.from("cost_management_categories").insert({ name, icon: "🛒", color: "#10b981", sort_order: categories.length + 1 });
+    return !(error && !/duplicate/i.test(error.message));
+  };
+  // Cost owns purchase_request.status. Reply to the sender by address (the row's src_addr, untouched).
+  const reply = async (req, status, expenseIds, logged) => {
+    if (!req.hub) { console.warn("[ak] reply failed — no hub row", { req: req.id, status }); return { ok: false, error: "no hub row" }; }
+    try { const r = await costHub.purchaseResolved(req.hub, status, expenseIds, logged); console.info("[ak] reply ok", { req: req.id, seq: req.hub.seq, status, result: r }); return { ok: true }; }
+    catch (e) { console.error("[ak] reply failed", { req: req.id, seq: req.hub.seq, status, error: e.message, code: e.code }); return { ok: false, error: "Couldn't reply to " + senderLabel(req.from) + ": " + e.message }; }
+  };
+  // amounts: { [itemIndex]: value }. Items priced 0 are skipped. Per-item category wins over the form's.
+  const logRequest = async (req, { shop, category, date, amounts }) => {
+    const region = (req.currency && CURRENCIES[req.currency]) ? req.currency : "JPY";
+    const loggedShop = (shop || req.shop || "").trim();
+    if (!loggedShop) return { ok: false, error: "Enter the shop" };
+    const catOf = (it) => it.category || category || ""; // no category given → left empty, not "Other"
+    for (const c of [...new Set((req.items || []).map(catOf).filter(Boolean))]) { if (!(await ensureCategory(c))) return { ok: false, error: `Couldn't create ${c} category` }; }
+    const rows = (req.items || []).map((it, i) => ({
+      region, date: date || ymdToday(), category: catOf(it), shop: loggedShop,
+      amount: Number(amounts[i]) || 0,
+      notes: [it.name, it.reason].filter(Boolean).join(" — "),
+      expense_type: "normal", tags: "",
+    })).filter((r) => r.amount > 0);
+    if (!rows.length) return { ok: false, error: "Set at least one price above zero" };
+    const ids = []; let insertError = null;
+    for (const row of rows) { // one at a time: the reply carries the expense ids
+      const res = await insertExpenseWithId(row);
+      if (!res.ok) { insertError = "Insert failed: " + res.error; break; }
+      ids.push(res.id);
+    }
+    if (!ids.length) return { ok: false, error: insertError };
+    const loggedCat = rows[0].category || "";
+    markLogged(req.id, ids, loggedShop, loggedCat);
+    setShopOverride(req.id, null);
+    const r = await sendLogged(req, ids, loggedShop, loggedCat);
+    if (!r.ok) return { ok: false, error: r.error, inserted: ids.length };
+    return { ok: true, count: ids.length, warn: insertError };
+  };
+  // Inserts that queued behind the outbox come back as tmp_ ids. Give the flush a few
+  // seconds to map them, then reply regardless — the reply must never be skipped.
+  const sendLogged = async (req, ids, shop, category) => {
+    const real = () => ids.map((i) => isTempId(i) ? TEMP_IDS[i] : i).filter((i) => i != null && !isTempId(i));
+    for (let w = 0; w < 20 && navigator.onLine && real().length < ids.length; w++) await new Promise((r) => setTimeout(r, 500));
+    console.info("[ak] confirm logged", { req: req.id, seq: req.hub && req.hub.seq, shop, category, expense_ids: real(), queued: ids.length - real().length });
+    return reply(req, "logged", real(), { shop, category: category || undefined });
+  };
+  // Expenses exist here but the logged reply never landed (offline, RPC error): resend it, never re-insert.
+  const resendLogged = async (req) => {
+    const m = loggedHere(req);
+    if (!m) return { ok: false, error: "Nothing logged here for this request" };
+    return sendLogged(req, m.ids || [], m.shop || req.shop || "", m.category || "");
+  };
+  // Refused once expenses exist here — even if the logged reply never reached the hub, the purchase happened.
+  const rejectRequest = async (req) => {
+    if (loggedHere(req)) { console.warn("[ak] reject refused — expenses already logged", { req: req.id, seq: req.hub && req.hub.seq }); return { ok: false, error: "Already logged as expenses — can't reject" }; }
+    return reply(req, "rejected");
+  };
+  const finish = async () => { reload(); await fetchData(); };
+  return { logRequest, rejectRequest, resendLogged, finish };
+}
+
+//  TO LOG — open purchase requests on the Add screen, grouped by the shop they're planned for
+//  (akatsuki_purchases.plan_shop, else the request's own shop). At the till: tap the shop group,
+//  confirm amounts once → every item in it is logged with shop and category set, one reply per request.
+const planShopOf = (r) => (r.shopOverride && r.shopOverride.shop) || (r.hub && r.hub.plan_shop) || r.shop || "";
+function ToLogStrip({ requests, reload, onOpenRequests }) {
+  const { theme, inputStyle, categories, shops } = useTheme();
+  const { logRequest, finish } = usePurchaseLogger(reload);
+  const [openKey, setOpenKey] = useState(null);
+  const [f, setF] = useState({ shop: "", category: "", date: ymdToday(), amts: {} });
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState(null);
+  const flash = (m) => { setToast(m); setTimeout(() => setToast(null), 2600); };
+  const catForShop = (name) => { const sh = (shops || []).find((x) => x.name === name); return sh && sh.category ? sh.category : ""; };
+  const stuck = useMemo(() => requests.filter(loggedHere), [requests]); // logged here, reply not yet on the hub
+  const groups = useMemo(() => {
+    const m = new Map();
+    requests.filter((r) => !loggedHere(r)).forEach((r) => { const shop = planShopOf(r), k = shop || "\u0000"; if (!m.has(k)) m.set(k, { key: k, shop, reqs: [] }); m.get(k).reqs.push(r); });
+    return [...m.values()].sort((a, b) => (a.shop ? 0 : 1) - (b.shop ? 0 : 1) || b.reqs.length - a.reqs.length);
+  }, [requests]);
+  useEffect(() => { if (openKey && !groups.some((g) => g.key === openKey)) setOpenKey(null); }, [groups, openKey]);
+  if (!requests.length) return null;
+  const itemsOf = (g) => g.reqs.reduce((s, r) => s + (r.items || []).length, 0);
+  const plannedOf = (g) => g.reqs.reduce((s, r) => s + (r.items || []).reduce((x, it) => x + (Number(lineYen(it)) || 0), 0), 0);
+  const totalItems = groups.reduce((s, g) => s + itemsOf(g), 0);
+  const cur = (r) => (r.currency && CURRENCIES[r.currency]) ? CURRENCIES[r.currency].symbol : "¥";
+  const open = (g) => {
+    if (openKey === g.key) { setOpenKey(null); return; }
+    const amts = {};
+    g.reqs.forEach((r) => (r.items || []).forEach((it, i) => { amts[r.id + ":" + i] = lineYen(it) != null ? lineYen(it) : ""; }));
+    const withCat = g.reqs.flatMap((r) => r.items || []).find((it) => it && it.category);
+    const ovCat = (g.reqs.find((r) => r.shopOverride && r.shopOverride.category) || {}).shopOverride;
+    setF({ shop: g.shop, category: (ovCat && ovCat.category) || (withCat && withCat.category) || catForShop(g.shop), date: ymdToday(), amts });
+    setOpenKey(g.key);
+  };
+  const confirm = async (g) => {
+    if (!f.shop.trim()) { flash("Enter the shop"); return; }
+    setBusy(true);
+    try {
+      let n = 0, told = 0, err = null;
+      for (const r of g.reqs) { // one logged reply per request
+        const amounts = {}; (r.items || []).forEach((it, i) => { amounts[i] = f.amts[r.id + ":" + i]; });
+        const res = await logRequest(r, { shop: f.shop, category: f.category, date: f.date, amounts });
+        if (res.ok) { n += res.count; told++; } else { err = res.error; if (res.inserted) break; }
+      }
+      await finish();
+      if (told) { setOpenKey(null); flash(`✓ ${n} expense${n === 1 ? "" : "s"} at ${f.shop.trim()} — ${told} request${told === 1 ? "" : "s"} told${err ? " · " + err : ""}`); }
+      else flash(err || "Nothing logged");
+    } finally { setBusy(false); }
+  };
+  const saveShop = (g) => {
+    const s = f.shop.trim();
+    if (!s) { flash("Enter the shop"); return; }
+    g.reqs.forEach((r) => setShopOverride(r.id, s, f.category));
+    setOpenKey(null); reload();
+    flash(`Moved to ${s} — not logged`);
+  };
+  const openG = groups.find((g) => g.key === openKey);
+  const lbl = { fontSize: 10, fontWeight: 600, letterSpacing: 0.6, textTransform: "uppercase", color: theme.textDim, display: "block", marginBottom: 4 };
+  const btn = (bg, fg) => ({ border: "none", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit", background: bg, color: fg });
+  return (
+    <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 14, padding: "12px 14px", marginBottom: 14 }}>
+      {toast && <div style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 1000, padding: "9px 16px", borderRadius: 9, fontSize: 12, fontWeight: 600, background: theme.primary, color: "#fff", maxWidth: "calc(100vw - 32px)" }}>{toast}</div>}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <span style={{ fontSize: 14 }}>🛒</span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: "#fff", flex: 1, minWidth: 0 }}>To log <span style={{ color: theme.textMuted, fontWeight: 600 }}>· {totalItems} item{totalItems === 1 ? "" : "s"}</span></span>
+        <button onClick={onOpenRequests} style={{ ...btn("none", theme.primary), padding: "4px 2px", fontSize: 11.5 }}>Requests →</button>
+      </div>
+      {stuck.length > 0 && <div style={{ fontSize: 11, color: theme.warning, marginBottom: groups.length ? 8 : 0 }}>{stuck.length} request{stuck.length === 1 ? "" : "s"} logged here but the sender wasn't told — resend from Requests.</div>}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        {groups.map((g) => { const on = g.key === openKey, planned = plannedOf(g); return (
+          <button key={g.key} onClick={() => open(g)} style={{ ...btn(on ? theme.primary : theme.inputBg, on ? "#fff" : theme.text), borderRadius: 12, padding: "9px 13px", minHeight: 44, textAlign: "left", display: "flex", flexDirection: "column", gap: 2, boxShadow: on ? "none" : `inset 0 0 0 1px ${theme.inputBorder}` }}>
+            <span style={{ fontSize: 13, fontWeight: 700 }}>{g.shop || "Shop not set"}</span>
+            <span style={{ fontSize: 11, opacity: on ? 0.9 : 0.75, fontWeight: 500 }}>{itemsOf(g)} item{itemsOf(g) === 1 ? "" : "s"}{planned > 0 ? ` · ${cur(g.reqs[0])}${planned.toLocaleString()} planned` : ""}{g.reqs.length > 1 ? ` · ${g.reqs.length} requests` : ""}</span>
+          </button>); })}
+      </div>
+      {openG && (
+        <div style={{ marginTop: 12, background: theme.inputBg, borderRadius: 10, padding: "11px 12px", boxShadow: `inset 0 0 0 1px ${theme.primary}44` }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 9 }}>
+            <div style={{ flex: "1 1 160px" }}>
+              <label style={lbl}>Bought at</label>
+              <input list="tolog-shops" value={f.shop} onChange={(e) => { const v = e.target.value; setF((x) => ({ ...x, shop: v, category: catForShop(v) || x.category })); }} placeholder="Shop name…" style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} />
+              <datalist id="tolog-shops">{shops.map((s) => <option key={s.id} value={s.name} />)}</datalist>
+            </div>
+            <div style={{ flex: "1 1 140px" }}>
+              <label style={lbl}>Category</label>
+              <select value={f.category} onChange={(e) => setF((x) => ({ ...x, category: e.target.value }))} style={{ ...inputStyle, width: "100%", boxSizing: "border-box", cursor: "pointer" }}>
+                <option value="">— none —</option>
+                {categories.map((c) => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={lbl}>Date</label>
+              <input type="date" value={f.date} max={ymdToday()} onChange={(e) => setF((x) => ({ ...x, date: e.target.value }))} style={{ ...inputStyle, boxSizing: "border-box" }} />
+            </div>
+          </div>
+          {openG.reqs.map((r) => (
+            <div key={r.id} style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 10.5, color: theme.textDim, marginBottom: 4 }}><span style={{ background: `${theme.primary}22`, color: theme.primary, borderRadius: 6, padding: "1px 6px", fontSize: 10, fontWeight: 700, marginRight: 6 }}>{senderLabel(r.from)}</span>{(r.items || []).length} item{(r.items || []).length === 1 ? "" : "s"}</div>
+              {(r.items || []).map((it, i) => { const k = r.id + ":" + i; return (
+                <div key={k} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
+                  <span style={{ fontSize: 12, color: "#fff", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}{it.category && it.category !== f.category ? <span style={{ color: theme.textDim, fontSize: 10.5 }}> · {it.category}</span> : null}</span>
+                  <input inputMode="numeric" value={f.amts[k] ?? ""} onChange={(e) => { const v = e.target.value.replace(/[^0-9.]/g, ""); setF((x) => ({ ...x, amts: { ...x.amts, [k]: v } })); }} placeholder={cur(r)} style={{ ...inputStyle, width: 96, textAlign: "right", boxSizing: "border-box" }} />
+                </div>); })}
+            </div>
+          ))}
+          <div style={{ fontSize: 10.5, color: theme.textDim, margin: "2px 0 9px" }}>Items priced 0 are skipped. Real prices from the till beat the app's estimates.</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button disabled={busy} onClick={() => confirm(openG)} style={{ ...btn(theme.primary, "#fff"), flex: 1, padding: "10px", opacity: busy ? 0.6 : 1 }}>{busy ? "Adding…" : `Confirm — add ${itemsOf(openG)} expense${itemsOf(openG) === 1 ? "" : "s"}`}</button>
+            <button disabled={busy} onClick={() => saveShop(openG)} title="Change the shop only — nothing is logged" style={{ ...btn(theme.cardBg, theme.text), padding: "10px 14px" }}>Save shop</button>
+            <button onClick={() => setOpenKey(null)} style={{ ...btn(theme.cardBg, theme.text), padding: "10px 14px" }}>Back</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 //  PURCHASE REQUESTS INBOX  (buy-requests from companion apps)
 // ╔══ kept under the historical component name ══
 function SukkiriRequestsView({ requests, reload }) {
-  const { theme, inputStyle, supabase, fetchData, categories, shops } = useTheme();
-  const [pasteOpen, setPasteOpen] = useState(false);
-  const [pasteVal, setPasteVal] = useState("");
+  const { theme, inputStyle, categories, shops } = useTheme();
+  const { logRequest, rejectRequest, resendLogged, finish } = usePurchaseLogger(reload);
   const [busyId, setBusyId] = useState(null);
   const [toast, setToast] = useState(null);
   // approve confirm step: pick shop/date, adjust prices before inserting
   const [confirmId, setConfirmId] = useState(null);
+  const [rejectId, setRejectId] = useState(null); // Reject asks once before replying
   const [confShop, setConfShop] = useState("");
   const [confDate, setConfDate] = useState(ymdToday());
   const [confAmts, setConfAmts] = useState({});
@@ -6688,85 +6847,46 @@ function SukkiriRequestsView({ requests, reload }) {
   const hideDone = (ids) => setHiddenDone((h) => { const n = new Set(h); ids.forEach((i) => n.add(String(i))); try { localStorage.setItem("cm_req_hidden", JSON.stringify([...n].slice(-500))); } catch (e) {} return n; });
   const pending = requests.filter(reqIsOpen);
   const handled = requests.filter((r) => !reqIsOpen(r) && !hiddenDone.has(String(r.id))).sort((a, b) => (Date.parse(a.resolvedAt) || 0) - (Date.parse(b.resolvedAt) || 0));
-  const hubCount = requests.filter((r) => r.hub).length;
-
-  // Cost owns purchase_request.status. Hub rows: reply to the sender by address
-  // (the row's src_addr, untouched). Pasted rows have no hub row — local only.
-  const setStatus = async (req, status, expenseIds, logged) => {
-    if (req.hub) {
-      try { const r = await costHub.purchaseResolved(req.hub, status, expenseIds, logged); console.info("[AK2] akatsuki_reply ok", { req: req.id, seq: req.hub.seq, status, result: r }); } // R016: logged = { shop, category } actually used
-      catch (e) { console.error("[AK3] akatsuki_reply failed", { req: req.id, seq: req.hub.seq, status, error: e.message, code: e.code }); flash("Couldn't reply to " + senderLabel(req.from) + ": " + e.message); return false; }
-    } else {
-      console.warn("[AK3] no hub row — local-only status, no reply sent", { req: req.id, status });
-      setPurchaseRequests(getPurchaseRequests().map((r) => String(r.id) === String(req.id) ? { ...r, status, resolvedAt: new Date().toISOString() } : r));
-    }
-    reload(); return true;
-  };
-
-  const ensureCategory = async (name) => {
-    if (categories.some((c) => c.name === name)) return true;
-    const { error } = await supabase.from("cost_management_categories").insert({ name, icon: "🛒", color: "#10b981", sort_order: categories.length + 1 });
-    if (error && !/duplicate/i.test(error.message)) { flash(`Couldn't create ${name} category`); return false; }
-    return true;
-  };
-
 
   const startApprove = (req) => {
     setConfirmId(req.id);
-    setConfShop(req.shop || (req.from === "paste" ? req.source : "") || "");
-    const reqShop = req.shop || (req.from === "paste" ? req.source : "") || "";
-    setConfCat(((req.items || []).find((it) => it && it.category) || {}).category || catForShop(reqShop));
+    const reqShop = req.shop || "";
+    setConfShop(reqShop);
+    setConfCat((req.shopOverride && req.shopOverride.category) || ((req.items || []).find((it) => it && it.category) || {}).category || catForShop(reqShop));
     setConfDate(ymdToday());
     setConfLoc("");
     if (!reqShop) fillFromLocation(req.id, false);
     const amts = {};
-    (req.items || []).forEach((it, i) => { amts[i] = (lineYen(it) != null ? lineYen(it) : ""); });
+    (req.items || []).forEach((it, i) => { amts[i] = lineYen(it) != null ? lineYen(it) : ""; });
     setConfAmts(amts);
   };
   const approve = async (req) => {
     setBusyId(req.id);
     try {
-      const region = (req.currency && CURRENCIES[req.currency]) ? req.currency : "JPY";
-      const catOf = (it) => it.category || confCat || ""; // no category given → left empty, not "Other"
-      const catNames = [...new Set((req.items || []).map(catOf).filter(Boolean))];
-      for (const c of catNames) { if (!(await ensureCategory(c))) return; }
-      const loggedShop = (confShop || req.shop || "").trim();
-      if (!loggedShop) { flash("Enter the shop"); return; }
-      const rows = (req.items || []).map((it, i) => ({
-        region, date: confDate || ymdToday(), category: catOf(it), shop: loggedShop,
-        amount: Number(confAmts[i]) || 0,
-        notes: [it.name, it.reason].filter(Boolean).join(" — "),
-        expense_type: "normal", tags: "",
-      })).filter((r) => r.amount > 0);
-      if (!rows.length) { flash("Set at least one price above zero"); return; }
-      const ids = [];
-      for (const row of rows) { // one at a time: the reply carries the expense ids
-        const res = await insertExpenseWithId(row);
-        if (!res.ok) { flash("Insert failed: " + res.error); break; }
-        ids.push(res.id);
-      }
-      if (!ids.length) return;
-      // Inserts that queued behind the outbox come back as tmp_ ids. Give the flush a few
-      // seconds to map them, then reply regardless — the reply must never be skipped.
-      const real = () => ids.map((i) => isTempId(i) ? TEMP_IDS[i] : i).filter((i) => i != null && !isTempId(i));
-      for (let w = 0; w < 20 && navigator.onLine && real().length < ids.length; w++) await new Promise((r) => setTimeout(r, 500));
-      const loggedCat = rows[0].category || "";
-      console.info("[AK1] confirm logged", { req: req.id, seq: req.hub && req.hub.seq, shop: loggedShop, category: loggedCat, expense_ids: real(), queued: ids.length - real().length });
-      if (!(await setStatus(req, "logged", real(), { shop: loggedShop, category: loggedCat || undefined }))) return;
+      const res = await logRequest(req, { shop: confShop, category: confCat, date: confDate, amounts: confAmts });
+      if (!res.ok) { flash(res.error); if (res.inserted) { setConfirmId(null); await finish(); } return; }
       setConfirmId(null);
-      await fetchData();
-      flash(`Approved — ${rows.length} expense${rows.length === 1 ? "" : "s"} added`);
+      await finish();
+      flash(`Approved — ${res.count} expense${res.count === 1 ? "" : "s"} added${res.warn ? " · " + res.warn : ""}`);
     } finally { setBusyId(null); }
   };
-  const reject = async (req) => { if (await setStatus(req, "rejected")) flash("Request rejected"); };
-
-  const importPaste = () => {
-    let parsed;
-    try { parsed = JSON.parse(pasteVal); } catch (e) { flash("That's not valid JSON"); return; }
-    const { added } = mergePurchaseRequests(parsed);
-    reload();
-    if (added) { setPasteVal(""); setPasteOpen(false); flash(`Imported ${added} request${added === 1 ? "" : "s"}`); }
-    else flash("No new requests found (already imported or wrong format)");
+  const reject = async (req) => {
+    setRejectId(null);
+    const res = await rejectRequest(req);
+    if (!res.ok) { flash(res.error); return; }
+    reload(); flash("Request rejected");
+  };
+  const saveShopOnly = (req) => {
+    const s = confShop.trim();
+    if (!s) { flash("Enter the shop"); return; }
+    setShopOverride(req.id, s, confCat);
+    setConfirmId(null); reload();
+    flash(`Shop saved: ${s} — not logged`);
+  };
+  const resend = async (req) => {
+    setBusyId(req.id);
+    try { const res = await resendLogged(req); if (!res.ok) { flash(res.error); return; } await finish(); flash(`${senderLabel(req.from)} told — logged`); }
+    finally { setBusyId(null); }
   };
 
   const reqDate = (r) => { try { const d = new Date(r.requestedAt); return `${MONTHS_SHORT[d.getMonth() + 1]} ${d.getDate()}, ${d.getFullYear()}`; } catch (e) { return ""; } };
@@ -6826,16 +6946,28 @@ function SukkiriRequestsView({ requests, reload }) {
               <input autoFocus={i === 0} inputMode="numeric" value={confAmts[i] ?? ""} onChange={(e) => setConfAmts((a) => ({ ...a, [i]: e.target.value.replace(/[^0-9.]/g, "") }))} placeholder={curSym(req)} style={{ ...inputStyle, width: 96, textAlign: "right", boxSizing: "border-box" }} />
             </div>
           ))}
-          <div style={{ fontSize: 10.5, color: theme.textDim, margin: "2px 0 9px" }}>Items priced 0 are skipped. Real prices from the till beat the app's estimates.</div>
+          <div style={{ fontSize: 10.5, color: theme.textDim, margin: "2px 0 9px" }}>Items priced 0 are skipped. Real prices from the till beat the app's estimates. Save shop changes the shop only — nothing is logged.</div>
           <div style={{ display: "flex", gap: 8 }}>
             <button disabled={busyId === req.id} onClick={() => approve(req)} style={{ ...miniBtn(theme.primary, "#fff"), flex: 1, padding: "10px", opacity: busyId === req.id ? 0.6 : 1 }}>{busyId === req.id ? "Adding…" : "Confirm — add expenses"}</button>
+            <button disabled={busyId === req.id} onClick={() => saveShopOnly(req)} title="Change the shop only — nothing is logged, the request stays open" style={{ ...miniBtn(theme.inputBg, theme.text), padding: "10px 14px" }}>Save shop</button>
             <button onClick={() => setConfirmId(null)} style={{ ...miniBtn(theme.inputBg, theme.text), padding: "10px 14px" }}>Back</button>
           </div>
         </div>
+      ) : rejectId === req.id ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 11, flexWrap: "wrap" }}>
+          <span style={{ flex: "1 1 140px", fontSize: 12, fontWeight: 600, color: "#fff" }}>Reject this request?</span>
+          <button onClick={() => reject(req)} style={{ ...miniBtn(theme.danger, "#fff"), padding: "10px 16px" }}>Reject</button>
+          <button onClick={() => setRejectId(null)} style={{ ...miniBtn(theme.inputBg, theme.text), padding: "10px 16px" }}>Keep</button>
+        </div>
+      ) : loggedHere(req) ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 11, flexWrap: "wrap" }}>
+          <span style={{ flex: "1 1 160px", fontSize: 11.5, color: theme.warning }}>Logged here{loggedHere(req).shop ? ` at ${loggedHere(req).shop}` : ""} — {senderLabel(req.from)} wasn't told yet.</span>
+          <button disabled={busyId === req.id} onClick={() => resend(req)} style={{ ...miniBtn(theme.primary, "#fff"), padding: "10px 16px", opacity: busyId === req.id ? 0.6 : 1 }}>{busyId === req.id ? "Sending…" : "Resend reply"}</button>
+        </div>
       ) : (
         <div style={{ display: "flex", gap: 8, marginTop: 11 }}>
-          <button onClick={() => startApprove(req)} style={{ ...miniBtn(theme.primary, "#fff"), flex: 1, padding: "10px" }}>Approve…</button>
-          <button onClick={() => reject(req)} style={{ ...miniBtn(`${theme.danger}22`, theme.danger), padding: "10px 16px" }}>Reject</button>
+          <button onClick={() => { setRejectId(null); startApprove(req); }} style={{ ...miniBtn(theme.primary, "#fff"), flex: 1, padding: "10px" }}>Approve…</button>
+          <button onClick={() => setRejectId(req.id)} style={{ ...miniBtn(`${theme.danger}22`, theme.danger), padding: "10px 16px" }}>Reject</button>
         </div>
       )}
     </div>
@@ -6847,19 +6979,12 @@ function SukkiriRequestsView({ requests, reload }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
         <div>
           <h3 style={{ fontSize: 15, fontWeight: 700, color: "#fff", margin: 0 }}>🛒 Purchase Requests</h3>
-          <p style={{ fontSize: 11, color: theme.textDim, margin: "4px 0 0" }}>Buy-requests from companion apps (Sukkiri, Weekly Focus). Approving logs each item as an expense and tells the sender.{hubCount === 0 && " Paste is a fallback until the sender publishes through the hub."}</p>
+          <p style={{ fontSize: 11, color: theme.textDim, margin: "4px 0 0" }}>Buy-requests from companion apps (Sukkiri, Weekly Focus). Approving logs each item as an expense and tells the sender.</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={() => { reload(); flash("Refreshed"); }} style={miniBtn(theme.inputBg, theme.text)}>Refresh</button>
-          {hubCount === 0 && <button onClick={() => setPasteOpen((o) => !o)} style={miniBtn(pasteOpen ? theme.primary : theme.inputBg, pasteOpen ? "#fff" : theme.text)}>Paste request</button>}
         </div>
       </div>
-      {pasteOpen && (
-        <div style={{ marginTop: 12 }}>
-          <textarea value={pasteVal} onChange={(e) => setPasteVal(e.target.value)} placeholder='Paste the request JSON copied from the sending app…' rows={5} style={{ ...inputStyle, fontFamily: "monospace", fontSize: 11.5, resize: "vertical", width: "100%", boxSizing: "border-box" }} />
-          <button onClick={importPaste} style={{ ...miniBtn(theme.primary, "#fff"), marginTop: 8 }}>Import</button>
-        </div>
-      )}
       <div style={{ marginTop: 14 }}>
         {pending.length === 0 && <div style={{ textAlign: "center", padding: "26px 10px", color: theme.textDim, fontSize: 12 }}>No pending requests — they appear here when a companion app sends one.</div>}
         {pending.map((r) => card(r, false))}
