@@ -4297,6 +4297,27 @@ const JR_LINES = [
     ["Shin-Matsudo",57.5],["Shin-Yahashira",61.6],["Higashi-Matsudo",64.0],["Ichikawa-Ono",65.9],
     ["Funabashi-Hoten",68.9],["Nishi-Funabashi",71.8],
   ] },
+  // Phase 15a — the lines that make a SECOND route possible. Each is a
+  // service as you ride it, positioned by published 営業キロ, so a change of
+  // line in the graph is a change of train on the platform.
+  { id: "keihin_tohoku", name: "Keihin-Tohoku Line", source: "営業キロ 東京起点 (東北本線) · ja.wikipedia 京浜東北線 駅一覧", stations: [
+    ["Tokyo",0.0],["Kanda",1.3],["Akihabara",2.0],["Okachimachi",3.0],["Ueno",3.6],["Uguisudani",4.7],
+    ["Nippori",5.8],["Nishi-Nippori",6.3],["Tabata",7.1],["Kami-Nakazato",8.8],["Oji",9.9],["Higashi-Jujo",11.4],
+    ["Akabane",13.2],["Kawaguchi",15.8],["Nishi-Kawaguchi",17.8],["Warabi",19.7],["Minami-Urawa",22.5],["Urawa",24.2],
+    ["Kita-Urawa",26.0],["Yono",27.6],["Saitama-Shintoshin",28.7],["Omiya",30.3],
+  ] },
+  { id: "sobu_local", name: "Chuo-Sobu Line (local)", source: "営業キロ 千葉起点 (総武本線 + 錦糸町–御茶ノ水 支線) · ja.wikipedia 中央・総武緩行線 駅一覧", stations: [
+    ["Chiba",0.0],["Nishi-Chiba",1.4],["Inage",3.3],["Shin-Kemigawa",6.0],["Makuhari",7.6],["Makuhari-Hongo",9.6],
+    ["Tsudanuma",12.5],["Higashi-Funabashi",14.2],["Funabashi",16.0],["Nishi-Funabashi",18.6],["Shimosanakayama",20.2],
+    ["Motoyawata",21.8],["Ichikawa",23.8],["Koiwa",26.4],["Shin-Koiwa",29.2],["Hirai",31.0],["Kameido",32.9],
+    ["Kinshicho",34.4],["Ryogoku",35.8],["Asakusabashi",36.7],["Akihabara",37.8],["Ochanomizu",38.7],
+  ] },
+  // Only the stretch the local does NOT run. East of Kinshicho the rapid
+  // shares the local's kilometres; modelling it there too would flood the
+  // candidate list with rapid/local permutations of one identical route.
+  { id: "sobu_rapid", name: "Sobu Rapid Line", source: "営業キロ 東京起点 · ja.wikipedia 総武本線 (東京–錦糸町 4.8 km)", stations: [
+    ["Tokyo",0.0],["Kinshicho",4.8],
+  ] },
 ];
 
 // 特定区間 · the 12 corridors that SURVIVED the 2026 revision keep a fare
@@ -4319,21 +4340,27 @@ const JR_SPECIAL = [
 // a hyphen the user did not happen to type.
 const stnKey = (s) => String(s || "").toLowerCase().replace(/[\s\-–—·'’.]/g, "");
 
-const JR_INDEX = (() => { const m = new Map(); JR_LINES.forEach((L) => L.stations.forEach(([n]) => m.set(stnKey(n), n))); return m; })();
+const JR_INDEX = (() => { const m = new Map(); JR_LINES.forEach((L) => L.stations.forEach(([n]) => { const k = stnKey(n); if (!m.has(k)) m.set(k, n); })); return m; })();
+// One edge per adjacent station pair, carrying every line that runs it.
 const JR_ADJ = (() => {
   const adj = new Map();
-  const link = (a, b, km, line) => { const k = stnKey(a); const l = adj.get(k) || []; l.push({ to: stnKey(b), km, line }); adj.set(k, l); };
-  JR_LINES.forEach((L) => { for (let i = 1; i < L.stations.length; i++) { const [a, ka] = L.stations[i - 1], [b, kb] = L.stations[i]; const w = Math.abs(kb - ka); link(a, b, w, L.id); link(b, a, w, L.id); } });
+  const link = (a, b, km, line) => { const l = adj.get(a) || []; let e = l.find((x) => x.to === b); if (!e) { e = { to: b, km, lines: [] }; l.push(e); } else e.km = Math.min(e.km, km); if (!e.lines.includes(line)) e.lines.push(line); adj.set(a, l); };
+  JR_LINES.forEach((L) => { for (let i = 1; i < L.stations.length; i++) { const [a, ka] = L.stations[i - 1], [b, kb] = L.stations[i]; const w = Math.abs(kb - ka); link(stnKey(a), stnKey(b), w, L.id); link(stnKey(b), stnKey(a), w, L.id); } });
   return adj;
 })();
 const JR_SPECIAL_MAP = (() => { const m = new Map(); JR_SPECIAL.forEach(([a, b, ic, tk]) => { const k = [stnKey(a), stnKey(b)].sort().join("|"); m.set(k, { fare_ic: ic, fare_ticket: tk }); }); return m; })();
+const jrLineName = (id) => (JR_LINES.find((L) => L.id === id) || {}).name || id;
+const jrEdge = (a, b) => (JR_ADJ.get(a) || []).find((e) => e.to === b);
+const jrKm = (nodes) => { let k = 0; for (let i = 1; i < nodes.length; i++) k += jrEdge(nodes[i - 1], nodes[i]).km; return Math.round(k * 10) / 10; };
 
-// Shortest path by fare kilometres (Dijkstra). Japanese fares are charged on
-// the WHOLE through journey, not per leg, so pricing the endpoints over the
-// real network is more correct than adding hop fares together.
-function jrRoute(from, to) {
-  const s = stnKey(from), t = stnKey(to);
-  if (!s || !t || s === t || !JR_ADJ.has(s) || !JR_ADJ.has(t)) return null;
+// ── Phase 15a · route candidates (engine only) ──
+const JR_ROUTE_K = 5;          // candidates returned
+const JR_YEN_RAW = 12;         // raw paths explored before pruning
+const JR_ROUTE_SLACK = 1.25;   // drop anything longer than 1.25 × shortest
+const JR_MAX_TRANSFERS = 2;
+
+// Dijkstra by fare kilometres, with Yen's node/edge bans. Returns station keys.
+function jrShortest(s, t, banN, banE) {
   const dist = new Map([[s, 0]]), prev = new Map(), done = new Set();
   for (;;) {
     let cur = null, best = Infinity;
@@ -4342,30 +4369,104 @@ function jrRoute(from, to) {
     if (cur === t) break;
     done.add(cur);
     (JR_ADJ.get(cur) || []).forEach((e) => {
-      const nd = best + e.km, old = dist.has(e.to) ? dist.get(e.to) : Infinity;
-      if (nd < old) { dist.set(e.to, nd); prev.set(e.to, { from: cur, line: e.line }); }
+      if (banN.has(e.to) || banE.has(cur + ">" + e.to)) return;
+      const nd = best + e.km;
+      if (nd < (dist.has(e.to) ? dist.get(e.to) : Infinity)) { dist.set(e.to, nd); prev.set(e.to, cur); }
     });
   }
-  const path = [], lines = [];
-  for (let k = t; k !== s; ) { const p = prev.get(k); path.unshift(JR_INDEX.get(k)); lines.unshift(p.line); k = p.from; }
-  path.unshift(JR_INDEX.get(s));
-  // Interchanges = the stations where the line actually changes. These are
-  // what "Suggest transfers" offers, and they are always priceable.
-  const changes = [];
-  for (let i = 1; i < lines.length; i++) if (lines[i] !== lines[i - 1]) changes.push(path[i]);
-  return { km: Math.round(dist.get(t) * 10) / 10, path, changes, lines: [...new Set(lines)] };
+  const nodes = [t];
+  while (nodes[0] !== s) nodes.unshift(prev.get(nodes[0]));
+  return nodes;
+}
+
+// Fewest changes of train along a fixed station sequence: DP over the lines
+// each edge carries. Ties stay on the line already being ridden.
+function jrAssignLines(nodes) {
+  const rows = [];
+  for (let i = 1; i < nodes.length; i++) {
+    const row = new Map(), back = rows[rows.length - 1];
+    jrEdge(nodes[i - 1], nodes[i]).lines.forEach((l) => {
+      if (!back) { row.set(l, { c: 0, p: null }); return; }
+      let best = null;
+      back.forEach((v, pl) => { const c = v.c + (pl === l ? 0 : 1); if (!best || c < best.c) best = { c, p: pl }; });
+      row.set(l, best);
+    });
+    rows.push(row);
+  }
+  let line = null, min = Infinity;
+  rows[rows.length - 1].forEach((v, l) => { if (v.c < min) { min = v.c; line = l; } });
+  const per = [];
+  for (let i = rows.length - 1; i >= 0; i--) { per.unshift(line); line = rows[i].get(line).p; }
+  return { per, transfers: min };
+}
+
+// Yen's k-shortest loopless paths, pruned and ranked cheapest first.
+// shortestKm is kept separately: inside the Tokyo suburban zone the gate
+// charges the SHORTEST route whatever you rode, so the fare comes from it.
+const JR_ROUTE_MEMO = new Map();
+function jrRouteSet(from, to) {
+  const s = stnKey(from), t = stnKey(to);
+  if (!s || !t || s === t || !JR_ADJ.has(s) || !JR_ADJ.has(t)) return null;
+  const memo = s + "|" + t;
+  if (JR_ROUTE_MEMO.has(memo)) return JR_ROUTE_MEMO.get(memo);
+  const first = jrShortest(s, t, new Set(), new Set());
+  if (!first) { JR_ROUTE_MEMO.set(memo, null); return null; }
+  const A = [first], B = [], seen = new Set([first.join(">")]);
+  while (A.length < JR_YEN_RAW) {
+    const last = A[A.length - 1];
+    for (let i = 0; i < last.length - 1; i++) {
+      const root = last.slice(0, i + 1), rk = root.join(">");
+      const banE = new Set();
+      A.forEach((p) => { if (p.length > i + 1 && p.slice(0, i + 1).join(">") === rk) banE.add(p[i] + ">" + p[i + 1]); });
+      const spur = jrShortest(last[i], t, new Set(root.slice(0, -1)), banE);
+      if (!spur) continue;
+      const nodes = root.slice(0, -1).concat(spur), key = nodes.join(">");
+      if (!seen.has(key)) { seen.add(key); B.push(nodes); }
+    }
+    if (!B.length) break;
+    B.sort((x, y) => jrKm(x) - jrKm(y));
+    A.push(B.shift());
+  }
+  const shortestKm = jrKm(A[0]);
+  const sp = JR_SPECIAL_MAP.get([s, t].sort().join("|")); // 特定区間 fare is per pair, not per route
+  const built = A.map((nodes) => {
+    const km = jrKm(nodes), { per, transfers } = jrAssignLines(nodes);
+    const lines = per.filter((l, i) => l !== per[i - 1]);
+    const changes = [];
+    for (let i = 1; i < per.length; i++) if (per[i] !== per[i - 1]) changes.push(JR_INDEX.get(nodes[i]));
+    const f = sp || jrBandFare(km);
+    return { path: nodes.map((k) => JR_INDEX.get(k)), key: nodes.join(">"), km, transfers, lines, changes, fare_ic: f ? f.fare_ic : null, fare_ticket: f ? f.fare_ticket : null, special: !!sp };
+  });
+  let kept = built.filter((c) => c.km <= shortestKm * JR_ROUTE_SLACK + 0.05 && c.transfers <= JR_MAX_TRANSFERS);
+  if (!kept.length) kept = [built.slice().sort((x, y) => x.transfers - y.transfers || x.km - y.km)[0]];
+  const dd = new Map(); // same distance + same lines + same changes count = the same journey
+  kept.forEach((c) => { const k = c.km.toFixed(1) + "|" + c.transfers + "|" + [...c.lines].sort().join(","); if (!dd.has(k)) dd.set(k, c); });
+  const candidates = [...dd.values()]
+    .sort((x, y) => (x.fare_ic ?? 1e9) - (y.fare_ic ?? 1e9) || x.transfers - y.transfers || x.km - y.km)
+    .slice(0, JR_ROUTE_K);
+  const out = { shortestKm, candidates };
+  JR_ROUTE_MEMO.set(memo, out);
+  return out;
+}
+function jrRoutes(from, to) { const r = jrRouteSet(from, to); return r ? r.candidates : []; }
+
+// The route you would actually ride (top-ranked candidate). Its changes are
+// what "Suggest transfers" offers, and they are always priceable.
+function jrRoute(from, to) {
+  const c = jrRoutes(from, to)[0];
+  return c ? { km: c.km, path: c.path, changes: c.changes, lines: c.lines } : null;
 }
 
 // The engine's answer for a pair, or null if it cannot honestly produce one.
 function jrCompute(from, to) {
   const sp = JR_SPECIAL_MAP.get([stnKey(from), stnKey(to)].sort().join("|"));
-  if (sp) return { ...sp, source: "special", note: "特定区間 · published special-section fare" };
-  const r = jrRoute(from, to);
-  if (!r) return null;
-  const f = jrBandFare(r.km);
+  if (sp) return { ...sp, source: "special", note: "特定区間 · published special-section fare", routes: jrRoutes(from, to) };
+  const set = jrRouteSet(from, to);
+  if (!set || !set.candidates.length) return null;
+  const f = jrBandFare(set.shortestKm);
   if (!f) return null;
-  const lineNames = r.lines.map((id) => (JR_LINES.find((L) => L.id === id) || {}).name).filter(Boolean);
-  return { ...f, distance_km: r.km, source: "calc", route_summary: lineNames.join(" · "), changes: r.changes };
+  const top = set.candidates[0];
+  return { ...f, distance_km: set.shortestKm, source: "calc", route_summary: top.lines.map(jrLineName).join(" · "), changes: top.changes, routes: set.candidates };
 }
 
 const SEED_STATIONS = [...new Set([
@@ -4632,6 +4733,8 @@ function FareCalcView({ allExpenses, dueAdd }) {
   const { insertExpense, modals } = useExpenseMutations({ onChange: fetchData });
   const [stops, setStops] = useState(["", ""]);
   const [legs, setLegs] = useState([]);
+  const [routePick, setRoutePick] = useState({}); // legIndex → candidate index the user chose (15b)
+  const [routeOpen, setRouteOpen] = useState({});
   const [manual, setManual] = useState({});
   const [correcting, setCorrecting] = useState({}); // legIndex → showing the "charged something else" input
   const [busy, setBusy] = useState(false);
@@ -4663,7 +4766,7 @@ function FareCalcView({ allExpenses, dueAdd }) {
     return out;
   }, [allExpenses]);
 
-  const reset = () => { setLegs([]); setManual({}); setSugg(null); setCorrecting({}); setDirect(null); setUseDirect(false); setBookMsg(null); };
+  const reset = () => { setLegs([]); setManual({}); setSugg(null); setCorrecting({}); setDirect(null); setUseDirect(false); setBookMsg(null); setRoutePick({}); setRouteOpen({}); };
   const setStop = (i, v) => { setStops((s) => s.map((x, j) => (j === i ? v : x))); reset(); };
   const addStop = () => { setStops((s) => [...s, ""]); reset(); };
   const removeStop = (i) => { setStops((s) => (s.length <= 2 ? s : s.filter((_, j) => j !== i))); reset(); };
@@ -4677,6 +4780,12 @@ function FareCalcView({ allExpenses, dueAdd }) {
   const clean = stops.map(canonStation);
   const legPairs = clean.slice(0, -1).map((f, i) => [f, clean[i + 1]]).filter(([f, to]) => f && to);
   const canCalc = legPairs.length === stops.length - 1 && legPairs.every(([f, to]) => f !== to);
+  // 15b · route candidates per leg (offline engine, memoised). The top one is
+  // auto-selected; picking another changes the journey record, not the fare —
+  // IC gates charge the shortest route whatever you ride (see 15d).
+  const legRoutes = legPairs.map(([f, to]) => jrRoutes(f, to));
+  const pickedRoute = (i) => { const rs = legRoutes[i] || []; return rs[routePick[i] || 0] || null; };
+  const routeLabel = (c) => (c.changes.length ? `via ${c.changes.join(", ")}` : `direct · ${jrLineName(c.lines[0])}`);
 
   const endA = clean[0], endB = clean[clean.length - 1];
   const canSuggest = !!endA && !!endB && endA !== endB;
@@ -4716,7 +4825,7 @@ function FareCalcView({ allExpenses, dueAdd }) {
 
   const calc = async () => {
     if (!canCalc || busy) return;
-    setBusy(true); setLegs([]); setManual({}); setCard(null);
+    setBusy(true); setLegs([]); setManual({}); setCard(null); setRoutePick({}); setRouteOpen({});
     const out = [];
     for (const [f, to] of legPairs) out.push(await fareLookup(supabase, f, to)); // sequential: shared cache table
     setLegs(out);
@@ -4741,7 +4850,7 @@ function FareCalcView({ allExpenses, dueAdd }) {
   const save = async () => {
     if (!allPriced || busy) return;
     const route = round ? clean.join(" → ") + " → " + clean[0] : clean.join(" → ");
-    const legNotes = legs.map((r, i) => `${legPairs[i][0]}→${legPairs[i][1]} ${fmt(amounts[i])}${r && !r.error ? "" : " (manual)"}`).join(" · ");
+    const legNotes = legs.map((r, i) => { const c = routePick[i] != null ? pickedRoute(i) : null; return `${legPairs[i][0]}→${legPairs[i][1]} ${fmt(amounts[i])}${r && !r.error ? "" : " (manual)"}${c ? ` [route: ${routeLabel(c)} · ${c.km} km · chosen]` : ""}`; }).join(" · ");
     const notes = round ? `Round trip · out ${legNotes} · return same fares` : legNotes;
     const res = await insertExpense({ region: currency, date, category: "Transportation", shop: route, amount: total, notes, expense_type: "normal", tags: "" });
     // Feed the fare book so the next occurrence of these legs autofills.
@@ -4893,8 +5002,26 @@ function FareCalcView({ allExpenses, dueAdd }) {
                     <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
                       <span style={{ fontSize: 18, fontWeight: 700, color: overridden(manual[i]) ? theme.textDim : "#fff", textDecoration: overridden(manual[i]) ? "line-through" : "none" }}>{fmt(r.fare_ic)}</span>
                       {overridden(manual[i]) && <span style={{ fontSize: 18, fontWeight: 700, color: "#fff" }}>{fmt(parseInt(manual[i], 10))}</span>}
-                      <span style={{ fontSize: 10.5, color: theme.textMuted }}>{r.fare_ticket != null && `Ticket ${fmt(r.fare_ticket)} · `}{r.distance_km != null && `${r.distance_km} km`}</span>
+                      <span style={{ fontSize: 10.5, color: theme.textMuted }}>{r.fare_ticket != null && `Ticket ${fmt(r.fare_ticket)} · `}{(pickedRoute(i) ? pickedRoute(i).km : r.distance_km) != null && `${pickedRoute(i) ? pickedRoute(i).km : r.distance_km} km`}</span>
                     </div>
+                    {legRoutes[i] && legRoutes[i].length > 0 && (() => { const rs = legRoutes[i], cur = rs[routePick[i] || 0]; return (
+                      <div style={{ marginTop: 6 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 10.5, color: theme.textDim }}>
+                          <span>{cur.lines.map(jrLineName).join(" → ")}{cur.changes.length ? ` · change at ${cur.changes.join(", ")}` : ""}</span>
+                          {routePick[i] != null && <span style={{ fontSize: 9.5, fontWeight: 700, color: theme.primary, letterSpacing: 0.4 }}>CHOSEN</span>}
+                          {rs.length > 1 && <button onClick={() => setRouteOpen((o) => ({ ...o, [i]: !o[i] }))} style={{ border: "none", background: "transparent", color: theme.primary, cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 700, padding: 0 }}>{routeOpen[i] ? "Hide routes" : `${rs.length - 1} other route${rs.length - 1 === 1 ? "" : "s"}`}</button>}
+                        </div>
+                        {r.source === "calc" && cur.fare_ic != null && cur.fare_ic !== r.fare_ic && <div style={{ fontSize: 10.5, color: theme.textMuted, marginTop: 3, lineHeight: 1.45 }}>This route is {fmt(cur.fare_ic)} on paper — IC gates charge the shortest route ({r.distance_km} km), so the fare stays {fmt(r.fare_ic)}.</div>}
+                        {routeOpen[i] && (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
+                            {rs.map((c, j) => { const on = j === (routePick[i] || 0); return (
+                              <button key={c.key} onClick={() => { setRoutePick((p) => ({ ...p, [i]: j })); setRouteOpen((o) => ({ ...o, [i]: false })); }} style={{ textAlign: "left", padding: "8px 10px", minHeight: 44, borderRadius: 8, border: "none", cursor: "pointer", fontFamily: "inherit", background: on ? theme.primaryGlow : theme.cardBg, boxShadow: on ? "none" : `inset 0 0 0 1px ${theme.cardBorder}`, color: on ? "#fff" : theme.text, fontSize: 11.5 }}>
+                                <div style={{ fontWeight: 600 }}>{routeLabel(c)}</div>
+                                <div style={{ fontSize: 10.5, opacity: 0.8, marginTop: 1 }}>{c.km} km{c.fare_ic != null ? ` · ${fmt(c.fare_ic)}` : ""} · {c.transfers === 0 ? "no change" : `${c.transfers} change${c.transfers === 1 ? "" : "s"}`}</div>
+                              </button>); })}
+                          </div>
+                        )}
+                      </div>); })()}
                     {correcting[i] ? (
                       <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
                         <input type="number" inputMode="numeric" autoFocus value={manual[i] || ""} onChange={(e) => setManual((m) => ({ ...m, [i]: e.target.value }))} placeholder={CUR.symbol + " fare actually charged"} style={{ ...inputStyle, fontSize: 13, fontWeight: 600, flex: 1 }}/>
