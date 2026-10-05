@@ -643,7 +643,7 @@ function App({ session, onSignOut }) {
     setData(overlayExpenses(serverExpRef.current).map(r => enrichRow({
       id: r.id, amount: r.amount, date: r.date, category: r.category,
       shop: r.shop, notes: r.notes || "", expense_type: r.expense_type || "normal", region: r.region,
-      tags: r.tags || "", _pending: !!r._pending, _ts: r._ts
+      tags: r.tags || "", _pending: !!r._pending, _ts: r._ts, created_at: r.created_at || null
     })));
   }, []);
   const fetchData = useCallback(async () => {
@@ -862,6 +862,22 @@ function App({ session, onSignOut }) {
   const locSkip = (t) => { stampLocFired(t.id); flashDue(`Skipped ${t.name}`); return { ok: true }; };
   const locSnooze = (t) => setLocDismissed((prev) => prev.includes(t.id) ? prev : [...prev, t.id]);
   const locClose = () => { setLocDismissed((prev) => [...new Set([...prev, ...locDueList.map((t) => t.id)])]); setLocDueOpen(false); };
+
+  // ── R018 step 2 · G4: the hub's visit detector runs NEXT TO Cost's own, for a comparison period.
+  // Shipped file, never edited. It keeps its own watchPosition (a second watch, by design), writes
+  // only hub tables, has no blocks, and feeds nothing into Cost's expense prompts. App only mounts
+  // when signed in, so the unmount cleanup is the sign-out stop (the gate also stops it on SIGNED_OUT).
+  useEffect(() => {
+    if (loading || !window.AkatsukiLocation || window.cm.hubLoc) return;
+    try {
+      window.cm.hubLoc = AkatsukiLocation.start(supabase, "cost", {
+        onVisitOpen:  (v) => console.log("[hub visit] open", v),
+        onVisitClose: (v) => console.log("[hub visit] close", v),
+        onError:      (fn, e) => console.warn("[hub visit]", fn, e.code || e.message),
+      });
+    } catch (e) { console.warn("[hub visit] start failed", e); }
+    return () => { if (window.cm.hubLoc) { window.cm.hubLoc.stop(); window.cm.hubLoc = null; } };
+  }, [loading]);
 
   // ── Stop logging: pins → thresholds → dwell detector → the fill-in-later panel ──
   const [stops, setStops] = useState(getStops);
@@ -1344,7 +1360,7 @@ async function drainOutbox() {
       if (error) {
         const msg = error.message || String(error);
         if (missingTable(msg) && it.table === REQ_TABLE) { reqServerOff = true; writeOutbox(getOutbox().slice(1)); continue; } // 013 not applied: requests stay local, re-pushed by syncRequests once it is
-        if (missingTable(msg)) { syncOff = true; console.warn("sync off — run migrations 011_stops.sql / 012_places_budget.sql:", msg); break; }
+        if (missingTable(msg)) { syncOff = true; console.warn("sync off — run migration 011_stops.sql:", msg); break; }
         if (netError(msg) || !navigator.onLine) break; // still offline: stop, keep order, retry later
         // A rejected row must not wedge everything behind it: send it to the back,
         // and drop it after three tries rather than blocking the queue forever.
@@ -1822,7 +1838,6 @@ function StopSettings() {
 // the month across devices. Cost keeps no cap, counter or corner cache of its own; the old
 // localStorage copies are cleared once here. cost_management_places_cache / _usage are left
 // in the database untouched and are no longer read or written.
-const monthKey = () => { const d = new Date(); return d.getFullYear() + "-" + pad2(d.getMonth() + 1); };
 try { ["cm_places_cache", "cm_places_calls", "cm_places_cfg"].forEach((k) => localStorage.removeItem(k)); } catch (e) {}
 // Akatsuki's shop lookup (verified live Oct 5: status fetched, 5 candidates, place_id present).
 // A non-2xx answer (429 "capped") is a FunctionsHttpError whose body sits on error.context;
@@ -1850,7 +1865,7 @@ async function syncPull() {
     supabase.from("cost_management_stop_settings").select("cfg").maybeSingle(),
   ]);
   const firstErr = [s, b, cfgRes].map((r) => r && r.error && r.error.message).find(Boolean);
-  if (firstErr && missingTable(firstErr)) { syncOff = true; console.warn("sync off — run migrations 011_stops.sql / 012_places_budget.sql:", firstErr); return false; }
+  if (firstErr && missingTable(firstErr)) { syncOff = true; console.warn("sync off — run migration 011_stops.sql:", firstErr); return false; }
   if (s.error || b.error) return false;
   // Stops: union by id, newest change wins — so a stop logged on the laptop
   // leaves the phone's panel on its next pull.
@@ -2564,8 +2579,8 @@ function TagSelector({ selectedTags, onChange }) {
 // ═══════════════════════════════════════════
 // ── Areas + anchors live in Akatsuki (R018 step 1 · G2). Cost reads the hub views and writes
 // through the hub RPCs; cost_management_areas / _area_points are no longer read or written.
-// Hub ids are text, Cost's shop_locations.area_id is still bigint until 014 runs, so every id
-// is normalised to a string on read — all comparisons below are string === string.
+// Hub ids are uuid text; Cost's shop_locations.area_id is uuid. Every id is normalised to a
+// string on read, so all comparisons below are string === string.
 const HUB_AREAS = "akatsuki_cost_areas", HUB_POINTS = "akatsuki_cost_area_points";
 const normArea = (a) => ({ ...a, id: String(a.id) });
 const normPoint = (p) => ({ ...p, id: String(p.id), area_id: String(p.area_id) });
@@ -3529,12 +3544,13 @@ function ShopAreasPanel({ allExpenses = [], onPending }) {
         .insert(moving.map(shop_id => ({ area_id: targetId, shop_id })));
       if (error) { setBusy(false); flash(error.message); return; }
     }
-    const { error: le } = await supabase.from("cost_management_shop_locations").delete().eq("area_id", editing.id);
-    if (le) { setBusy(false); flash(le.message); return; }
     try {
       for (const p of points.filter(p => p.area_id === editing.id)) await hubAnchorEdit(p.id, { area_id: targetId });
       await hubAreaEdit(editing.id, { retire: true });
     } catch (e) { setBusy(false); flash(hubAreaMsg(e), 4000); load(); return; }
+    // Source is retired in the hub; its links are now dead, drop them (the old cascade did this).
+    const { error: le } = await supabase.from("cost_management_shop_locations").delete().eq("area_id", editing.id);
+    if (le) { setBusy(false); flash(le.message); load(); return; }
     setBusy(false);
     setEditing(null); flash(`Merged into ${target.name}`); load();
   };
@@ -5510,7 +5526,8 @@ function TransactionsView({ pageTx, txPage, setTxPage, txPages }) {
 // ═══════════════════════════════════════════
 //  SVG CHARTS (dependency-free — replaces Recharts, which fails to paint)
 // ═══════════════════════════════════════════
-function SvgAreaChart({ data, height = 220, color, gridColor, labelColor, labelStep = 1, peakColor }) {
+const yenK = (v) => `${CUR.symbol}${Math.round(v / 1000)}k`;
+function SvgAreaChart({ data, height = 220, color, gridColor, labelColor, labelStep = 1, peakColor, fmtY = yenK, fmtV = fmt }) {
   if (!data || data.length === 0) return <div style={{ height, display: "flex", alignItems: "center", justifyContent: "center", color: labelColor, fontSize: 12 }}>No data for this range</div>;
   const W = 540, H = height, padL = 42, padR = 10, padT = 14, padB = 22;
   const innerW = W - padL - padR, innerH = H - padT - padB;
@@ -5531,21 +5548,21 @@ function SvgAreaChart({ data, height = 220, color, gridColor, labelColor, labelS
       {gridVals.map((gv, i) => (
         <g key={i}>
           <line x1={padL} y1={y(gv)} x2={W - padR} y2={y(gv)} stroke={gridColor} strokeDasharray="3 3" strokeWidth="1" />
-          <text x={padL - 6} y={y(gv) + 3} textAnchor="end" fontSize="9" fill={labelColor} fontFamily="inherit">{`${CUR.symbol}${Math.round(gv / 1000)}k`}</text>
+          <text x={padL - 6} y={y(gv) + 3} textAnchor="end" fontSize="9" fill={labelColor} fontFamily="inherit">{fmtY(gv)}</text>
         </g>
       ))}
       <path d={area} fill={`url(#ag-${uid})`} />
       <path d={line} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
       {pts.map(([cx, cy], i) => (
         <circle key={i} cx={cx} cy={cy} r={i === peakIdx ? 4 : (n > 40 ? 0 : 2.2)} fill={i === peakIdx ? (peakColor || color) : color} stroke="rgba(0,0,0,0.4)" strokeWidth="1">
-          <title>{data[i].label}: {fmt(data[i].total)}</title>
+          <title>{data[i].label}: {fmtV(data[i].total)}</title>
         </circle>
       ))}
       {data.map((d, i) => (i % labelStep === 0 ? <text key={`l${i}`} x={x(i)} y={H - 6} textAnchor="middle" fontSize={n > 20 ? 7.5 : 9} fill={i === peakIdx ? (peakColor || color) : labelColor} fontWeight={i === peakIdx ? 700 : 400} fontFamily="inherit">{d.label}</text> : null))}
     </svg>
   );
 }
-function SvgBarChart({ data, height = 180, color, gridColor, labelColor, labelStep = 1, peakColor }) {
+function SvgBarChart({ data, height = 180, color, gridColor, labelColor, labelStep = 1, peakColor, fmtY = yenK, fmtV = fmt }) {
   if (!data || data.length === 0) return <div style={{ height, display: "flex", alignItems: "center", justifyContent: "center", color: labelColor, fontSize: 12 }}>No data for this range</div>;
   const W = 540, H = height, padL = 42, padR = 10, padT = 12, padB = 22;
   const innerW = W - padL - padR, innerH = H - padT - padB;
@@ -5559,7 +5576,7 @@ function SvgBarChart({ data, height = 180, color, gridColor, labelColor, labelSt
       {gridVals.map((gv, i) => (
         <g key={i}>
           <line x1={padL} y1={y(gv)} x2={W - padR} y2={y(gv)} stroke={gridColor} strokeDasharray="3 3" strokeWidth="1" />
-          <text x={padL - 6} y={y(gv) + 3} textAnchor="end" fontSize="9" fill={labelColor} fontFamily="inherit">{`${CUR.symbol}${Math.round(gv / 1000)}k`}</text>
+          <text x={padL - 6} y={y(gv) + 3} textAnchor="end" fontSize="9" fill={labelColor} fontFamily="inherit">{fmtY(gv)}</text>
         </g>
       ))}
       {data.map((d, i) => {
@@ -5568,7 +5585,7 @@ function SvgBarChart({ data, height = 180, color, gridColor, labelColor, labelSt
         return (
           <g key={i}>
             <rect x={bx} y={by} width={bw} height={Math.max(0, padT + innerH - by)} rx="2" fill={i === peakIdx ? (peakColor || color) : color} opacity={i === peakIdx ? 1 : 0.85}>
-              <title>{d.label}: {fmt(d.total)}</title>
+              <title>{d.label}: {fmtV(d.total)}</title>
             </rect>
             {i % labelStep === 0 && <text x={bx + bw / 2} y={H - 6} textAnchor="middle" fontSize={n > 20 ? 7 : 8.5} fill={labelColor} fontFamily="inherit">{d.label}</text>}
           </g>
@@ -5603,7 +5620,9 @@ function SvgDonut({ data, getColor, height = 140 }) {
 }
 function OverviewView({ filtered, totalSpend, monthlyAvg, dailyAvg, monthlyData, catData, topShops, allExpenses }) {
   const { theme, getCatIcon, getCatColor, categories, shops, tags } = useTheme();
-  const [timeRange, setTimeRange] = useState("monthly"); // monthly, weekly, daily
+  const [timeRange, setTimeRange] = useState("monthly"); // monthly | weekly | daily | timeline (by filing time)
+  const [span, setSpan] = useState("recent"); // recent | long | all — how far back the chart looks
+  const isTimeline = timeRange === "timeline";
   const [filters, setFilters] = useState(getStoredGraphFilters);
   const [filterOpen, setFilterOpen] = useState(false); const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
   const [filterToast, setFilterToast] = useState(null);
@@ -5640,88 +5659,67 @@ function OverviewView({ filtered, totalSpend, monthlyAvg, dailyAvg, monthlyData,
   // Graph-filtered dataset (filters applied on top of the raw expenses).
   const graphFiltered = useMemo(() => applyGraphFilters(allExpenses, filters), [allExpenses, filters]);
 
-  const chartData = useMemo(() => {
+  // One bucketing routine for all four modes. Spend modes bucket by expense date; the
+  // Timeline mode buckets by the moment the entry was FILED (created_at), so it shows how
+  // the database was populated — including backfilled months — not when the money was spent.
+  const chartInfo = useMemo(() => {
     const fd = graphFiltered;
-    const now = new Date();
-    const custom = filters.dateFrom || filters.dateTo;
+    const now = new Date(); now.setHours(0, 0, 0, 0);
+    const custom = !!(filters.dateFrom || filters.dateTo);
     const parse = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
-    const sortedDates = fd.map(e => e.date).sort();
-    // When a custom range is partially set, fall back to the data extent for the open side.
-    const fromD = filters.dateFrom ? parse(filters.dateFrom) : (sortedDates.length ? parse(sortedDates[0]) : now);
-    const toD = filters.dateTo ? parse(filters.dateTo) : (sortedDates.length ? parse(sortedDates[sortedDates.length - 1]) : now);
     const dayKey = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
     const mondayOf = (dt) => { const x = new Date(dt); const day = x.getDay(); x.setDate(x.getDate() - (day === 0 ? 6 : day - 1)); x.setHours(0, 0, 0, 0); return x; };
-
-    if (timeRange === "monthly") {
-      const months = [];
-      const startM = custom ? new Date(fromD.getFullYear(), fromD.getMonth(), 1) : new Date(now.getFullYear(), now.getMonth() - 11, 1);
-      const endM = custom ? new Date(toD.getFullYear(), toD.getMonth(), 1) : new Date(now.getFullYear(), now.getMonth(), 1);
-      let d = new Date(startM);
-      while (d <= endM) {
-        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-        months.push({ key, label: `${MONTHS_SHORT[d.getMonth() + 1]} ${String(d.getFullYear()).slice(2)}`, total: 0 });
-        d = new Date(d.getFullYear(), d.getMonth() + 1, 1);
-      }
-      fd.forEach(e => {
-        const d2 = new Date(e.date);
-        const key = `${d2.getFullYear()}-${String(d2.getMonth() + 1).padStart(2, "0")}`;
-        const month = months.find(m => m.key === key);
-        if (month) month.total += e.amount;
-      });
-      return months;
+    const filedKey = (e) => { const t = e.created_at || e._ts; if (!t) return null; const d = new Date(t); return isNaN(d) ? null : dayKey(d); };
+    const keyOf = isTimeline ? filedKey : (e) => e.date;
+    const keys = fd.map(keyOf).filter(Boolean).sort();
+    const noStamps = isTimeline && fd.length > 0 && keys.length === 0;
+    if (!keys.length) return { data: [], gran: isTimeline ? "daily" : timeRange, from: dayKey(now), to: dayKey(now), noStamps, lagDays: null, dbTotal: 0 };
+    const firstD = parse(keys[0]), lastD = parse(keys[keys.length - 1]);
+    // Granularity: spend modes are fixed; the timeline picks one that fits the span.
+    const gran = !isTimeline ? timeRange : span === "recent" ? "daily" : span === "long" ? "weekly" : ((lastD - firstD) / 86400000 > 548 ? "monthly" : "weekly");
+    // Window: custom dates win; "all" is the data extent; otherwise a fixed look-back.
+    let fromD, toD;
+    if (custom) { fromD = filters.dateFrom ? parse(filters.dateFrom) : firstD; toD = filters.dateTo ? parse(filters.dateTo) : lastD; }
+    else if (span === "all") { fromD = firstD; toD = lastD > now ? lastD : now; }
+    else {
+      toD = now; fromD = new Date(now);
+      if (isTimeline) fromD.setDate(now.getDate() - (span === "recent" ? 59 : 364));
+      else if (gran === "monthly") fromD.setMonth(now.getMonth() - (span === "recent" ? 11 : 23));
+      else if (gran === "weekly") fromD.setDate(now.getDate() - (span === "recent" ? 11 : 25) * 7);
+      else fromD.setDate(now.getDate() - (span === "recent" ? 59 : 179));
     }
-
-    if (timeRange === "weekly") {
-      const weeks = [];
-      const lastStart = custom ? mondayOf(toD) : mondayOf(now);
-      let cursor = custom ? mondayOf(fromD) : (() => { const c = new Date(lastStart); c.setDate(c.getDate() - 11 * 7); return c; })();
-      while (cursor <= lastStart) {
-        const weekStart = new Date(cursor);
-        const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 6); weekEnd.setHours(23, 59, 59, 999);
-        weeks.push({ key: dayKey(weekStart), start: weekStart, end: weekEnd, label: `${weekStart.getMonth() + 1}/${weekStart.getDate()}`, total: 0 });
-        cursor = new Date(cursor); cursor.setDate(cursor.getDate() + 7);
-      }
-      fd.forEach(e => {
-        const d2 = new Date(e.date);
-        const week = weeks.find(w => d2 >= w.start && d2 <= w.end);
-        if (week) week.total += e.amount;
-      });
-      return weeks.map(w => ({ key: w.key, label: w.label, total: w.total }));
+    const buckets = [], idx = {};
+    if (gran === "monthly") {
+      let d = new Date(fromD.getFullYear(), fromD.getMonth(), 1); const end = new Date(toD.getFullYear(), toD.getMonth(), 1);
+      while (d <= end) { const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; idx[k] = buckets.length; buckets.push({ key: k, label: `${MONTHS_SHORT[d.getMonth() + 1]} ${String(d.getFullYear()).slice(2)}`, start: new Date(d), total: 0, count: 0 }); d = new Date(d.getFullYear(), d.getMonth() + 1, 1); }
+    } else if (gran === "weekly") {
+      let d = mondayOf(fromD); const end = mondayOf(toD);
+      while (d <= end) { const k = dayKey(d); idx[k] = buckets.length; buckets.push({ key: k, label: `${d.getMonth() + 1}/${d.getDate()}`, start: new Date(d), total: 0, count: 0 }); d = new Date(d); d.setDate(d.getDate() + 7); }
+    } else {
+      let d = new Date(fromD); d.setHours(0, 0, 0, 0); const end = new Date(toD); end.setHours(0, 0, 0, 0);
+      while (d <= end) { const k = dayKey(d); idx[k] = buckets.length; buckets.push({ key: k, label: `${d.getMonth() + 1}/${d.getDate()}`, start: new Date(d), total: 0, count: 0 }); d = new Date(d); d.setDate(d.getDate() + 1); }
     }
-
-    if (timeRange === "daily") {
-      const days = [];
-      let cursor = custom ? new Date(fromD) : (() => { const c = new Date(now); c.setDate(c.getDate() - 59); return c; })();
-      const endD = custom ? new Date(toD) : new Date(now);
-      cursor.setHours(0, 0, 0, 0); endD.setHours(0, 0, 0, 0);
-      while (cursor <= endD) {
-        const key = dayKey(cursor);
-        days.push({ key, label: `${cursor.getMonth() + 1}/${cursor.getDate()}`, total: 0 });
-        cursor = new Date(cursor); cursor.setDate(cursor.getDate() + 1);
-      }
-      fd.forEach(e => {
-        const day = days.find(d => d.key === e.date);
-        if (day) day.total += e.amount;
-      });
-      return days;
-    }
-
-    return [];
-  }, [graphFiltered, timeRange, filters.dateFrom, filters.dateTo]);
+    const bucketOf = (k) => gran === "daily" ? idx[k] : gran === "monthly" ? idx[k.slice(0, 7)] : idx[dayKey(mondayOf(parse(k)))];
+    let before = 0, lagSum = 0, lagN = 0;
+    const startKey = buckets.length ? dayKey(buckets[0].start) : null;
+    fd.forEach((e) => {
+      const k = keyOf(e); if (!k) return;
+      if (isTimeline && startKey && k < startKey) { before += 1; return; }
+      const i = bucketOf(k); if (i == null) return;
+      buckets[i].total += e.amount; buckets[i].count += 1;
+      if (isTimeline && e.date) { const lag = Math.round((parse(k) - parse(e.date)) / 86400000); if (isFinite(lag)) { lagSum += lag; lagN += 1; } }
+    });
+    if (isTimeline) { let cum = before; buckets.forEach((b) => { cum += b.count; b.spend = b.total; b.total = cum; }); }
+    const fmtLocal = (dt) => dayKey(dt);
+    return { data: buckets, gran, from: fmtLocal(fromD), to: fmtLocal(toD), noStamps: false, lagDays: lagN ? Math.round(lagSum / lagN) : null, dbTotal: before + buckets.reduce((s, b) => s + b.count, 0) };
+  }, [graphFiltered, timeRange, span, isTimeline, filters.dateFrom, filters.dateTo]);
+  const chartData = chartInfo.data;
+  // Bars show the per-period figure; in Timeline mode that is entries filed, while the area shows the running total.
+  const barData = useMemo(() => isTimeline ? chartData.map((b) => ({ ...b, total: b.count })) : chartData, [chartData, isTimeline]);
+  const labelStep = Math.max(1, Math.ceil(chartData.length / 12));
 
   // Date span the chart currently covers (for the exclusion summary).
-  const windowRange = useMemo(() => {
-    const now = new Date();
-    const fmtLocal = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
-    if (filters.dateFrom || filters.dateTo) {
-      return { start: filters.dateFrom || "0000-01-01", end: filters.dateTo || "9999-12-31" };
-    }
-    let start;
-    if (timeRange === "monthly") start = new Date(now.getFullYear(), now.getMonth() - 11, 1);
-    else if (timeRange === "weekly") { start = new Date(now); const day = now.getDay(); start.setDate(now.getDate() - (day === 0 ? 6 : day - 1) - 11 * 7); }
-    else { start = new Date(now); start.setDate(now.getDate() - 59); }
-    return { start: fmtLocal(start), end: fmtLocal(now) };
-  }, [filters.dateFrom, filters.dateTo, timeRange]);
+  const windowRange = useMemo(() => ({ start: chartInfo.from, end: chartInfo.to }), [chartInfo.from, chartInfo.to]);
 
   // Summary of what the active filters removed from the current window.
   const exclusionSummary = useMemo(() => {
@@ -5748,25 +5746,30 @@ function OverviewView({ filtered, totalSpend, monthlyAvg, dailyAvg, monthlyData,
     return segs.length ? "Excluded: " + segs.join(", ") : null;
   }, [allExpenses, filters, windowRange, hasActiveFilters]);
 
-  // Calculate stats for the selected time range
+  // Stats for the window: spend modes sum yen; the timeline counts entries filed.
   const rangeStats = useMemo(() => {
-    const nonZeroPeriods = chartData.filter(d => d.total > 0);
-    const total = chartData.reduce((s, d) => s + d.total, 0);
-    const avg = nonZeroPeriods.length > 0 ? Math.round(total / nonZeroPeriods.length) : 0;
-    const max = Math.max(...chartData.map(d => d.total), 0);
-    const maxPeriod = chartData.find(d => d.total === max);
-    return { total, avg, max, maxPeriod };
-  }, [chartData]);
+    const vals = isTimeline ? chartData.map(d => d.count) : chartData.map(d => d.total);
+    const active = vals.filter(v => v > 0);
+    const total = vals.reduce((s, v) => s + v, 0);
+    const avg = active.length ? Math.round(total / active.length) : 0;
+    const max = Math.max(...vals, 0);
+    const mi = vals.indexOf(max);
+    return { total, avg, max, maxPeriod: mi >= 0 && max > 0 ? chartData[mi] : null };
+  }, [chartData, isTimeline]);
+
+  const GRAN_WORD = { monthly: "month", weekly: "week", daily: "day" };
+  const SPAN_LABELS = isTimeline ? ["60 days", "12 months", "All time"] : timeRange === "monthly" ? ["12 months", "24 months", "All time"] : timeRange === "weekly" ? ["12 weeks", "26 weeks", "All time"] : ["60 days", "180 days", "All time"];
+  const spanText = (filters.dateFrom || filters.dateTo) ? "custom range" : SPAN_LABELS[["recent", "long", "all"].indexOf(span)].toLowerCase();
+  const perWord = GRAN_WORD[chartInfo.gran];
+  const rangeLabels = {
+    title: isTimeline ? `Entries filed per ${perWord} · ${spanText}` : `${timeRange.charAt(0).toUpperCase() + timeRange.slice(1)} · ${spanText}`,
+    avgLabel: isTimeline ? `Avg/${perWord}` : `Avg/${perWord.charAt(0).toUpperCase() + perWord.slice(1)}`,
+  };
+  const countFmt = (v) => `${Math.round(v)}`;
 
   const CustomTooltip = ({ active, payload, label }) => {
     if (!active || !payload?.length) return null;
     return (<div style={{background:"#1a1a2e",border:`1px solid ${theme.cardBorder}`,borderRadius:6,padding:"8px 12px",fontSize:11}}><div style={{fontWeight:600,color:"#fff"}}>{label}</div>{payload.map((p,i) => <div key={i} style={{color:theme.textMuted}}>{fmt(p.value)}</div>)}</div>);
-  };
-
-  const rangeLabels = {
-    monthly: { title: "Monthly (Last 12 months)", avgLabel: "Avg/Month" },
-    weekly: { title: "Weekly (Last 12 weeks)", avgLabel: "Avg/Week" },
-    daily: { title: "Daily (Last 60 days)", avgLabel: "Avg/Day" },
   };
 
   return (
@@ -5868,44 +5871,68 @@ function OverviewView({ filtered, totalSpend, monthlyAvg, dailyAvg, monthlyData,
       {/* Time Range Chart */}
       <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:12,padding:"16px 14px",marginBottom:14}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
-          <h3 style={{fontSize:12,fontWeight:600,color:theme.textMuted,margin:0}}>Spending Trend</h3>
-          <div style={{display:"flex",gap:4}}>
-            {["monthly", "weekly", "daily"].map(range => (
-              <button key={range} onClick={() => setTimeRange(range)} style={{
-                padding:"5px 10px",borderRadius:6,border:"none",cursor:"pointer",fontSize:10,fontWeight:timeRange===range?600:400,
-                background:timeRange===range?theme.primaryGlow:theme.inputBg,
-                color:timeRange===range?"#fff":theme.textMuted,
-              }}>
-                {range.charAt(0).toUpperCase() + range.slice(1)}
-              </button>
-            ))}
+          <div>
+            <h3 style={{fontSize:12,fontWeight:600,color:theme.textMuted,margin:0}}>{isTimeline ? "Filing Timeline" : "Spending Trend"}</h3>
+            <div style={{fontSize:10.5,color:theme.textDim,marginTop:2}}>{isTimeline ? "How the database was filled in: the line is the running total of entries, by the day each was filed." : rangeLabels.title}</div>
+          </div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+            <div style={{display:"flex",gap:3,padding:3,background:theme.inputBg,borderRadius:8,border:`1px solid ${theme.cardBorder}`}}>
+              {[["monthly","Monthly"],["weekly","Weekly"],["daily","Daily"],["timeline","Timeline"]].map(([range, label]) => (
+                <button key={range} onClick={() => setTimeRange(range)} title={range === "timeline" ? "By the time each entry was filed" : undefined} style={{
+                  padding:"5px 10px",borderRadius:6,border:"none",cursor:"pointer",fontSize:10.5,fontFamily:"inherit",fontWeight:timeRange===range?700:500,
+                  background:timeRange===range?(range==="timeline"?theme.warning:theme.primary):"transparent",
+                  color:timeRange===range?"#fff":theme.textMuted,
+                }}>{label}</button>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:3,padding:3,background:theme.inputBg,borderRadius:8,border:`1px solid ${theme.cardBorder}`,opacity:(filters.dateFrom||filters.dateTo)?0.45:1}} title={(filters.dateFrom||filters.dateTo)?"A custom date range is set in Graph Filters; clear it to use these":undefined}>
+              {["recent","long","all"].map((s, i) => (
+                <button key={s} onClick={() => setSpan(s)} disabled={!!(filters.dateFrom||filters.dateTo)} style={{
+                  padding:"5px 9px",borderRadius:6,border:"none",cursor:"pointer",fontSize:10.5,fontFamily:"inherit",fontWeight:span===s?700:500,
+                  background:span===s?theme.inputBg:"transparent",boxShadow:span===s?`inset 0 0 0 1px ${theme.cardBorder}`:"none",
+                  color:span===s?"#fff":theme.textMuted,whiteSpace:"nowrap",
+                }}>{SPAN_LABELS[i]}</button>
+              ))}
+            </div>
           </div>
         </div>
         
         {/* Range Stats */}
         <div style={{display:"flex",gap:16,marginBottom:12,flexWrap:"wrap"}}>
           <div style={{fontSize:11,color:theme.textDim}}>
-            <span style={{color:theme.textMuted}}>Period Total:</span> <span style={{color:"#fff",fontWeight:600}}>{fmt(rangeStats.total)}</span>
+            <span style={{color:theme.textMuted}}>{isTimeline ? "Filed in window:" : "Period Total:"}</span> <span style={{color:"#fff",fontWeight:600}}>{isTimeline ? `${rangeStats.total} entries` : fmt(rangeStats.total)}</span>
           </div>
           <div style={{fontSize:11,color:theme.textDim}}>
-            <span style={{color:theme.textMuted}}>{rangeLabels[timeRange].avgLabel}:</span> <span style={{color:"#fff",fontWeight:600}}>{fmt(rangeStats.avg)}</span>
+            <span style={{color:theme.textMuted}}>{rangeLabels.avgLabel}:</span> <span style={{color:"#fff",fontWeight:600}}>{isTimeline ? rangeStats.avg : fmt(rangeStats.avg)}</span>
           </div>
           {rangeStats.maxPeriod && (
             <div style={{fontSize:11,color:theme.textDim}}>
-              <span style={{color:theme.textMuted}}>Peak:</span> <span style={{color:theme.warning,fontWeight:600}}>{rangeStats.maxPeriod.label} ({fmt(rangeStats.max)})</span>
+              <span style={{color:theme.textMuted}}>{isTimeline ? "Busiest:" : "Peak:"}</span> <span style={{color:theme.warning,fontWeight:600}}>{rangeStats.maxPeriod.label} ({isTimeline ? `${rangeStats.max} entries` : fmt(rangeStats.max)})</span>
+            </div>
+          )}
+          {isTimeline && chartInfo.dbTotal > 0 && (
+            <div style={{fontSize:11,color:theme.textDim}}>
+              <span style={{color:theme.textMuted}}>Database:</span> <span style={{color:"#fff",fontWeight:600}}>{chartInfo.dbTotal} entries</span>
+            </div>
+          )}
+          {isTimeline && chartInfo.lagDays != null && (
+            <div style={{fontSize:11,color:theme.textDim}} title="Average gap between the expense date and the day it was filed — how far back entries were typically backfilled">
+              <span style={{color:theme.textMuted}}>Avg backfill:</span> <span style={{color:"#fff",fontWeight:600}}>{chartInfo.lagDays === 0 ? "same day" : `${chartInfo.lagDays} day${chartInfo.lagDays === 1 ? "" : "s"}`}</span>
             </div>
           )}
         </div>
 
-        <SvgAreaChart data={chartData} height={220} color={theme.primary} gridColor={theme.cardBorder} labelColor={theme.textDim} labelStep={timeRange==="daily"?10:1} peakColor={theme.warning} />
+        {chartInfo.noStamps
+          ? <div style={{height:220,display:"flex",alignItems:"center",justifyContent:"center",textAlign:"center",padding:"0 24px",color:theme.textDim,fontSize:12,lineHeight:1.5}}>These entries carry no filing timestamp, so the timeline can't be drawn for them.</div>
+          : <SvgAreaChart data={chartData} height={220} color={isTimeline ? theme.warning : theme.primary} gridColor={theme.cardBorder} labelColor={theme.textDim} labelStep={labelStep} peakColor={isTimeline ? theme.primary : theme.warning} fmtY={isTimeline ? countFmt : undefined} fmtV={isTimeline ? (v) => `${Math.round(v)} entries so far` : undefined} />}
       </div>
 
       {/* Bar Chart for same data */}
       <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:12,padding:"16px 14px",marginBottom:14}}>
         <h3 style={{fontSize:12,fontWeight:600,color:theme.textMuted,marginBottom:12,marginTop:0}}>
-          {rangeLabels[timeRange].title} - Comparison
+          {rangeLabels.title}{isTimeline ? "" : " · comparison"}
         </h3>
-        <SvgBarChart data={chartData} height={180} color={theme.primary} gridColor={theme.cardBorder} labelColor={theme.textDim} labelStep={timeRange==="daily"?15:1} peakColor={theme.warning} />
+        <SvgBarChart data={barData} height={180} color={isTimeline ? theme.warning : theme.primary} gridColor={theme.cardBorder} labelColor={theme.textDim} labelStep={Math.max(labelStep, chartData.length > 40 ? Math.ceil(chartData.length / 8) : 1)} peakColor={isTimeline ? theme.primary : theme.warning} fmtY={isTimeline ? countFmt : undefined} fmtV={isTimeline ? (v) => `${Math.round(v)} filed` : undefined} />
       </div>
 
       {/* Exclusion summary */}
@@ -7688,7 +7715,7 @@ function AuthGate() {
     const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
       if (!alive) return;
       if (event === "SIGNED_IN") localStorage.setItem(SIGNED_IN_AT, String(Date.now()));
-      if (event === "SIGNED_OUT") localStorage.removeItem(SIGNED_IN_AT);
+      if (event === "SIGNED_OUT") { localStorage.removeItem(SIGNED_IN_AT); if (window.cm && window.cm.hubLoc) { window.cm.hubLoc.stop(); window.cm.hubLoc = null; } }
       setSession(s || null);
       setReady(true);
     });

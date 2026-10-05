@@ -1,5 +1,5 @@
-const SHELL='cm-shell-v50', DATA='cm-data-v1';
-const ASSETS=['./','./index.html','./manifest.webmanifest','./css/app.css','./js/app.jsx','./js/sw-register.js','./js/akatsuki-client.js','./js/cost-adapter.js','./icons/icon-192.png','./icons/icon-512.png','./icons/icon-maskable-192.png','./icons/icon-maskable-512.png','./icons/icon.svg','./icons/icon-maskable.svg','./icons/favicon-32.png','./icons/apple-touch-icon.png'];
+const SHELL='cm-shell-v52', DATA='cm-data-v1';
+const ASSETS=['./','./index.html','./manifest.webmanifest','./css/app.css','./js/app.jsx','./js/sw-register.js','./js/akatsuki-client.js','./js/akatsuki-location.js','./js/cost-adapter.js','./icons/icon-192.png','./icons/icon-512.png','./icons/icon-maskable-192.png','./icons/icon-maskable-512.png','./icons/icon.svg','./icons/icon-maskable.svg','./icons/favicon-32.png','./icons/apple-touch-icon.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(SHELL).then(c=>c.addAll(ASSETS)).then(()=>self.skipWaiting()));});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==SHELL&&k!==DATA).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});
 self.addEventListener('fetch',e=>{
