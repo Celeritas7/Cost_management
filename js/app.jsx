@@ -606,13 +606,13 @@ function App({ session, onSignOut }) {
     let dead = false;
     (async () => {
       const [p, a] = await Promise.all([
-        supabase.from("cost_management_area_points").select("id,area_id").eq("confirmed", false),
-        supabase.from("cost_management_areas").select("id,region"),
+        supabase.from(HUB_POINTS).select("id,area_id").eq("confirmed", false),
+        supabase.from(HUB_AREAS).select("id,region"),
       ]);
       if (dead || p.error || a.error) return;
       // Region-scoped to match what the Areas panel shows — a spot learned in another profile shouldn't badge this one.
-      const here = new Set((a.data || []).filter((x) => !x.region || x.region === currency).map((x) => x.id));
-      setPendingSpots((p.data || []).filter((x) => here.has(x.area_id)).length);
+      const here = new Set((a.data || []).filter((x) => !x.region || x.region === currency).map((x) => String(x.id)));
+      setPendingSpots((p.data || []).filter((x) => here.has(String(x.area_id))).length);
     })();
     return () => { dead = true; };
   }, [view, currency]);
@@ -882,22 +882,23 @@ function App({ session, onSignOut }) {
     let dead = false;
     (async () => {
       const [p, a, l] = await Promise.all([
-        supabase.from("cost_management_area_points").select("id,area_id,lat,lng,radius_m,label,confirmed"),
-        supabase.from("cost_management_areas").select("id,name,region"),
+        supabase.from(HUB_POINTS).select("id,area_id,lat,lng,radius_m,label,confirmed,shop_name"),
+        supabase.from(HUB_AREAS).select("id,name,region"),
         supabase.from("cost_management_shop_locations").select("area_id,shop_id"),
       ]);
       if (dead) return;
-      const areaById = {}; (a.data || []).forEach((x) => { areaById[x.id] = x; });
+      const areaById = {}; (a.data || []).forEach((x) => { areaById[String(x.id)] = x; });
       const shopById = {}, shopByName = {};
       shops.forEach((s) => { shopById[String(s.id)] = s; shopByName[s.name] = s; });
-      const inArea = {}; (l.data || []).forEach((x) => { (inArea[x.area_id] = inArea[x.area_id] || []).push(String(x.shop_id)); });
+      const inArea = {}; (l.data || []).forEach((x) => { const k = String(x.area_id); (inArea[k] = inArea[k] || []).push(String(x.shop_id)); });
       const out = [];
       (p.data || []).forEach((pt) => {
         if (pt.lat == null || pt.lng == null || pt.confirmed === false) return;
-        const ar = areaById[pt.area_id];
+        const ar = areaById[String(pt.area_id)];
         if (ar && ar.region && ar.region !== currency) return;
-        const linked = (inArea[pt.area_id] || []).map((id) => shopById[id]).filter(Boolean);
-        const sh = (pt.label && shopByName[pt.label]) || (linked.length === 1 ? linked[0] : null);
+        const linked = (inArea[String(pt.area_id)] || []).map((id) => shopById[id]).filter(Boolean);
+        // The hub's shop_name (from the anchor's entity_ref) names the shop — not the label.
+        const sh = (pt.shop_name && shopByName[pt.shop_name]) || (linked.length === 1 ? linked[0] : null);
         out.push({ lat: Number(pt.lat), lng: Number(pt.lng), radius: Number(pt.radius_m) || 200, shop: sh ? sh.name : null, category: sh ? sh.category : null, label: pt.label || null, areaName: ar ? ar.name : null });
       });
       locTriggers.forEach((t) => {
@@ -1816,59 +1817,41 @@ function StopSettings() {
   );
 }
 
-// ── Google Places budget guards ──
-// Only ShopCaptureView ever calls Google (the places-nearby edge function, field
-// mask displayName + types + location — all Pro-tier, so one call = one Pro SKU
-// unit). Three guards keep volume flat: (1) pinned shops answer first, no call;
-// (2) a coordinate cache answers a corner once ever, not once per visit;
-// (3) a per-month counter with a hard cap — at cap, pins and typing only.
-// The counter and the cache are shared across devices once 012 is applied (the
-// cap is then one real cap, not one per device); the console quota is still what
-// makes a charge impossible.
-const PLACES_CACHE_KEY = "cm_places_cache", PLACES_CALLS_KEY = "cm_places_calls", PLACES_CFG_KEY = "cm_places_cfg", PLACES_EVT = "cm-places-changed";
-const PLACES_CFG_DEFAULT = { cap: 1000, cacheRadius: 100 };
-const getPlacesCfg = () => { try { return { ...PLACES_CFG_DEFAULT, ...(JSON.parse(localStorage.getItem(PLACES_CFG_KEY)) || {}) }; } catch (e) { return { ...PLACES_CFG_DEFAULT }; } };
-// Both numbers are coerced on write, so a cleared field can never persist "" and
-// leave the gate and the indicators disagreeing. cap 0 is legitimate and means
-// "never call Google" — every indicator reads it that way.
-const setPlacesCfg = (c) => { const clean = { cap: Math.max(0, parseInt(c.cap, 10) || 0), cacheRadius: Math.max(20, parseInt(c.cacheRadius, 10) || PLACES_CFG_DEFAULT.cacheRadius) }; try { localStorage.setItem(PLACES_CFG_KEY, JSON.stringify(clean)); } catch (e) {} window.dispatchEvent(new Event(PLACES_EVT)); };
+// ── Google Places (R018 step 1 · G3) ──
+// Akatsuki owns the lookup now: akatsuki-places-nearby caches corners, counts calls and caps
+// the month across devices. Cost keeps no cap, counter or corner cache of its own; the old
+// localStorage copies are cleared once here. cost_management_places_cache / _usage are left
+// in the database untouched and are no longer read or written.
 const monthKey = () => { const d = new Date(); return d.getFullYear() + "-" + pad2(d.getMonth() + 1); };
-const getPlacesCalls = () => { try { const o = JSON.parse(localStorage.getItem(PLACES_CALLS_KEY)); return o && o.month === monthKey() ? Number(o.n) || 0 : 0; } catch (e) { return 0; } };
-const bumpPlacesCalls = () => { const n = getPlacesCalls() + 1; try { localStorage.setItem(PLACES_CALLS_KEY, JSON.stringify({ month: monthKey(), n })); } catch (e) {} window.dispatchEvent(new Event(PLACES_EVT)); enqueue({ table: "cost_management_places_usage", op: "upsert", row: { month: monthKey(), calls: n, updated_at: new Date().toISOString() }, onConflict: "user_id,month" }); return n; };
-const placesCap = () => Math.max(0, Number(getPlacesCfg().cap) || 0);
-const placesAtCap = () => getPlacesCalls() >= placesCap();
-const getPlacesCache = () => { try { const a = JSON.parse(localStorage.getItem(PLACES_CACHE_KEY)); return Array.isArray(a) ? a : []; } catch (e) { return []; } };
-// Nearest cached lookup within cacheRadius of here; the same corner never asks twice.
-const placesCacheGet = (pos) => { const R = Number(getPlacesCfg().cacheRadius) || 100; let best = null, bd = Infinity; getPlacesCache().forEach((e) => { const d = distanceMeters(pos, e); if (d <= R && d < bd) { best = e; bd = d; } }); return best ? { ...best, _d: Math.round(bd) } : null; };
-const placesCachePut = (pos, candidates) => { const id = "c" + Date.now(); const e2 = { id, lat: pos.lat, lng: pos.lng, ts: Date.now(), candidates }; const l = getPlacesCache(); l.push(e2); try { localStorage.setItem(PLACES_CACHE_KEY, JSON.stringify(l.slice(-400))); } catch (e) {} window.dispatchEvent(new Event(PLACES_EVT)); enqueue({ table: "cost_management_places_cache", op: "upsert", row: { id, lat: pos.lat, lng: pos.lng, candidates }, onConflict: "user_id,id" }); };
-// Forgetting corners is scoped explicitly rather than relying on RLS alone to
-// narrow a filter-less DELETE — PostgREST rejects those, and a rejected op would
-// leave the server cache populated for the next pull to restore.
-const clearPlacesCache = () => { const ids = getPlacesCache().map((c) => c.id).filter(Boolean); try { localStorage.removeItem(PLACES_CACHE_KEY); } catch (e) {} window.dispatchEvent(new Event(PLACES_EVT)); ids.forEach((id) => enqueue({ table: "cost_management_places_cache", op: "delete", match: { id } })); };
-// Live counter hook: re-renders on every call, cache write or cap change.
-const usePlacesBudget = () => {
-  const read = () => ({ calls: getPlacesCalls(), cap: placesCap(), cached: getPlacesCache().length });
-  const [b, setB] = useState(read);
-  useEffect(() => { const h = () => setB(read()); window.addEventListener(PLACES_EVT, h); return () => window.removeEventListener(PLACES_EVT, h); }, []);
-  return b;
-};
-
+try { ["cm_places_cache", "cm_places_calls", "cm_places_cfg"].forEach((k) => localStorage.removeItem(k)); } catch (e) {}
+// Akatsuki's shop lookup (verified live Oct 5: status fetched, 5 candidates, place_id present).
+// A non-2xx answer (429 "capped") is a FunctionsHttpError whose body sits on error.context;
+// a FunctionsFetchError (never reached the function) throws `blocked`.
+async function hubPlacesNearby(body) {
+  // Pass the user's JWT explicitly so the hub's auth check never depends on supabase-js defaults.
+  const { data: s } = await supabase.auth.getSession();
+  const tok = s && s.session ? s.session.access_token : null;
+  if (!tok) return { res: { status: "error", reason: "Signed out on this device — sign in again." }, http: 401 };
+  const { data, error } = await supabase.functions.invoke("akatsuki-places-nearby", { body, headers: { Authorization: "Bearer " + tok } });
+  if (!error) return { res: data, http: 200 };
+  const ctx = error.context;
+  if (ctx && typeof ctx.json === "function") { let j = null; try { j = await ctx.json(); } catch (e) {} return { res: j, http: ctx.status }; }
+  throw Object.assign(new Error(error.message || "blocked"), { blocked: true });
+}
 // ── Sync mapping and the pull half of the loop (queue-drain half is above) ──
 const stopToRow = (s) => ({ id: s.id, region: s.region || "JPY", lat: s.lat, lng: s.lng, started_at: new Date(s.startedAt).toISOString(), ended_at: s.endedAt ? new Date(s.endedAt).toISOString() : null, status: s.status || "open", shop: s.shop || null, category: s.category || null, place: s.place || null, near: s.near || null, pinned: !!s.pinned, blocked: !!s.blocked, updated_at: new Date(s.updatedAt || Date.now()).toISOString() });
 const rowToStop = (r) => ({ id: r.id, region: r.region, lat: r.lat, lng: r.lng, startedAt: new Date(r.started_at).getTime(), endedAt: r.ended_at ? new Date(r.ended_at).getTime() : null, status: r.status, shop: r.shop, category: r.category, place: r.place, near: r.near, pinned: !!r.pinned, blocked: !!r.blocked, updatedAt: new Date(r.updated_at).getTime() });
 
 async function syncPull() {
   if (syncOff || !navigator.onLine) return false;
-  const [s, b, cfgRes, u, pc] = await Promise.all([
+  const [s, b, cfgRes] = await Promise.all([
     supabase.from("cost_management_stops").select("*"),
     supabase.from("cost_management_stop_blocks").select("*"),
     supabase.from("cost_management_stop_settings").select("cfg").maybeSingle(),
-    supabase.from("cost_management_places_usage").select("month,calls"),
-    supabase.from("cost_management_places_cache").select("*"),
   ]);
-  const firstErr = [s, b, cfgRes, u, pc].map((r) => r && r.error && r.error.message).find(Boolean);
+  const firstErr = [s, b, cfgRes].map((r) => r && r.error && r.error.message).find(Boolean);
   if (firstErr && missingTable(firstErr)) { syncOff = true; console.warn("sync off — run migrations 011_stops.sql / 012_places_budget.sql:", firstErr); return false; }
-  if (s.error || b.error || u.error || pc.error) return false;
+  if (s.error || b.error) return false;
   // Stops: union by id, newest change wins — so a stop logged on the laptop
   // leaves the phone's panel on its next pull.
   const byId = {};
@@ -1879,11 +1862,6 @@ async function syncPull() {
   // is authoritative — that is what lets a removal propagate instead of coming back.
   writeStopBlocks((b.data || []).map((r) => ({ id: r.id, lat: r.lat, lng: r.lng, label: r.label, ts: new Date(r.created_at).getTime() })));
   if (cfgRes && cfgRes.data && cfgRes.data.cfg) { try { localStorage.setItem(STOP_CFG_KEY, JSON.stringify({ ...STOP_CFG_DEFAULT, ...cfgRes.data.cfg })); } catch (e) {} window.dispatchEvent(new Event(STOPS_EVT)); }
-  try { localStorage.setItem(PLACES_CACHE_KEY, JSON.stringify((pc.data || []).map((r) => ({ id: r.id, lat: r.lat, lng: r.lng, ts: new Date(r.created_at).getTime(), candidates: r.candidates || [] })).slice(-400))); } catch (e) {}
-  // Counter: MAX, never a sum — a replayed queue must not double-count.
-  const row = (u.data || []).find((x) => x.month === monthKey());
-  if (row) { const merged = Math.max(Number(row.calls) || 0, getPlacesCalls()); try { localStorage.setItem(PLACES_CALLS_KEY, JSON.stringify({ month: monthKey(), n: merged })); } catch (e) {} }
-  window.dispatchEvent(new Event(PLACES_EVT));
   return true;
 }
 const SYNC_SEEDED_KEY = "cm_sync_seeded";
@@ -1905,15 +1883,7 @@ function seedSyncFromLocal() {
   try {
     getStops().forEach((s) => enqueue({ table: "cost_management_stops", op: "upsert", row: stopToRow({ ...s, updatedAt: s.updatedAt || s.startedAt || Date.now() }), onConflict: "user_id,id" }));
     getStopBlocks().forEach((b) => enqueue({ table: "cost_management_stop_blocks", op: "upsert", row: { id: b.id, lat: b.lat, lng: b.lng, label: b.label || null }, onConflict: "user_id,id" }));
-    // Corners cached before v27 have no id (the column came with the sync work).
-    // Mint one and write it BACK locally, so "Forget corners" can later delete the
-    // matching server row — otherwise the next pull would restore what you forgot.
-    const cache = getPlacesCache().map((c, i) => ({ ...c, id: c.id || "c" + ((c.ts || Date.now()) + i) }));
-    try { localStorage.setItem(PLACES_CACHE_KEY, JSON.stringify(cache)); } catch (e) {}
-    cache.forEach((c) => enqueue({ table: "cost_management_places_cache", op: "upsert", row: { id: c.id, lat: c.lat, lng: c.lng, candidates: c.candidates || [] }, onConflict: "user_id,id" }));
     enqueue({ table: "cost_management_stop_settings", op: "upsert", row: { cfg: getStopCfg(), updated_at: new Date().toISOString() }, onConflict: "user_id" });
-    const calls = getPlacesCalls();
-    if (calls > 0) enqueue({ table: "cost_management_places_usage", op: "upsert", row: { month: monthKey(), calls, updated_at: new Date().toISOString() }, onConflict: "user_id,month" });
     return true;
   } catch (e) { console.warn("sync seed failed — will retry next load", e); return false; }
 }
@@ -1947,36 +1917,6 @@ const useOutbox = () => {
   }, []);
   return v;
 };
-
-function PlacesBudgetSettings() {
-  const { theme, inputStyle, labelStyle } = useTheme();
-  const b = usePlacesBudget();
-  const [cfg, setCfgState] = useState(getPlacesCfg);
-  const save = (patch) => { const n = { ...cfg, ...patch }; setCfgState({ cap: Math.max(0, parseInt(n.cap, 10) || 0), cacheRadius: Math.max(20, parseInt(n.cacheRadius, 10) || PLACES_CFG_DEFAULT.cacheRadius) }); setPlacesCfg(n); };
-  const pct = b.cap > 0 ? Math.min(100, Math.round((b.calls / b.cap) * 100)) : 100;
-  const at = b.calls >= b.cap;
-  const num = { ...inputStyle, width: 84, padding: "7px 9px", fontSize: 13, textAlign: "center" };
-  return (
-    <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 14, padding: "14px 14px 12px", marginBottom: 14 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 8 }}>
-        <Icon name="crosshair" size={15} style={{ color: theme.primary }}/>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13.5, fontWeight: 700, color: "#fff" }}>Google lookups</div>
-          <div style={{ fontSize: 11, color: theme.textDim }}>Only “Find shops near me” asks Google. Pinned shops and remembered corners answer first, for free.</div>
-        </div>
-        <span style={{ fontSize: 13, fontWeight: 700, color: at ? theme.danger : "#fff", whiteSpace: "nowrap" }}>{b.cap === 0 ? "never ask" : <>{b.calls} <span style={{ fontSize: 11, color: theme.textMuted, fontWeight: 600 }}>/ {b.cap} this month</span></>}</span>
-      </div>
-      <div style={{ height: 6, borderRadius: 3, background: theme.inputBg, overflow: "hidden", marginBottom: 12 }}><div style={{ width: pct + "%", height: "100%", background: at ? theme.danger : pct >= 80 ? theme.warning : theme.primary, transition: "width .3s" }}/></div>
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
-        <div><span style={labelStyle}>Monthly cap</span><input type="number" min="0" value={cfg.cap} onChange={(e) => save({ cap: e.target.value })} style={num}/><div style={{ fontSize: 10, color: theme.textDim, marginTop: 3 }}>0 = never ask Google</div></div>
-        <div><span style={labelStyle}>Remember corners within</span><div style={{ display: "flex", alignItems: "center", gap: 6 }}><input type="number" min="20" value={cfg.cacheRadius} onChange={(e) => save({ cacheRadius: e.target.value })} style={num}/><span style={{ fontSize: 11.5, color: theme.textMuted }}>m</span></div></div>
-        <div style={{ flex: 1 }}/>
-        {b.cached > 0 && <button onClick={() => { if (confirm(`Forget ${b.cached} remembered corner${b.cached === 1 ? "" : "s"}? The next visit to each will cost one lookup.`)) clearPlacesCache(); }} style={{ border: "none", background: "none", color: theme.textDim, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", alignSelf: "center" }}>Forget {b.cached} corner{b.cached === 1 ? "" : "s"}</button>}
-      </div>
-      <div style={{ fontSize: 10.5, color: theme.textDim, marginTop: 10, lineHeight: 1.5 }}>{b.cap === 0 ? "Google is switched off: only pinned shops, remembered corners and typing. Raise the cap to allow lookups again." : `Nearby Search bills at the Pro tier; the first 5,000 calls a month are free, so ${b.cap} stays at ¥0 with room to spare.`} The count is shared across your devices, and remembered corners with it. The quota you set in the Google Cloud console is the guard that makes a charge impossible.</div>
-    </div>
-  );
-}
 
 // ═══════════════════════════════════════════
 //  CALENDAR VIEW (read-only dot calendar + day panel)
@@ -2622,6 +2562,31 @@ function TagSelector({ selectedTags, onChange }) {
 // ═══════════════════════════════════════════
 //  ADD ENTRY VIEW  (redesigned: Quick / Same shop / Different)
 // ═══════════════════════════════════════════
+// ── Areas + anchors live in Akatsuki (R018 step 1 · G2). Cost reads the hub views and writes
+// through the hub RPCs; cost_management_areas / _area_points are no longer read or written.
+// Hub ids are text, Cost's shop_locations.area_id is still bigint until 014 runs, so every id
+// is normalised to a string on read — all comparisons below are string === string.
+const HUB_AREAS = "akatsuki_cost_areas", HUB_POINTS = "akatsuki_cost_area_points";
+const normArea = (a) => ({ ...a, id: String(a.id) });
+const normPoint = (p) => ({ ...p, id: String(p.id), area_id: String(p.area_id) });
+const normLink = (l) => ({ ...l, area_id: String(l.area_id) });
+const shopRef = (name) => (name ? { app: "cost", kind: "shop", name } : null);
+const hubId = (d) => { const v = Array.isArray(d) ? d[0] : d; if (v == null) return null; return String(typeof v === "object" ? (v.id ?? Object.values(v)[0]) : v); };
+// Contract errors are shown, never retried.
+const hubAreaMsg = (e) => { const c = String((e && e.code) || ""), m = String((e && e.message) || e || "");
+  if (c === "42501" || /42501|not signed in/i.test(m)) return "Not signed in to the hub — sign in again.";
+  if (c === "AK102" || /AK102/.test(m)) return "Hub refused: a required field is missing (AK102).";
+  if (c === "AK114" || /AK114/.test(m)) return "That spot is no longer in the hub (AK114).";
+  if (c === "AK115" || /AK115/.test(m)) return "That area is no longer in the hub (AK115).";
+  return m || "Hub request failed."; };
+async function hubRpc(fn, args) { const { data, error } = await supabase.rpc(fn, args); if (error) throw error; return data; }
+// p_country takes the currency code; the hub maps it and hands it back as `region`.
+const hubAreaAdd = (label, lat, lng, radius, region) => hubRpc("akatsuki_area_add", { p_label: label, p_lat: lat, p_lng: lng, p_radius_m: radius, p_country: region || null, p_app: "cost" });
+// patch: label, lat, lng, radius_m, region, retire — "delete" is retire: true (nothing destroyed).
+const hubAreaEdit = (id, patch) => hubRpc("akatsuki_area_edit", { p_id: id, p_patch: patch, p_app: "cost" });
+// 'auto' lands unconfirmed; an auto sighting merged within 30 m never demotes or re-sizes the anchor.
+const hubAnchorAdd = (areaId, lat, lng, label, ref, source, radius = 200) => hubRpc("akatsuki_anchor_add", { p_area_id: areaId, p_lat: lat, p_lng: lng, p_label: label, p_entity_ref: ref, p_source: source, p_app: "cost", p_radius_m: radius });
+const hubAnchorEdit = (id, patch) => hubRpc("akatsuki_anchor_edit", { p_id: id, p_patch: patch, p_app: "cost" });
 let _rid = 0; // module-scoped so row ids stay stable across re-renders
 let _areaPickMem = null; // manual area choice survives tab switches: { id, at: {lat,lng} }
 // Distance from a fix to an area = distance to its nearest confirmed spot (legacy lat/lng when it has none).
@@ -2692,13 +2657,13 @@ function AddEntryView({ recentEntries, allExpenses }) {
   useEffect(() => {
     (async () => {
       const [a, p, l] = await Promise.all([
-        supabase.from("cost_management_areas").select("id,name,region,lat,lng,radius_m"),
-        supabase.from("cost_management_area_points").select("id,area_id,lat,lng,radius_m,confirmed"),
+        supabase.from(HUB_AREAS).select("id,name,region,lat,lng,radius_m"),
+        supabase.from(HUB_POINTS).select("id,area_id,lat,lng,radius_m,confirmed"),
         supabase.from("cost_management_shop_locations").select("area_id,shop_id"),
       ]);
-      if (!a.error) setAreas(a.data || []);
-      if (!p.error) setAreaPts(p.data || []);
-      if (!l.error) setAreaLinks(l.data || []);
+      if (!a.error) setAreas((a.data || []).map(normArea));
+      if (!p.error) setAreaPts((p.data || []).map(normPoint));
+      if (!l.error) setAreaLinks((l.data || []).map(normLink));
     })();
     if ("geolocation" in navigator) navigator.geolocation.getCurrentPosition(
       (p) => {
@@ -2726,8 +2691,11 @@ function AddEntryView({ recentEntries, allExpenses }) {
     const area = regionAreas.find((a) => a.id === tagged[0].area_id); if (!area) return;
     if (area._d == null || area._d > 1500 || regionAreas.some((a) => a._in)) return;
     if (areaPts.some((p) => p.area_id === area.id && distanceMeters(pos, p) <= 150)) return;
-    const { data } = await supabase.from("cost_management_area_points").insert({ area_id: area.id, lat: pos.lat, lng: pos.lng, radius_m: 200, label: shopName, source: "auto", confirmed: false }).select("id,area_id,lat,lng,radius_m,confirmed").single();
-    if (data) setAreaPts((ps) => [...ps, data]);
+    try {
+      const id = hubId(await hubAnchorAdd(area.id, pos.lat, pos.lng, shopName, shopRef(shopName), "auto", 200));
+      const { data } = id != null ? await supabase.from(HUB_POINTS).select("id,area_id,lat,lng,radius_m,confirmed").eq("id", id).maybeSingle() : { data: null };
+      if (data) setAreaPts((ps) => [...ps.filter((x) => x.id !== String(data.id)), normPoint(data)]);
+    } catch (e) { console.warn("[areas] learned spot not sent to hub:", hubAreaMsg(e)); }
   };
 
   // presetDate is consumed once (into `dates` above); clear it so a later
@@ -3454,14 +3422,14 @@ function ShopAreasPanel({ allExpenses = [], onPending }) {
   const load = useCallback(async () => {
     setLoading(true);
     const [aRes, lRes, pRes] = await Promise.all([
-      supabase.from("cost_management_areas").select("*"),
+      supabase.from(HUB_AREAS).select("*"),
       supabase.from("cost_management_shop_locations").select("*"),
-      supabase.from("cost_management_area_points").select("*"),
+      supabase.from(HUB_POINTS).select("*"),
     ]);
-    if (aRes.error) setErr(isMissingTable(aRes.error.message) ? "Run migration 009_areas.sql in Supabase first." : aRes.error.message);
-    else { setErr(""); setAreas(aRes.data || []); setLinks(lRes.data || []); }
-    if (pRes.error) { setPoints([]); setPtsErr(isMissingTable(pRes.error.message) ? "Run migration 010_area_points.sql to give areas more than one spot." : pRes.error.message); }
-    else { setPoints(pRes.data || []); setPtsErr(""); }
+    if (aRes.error) setErr("Couldn't read areas from Akatsuki: " + hubAreaMsg(aRes.error));
+    else { setErr(""); setAreas((aRes.data || []).map(normArea)); setLinks((lRes.data || []).map(normLink)); }
+    if (pRes.error) { setPoints([]); setPtsErr("Couldn't read spots from Akatsuki: " + hubAreaMsg(pRes.error)); }
+    else { setPoints((pRes.data || []).map(normPoint)); setPtsErr(""); }
     setLoading(false);
   }, [supabase]);
   useEffect(() => { load(); }, [load]);
@@ -3515,12 +3483,14 @@ function ShopAreasPanel({ allExpenses = [], onPending }) {
   });
   const createArea = async () => {
     const name = draft.name.trim(); if (!name || busy) return;
+    const lat = draft.lat === "" ? null : Number(draft.lat), lng = draft.lng === "" ? null : Number(draft.lng);
     setBusy(true);
-    let lat = draft.lat === "" ? null : Number(draft.lat), lng = draft.lng === "" ? null : Number(draft.lng);
-    const { data, error } = await supabase.from("cost_management_areas").insert({ name, region: currency, lat, lng }).select("id").single();
-    if (!error && data && lat != null && lng != null && !ptsErr) await supabase.from("cost_management_area_points").insert({ area_id: data.id, lat, lng, radius_m: 500, label: name, source: "manual", confirmed: true });
+    try {
+      const id = hubId(await hubAreaAdd(name, lat, lng, 500, currency));
+      // Same as before: a located area also gets one 500 m spot named after it.
+      if (id != null && lat != null && lng != null) await hubAnchorAdd(id, lat, lng, name, null, "manual", 500);
+    } catch (e) { setBusy(false); flash(hubAreaMsg(e), 4000); return; }
     setBusy(false);
-    if (error) { flash(error.message.includes("duplicate") ? "That area already exists" : error.message); return; }
     setDraft({ name: "", lat: "", lng: "" }); setNewOpen(false); flash("Area added"); load();
   };
   const useHere = async () => {
@@ -3528,22 +3498,27 @@ function ShopAreasPanel({ allExpenses = [], onPending }) {
     if (!p) { flash("Couldn't read your location"); return; }
     setDraft(d => ({ ...d, lat: p.lat.toFixed(5), lng: p.lng.toFixed(5) }));
   };
+  // Rename / region go through the hub; only changed keys are sent.
   const saveEdit = async (patch) => {
+    const a = areas.find(x => x.id === editing.id) || {};
+    const p = {};
+    if (patch.name !== a.name) p.label = patch.name;
+    if ((patch.region || null) !== (a.region || null)) p.region = patch.region || null;
+    if (!Object.keys(p).length) { setEditing(null); return; }
     setBusy(true);
-    const { error } = await supabase.from("cost_management_areas").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", editing.id);
-    setBusy(false);
-    if (error) { flash(error.message); return; }
-    setEditing(null); load();
+    try { await hubAreaEdit(editing.id, p); } catch (e) { setBusy(false); flash(hubAreaMsg(e), 4000); return; }
+    setBusy(false); setEditing(null); load();
   };
+  // Delete = retire in the hub: the area and its spots leave the views, nothing is destroyed.
+  // Shop links to it are removed here, as the old cascade did, so those shops read "No area yet".
   const removeArea = async () => {
     if (!confirm(`Delete ${editing.name}? Its shops go back to "No area yet".`)) return;
     setBusy(true);
-    const { error } = await supabase.from("cost_management_areas").delete().eq("id", editing.id);
-    setBusy(false);
-    if (error) { flash(error.message); return; }
-    setEditing(null); flash("Area deleted"); load();
+    try { await hubAreaEdit(editing.id, { retire: true }); } catch (e) { setBusy(false); flash(hubAreaMsg(e), 4000); return; }
+    await supabase.from("cost_management_shop_locations").delete().eq("area_id", editing.id);
+    setBusy(false); setEditing(null); flash("Area deleted"); load();
   };
-  // Merge keeps the target's coordinates; links move across, duplicates are dropped.
+  // Merge: shop links move (Cost's table), spots move via the hub, the emptied source is retired.
   const mergeInto = async (targetId) => {
     const target = areas.find(a => a.id === targetId); if (!target) return;
     setBusy(true);
@@ -3554,10 +3529,13 @@ function ShopAreasPanel({ allExpenses = [], onPending }) {
         .insert(moving.map(shop_id => ({ area_id: targetId, shop_id })));
       if (error) { setBusy(false); flash(error.message); return; }
     }
-    if (!ptsErr) await supabase.from("cost_management_area_points").update({ area_id: targetId }).eq("area_id", editing.id);
-    const { error } = await supabase.from("cost_management_areas").delete().eq("id", editing.id);
+    const { error: le } = await supabase.from("cost_management_shop_locations").delete().eq("area_id", editing.id);
+    if (le) { setBusy(false); flash(le.message); return; }
+    try {
+      for (const p of points.filter(p => p.area_id === editing.id)) await hubAnchorEdit(p.id, { area_id: targetId });
+      await hubAreaEdit(editing.id, { retire: true });
+    } catch (e) { setBusy(false); flash(hubAreaMsg(e), 4000); load(); return; }
     setBusy(false);
-    if (error) { flash(error.message); return; }
     setEditing(null); flash(`Merged into ${target.name}`); load();
   };
   const addPicked = async () => {
@@ -3586,15 +3564,18 @@ function ShopAreasPanel({ allExpenses = [], onPending }) {
     const p = m ? { lat: Number(m[1]), lng: Number(m[3]) } : await capture();
     if (!p) { setBusy(false); flash("Couldn't read your location — type lat, lng instead"); return; }
     if (!m) setPos(p); // reconcile the preview/distance to the fix actually stored
-    const { error } = await supabase.from("cost_management_area_points").insert({ area_id: editing.id, lat: p.lat, lng: p.lng, radius_m: spotRadius, label: spotLabel.trim() || null, source: "manual", confirmed: true });
+    const label = spotLabel.trim() || null;
+    // A label that is exactly one of my shops makes this a shop pin (entity_ref); anything else is a plain anchor.
+    const isShop = !!label && shops.some(s => s.name === label);
+    try { await hubAnchorAdd(editing.id, p.lat, p.lng, label, isShop ? shopRef(label) : null, "manual", spotRadius); }
+    catch (e) { setBusy(false); flash(hubAreaMsg(e), 4000); return; }
     setBusy(false);
-    if (error) { flash(isMissingTable(error.message) ? "Run migration 010_area_points.sql first." : error.message); return; }
     setSpotLabel(""); setSpotCoord(""); flash(`Spot added at ${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}`, 4000); load();
   };
+  // Keep = confirmed, radius change = radius_m, Drop / × = retire. Nothing is hard-deleted.
   const patchSpot = async (p, patch) => {
-    const q = patch === null ? supabase.from("cost_management_area_points").delete().eq("id", p.id) : supabase.from("cost_management_area_points").update(patch).eq("id", p.id);
-    const { error } = await q;
-    if (error) { flash(error.message); return; }
+    try { await hubAnchorEdit(p.id, patch === null ? { retire: true } : patch); }
+    catch (e) { flash(hubAreaMsg(e), 4000); if (/AK114/.test(String(e && (e.code || e.message)))) load(); return; }
     load();
   };
 
@@ -3624,7 +3605,7 @@ function ShopAreasPanel({ allExpenses = [], onPending }) {
           </select>
         )}
       </div>
-      <p style={{ fontSize: 10.5, color: theme.textDim, margin: "6px 0 2px" }}>{pos ? "Sorted by distance from you." : posMsg || "Locating…"}{ptsErr ? ` ${ptsErr}` : ""}</p>
+      <p style={{ fontSize: 10.5, color: theme.textDim, margin: "6px 0 2px" }}>{pos ? "Sorted by distance from you." : posMsg || "Locating…"} Areas and spots come from Akatsuki.{ptsErr ? ` ${ptsErr}` : ""}</p>
 
       {loading ? <div style={{ fontSize: 12, color: theme.textDim, padding: "18px 0", textAlign: "center" }}>Loading areas…</div> : <>
         {visible.map(a => {
@@ -3937,7 +3918,7 @@ function SettingsView({ allExpenses, pendingSpots = 0, onPendingSpots }) {
 
       {activeTab === "rules" && <RecurringView />}
 
-      {activeTab === "triggers" && <><StopSettings /><PlacesBudgetSettings /><LocationTriggersView /></>}
+      {activeTab === "triggers" && <><StopSettings /><LocationTriggersView /></>}
 
       {activeTab === "farebook" && <FareBookView />}
 
@@ -5095,7 +5076,7 @@ function FareBookView() {
   const [editing, setEditing] = useState(null); // row id being edited
   const [draft, setDraft] = useState({});
   const [adding, setAdding] = useState(false);
-  const [newRow, setNewRow] = useState({ from: "", to: "", fare: "", operator: "", verified: true });
+  const [newRow, setNewRow] = useState({ from: "", to: "", fare: "", ticket: "", operator: "", verified: true });
   const [tariff, setTariff] = useState(false);   // tariff-band reference panel
   const [bands, setBands] = useState(null);      // published operator bands
   const [importing, setImporting] = useState(false);
@@ -5149,13 +5130,17 @@ function FareBookView() {
   const saveEdit = async (row) => {
     const fare = parseInt(draft.fare_ic, 10);
     if (!Number.isInteger(fare) || fare <= 0) { say("Enter a fare", true); return; }
-    await patch(row, { fare_ic: fare, operator: draft.operator || "", notes: draft.notes || "", verified: !!draft.verified });
+    const tk = parseInt(draft.fare_ticket, 10);
+    await patch(row, { fare_ic: fare, fare_ticket: Number.isInteger(tk) && tk > 0 ? tk : null, operator: draft.operator || "", notes: draft.notes || "", verified: !!draft.verified });
     setEditing(null); say("Saved");
   };
   const addRow = async () => {
-    const w = await fareBookSave(supabase, newRow.from, newRow.to, newRow.fare, { origin: "manual", operator: newRow.operator, verified: newRow.verified });
+    const tk = parseInt(newRow.ticket, 10);
+    const w = await fareBookSave(supabase, newRow.from, newRow.to, newRow.fare, { origin: "manual", ticket: Number.isInteger(tk) && tk > 0 ? tk : null, operator: newRow.operator, verified: newRow.verified });
     if (!w || w.status === "error") { say((w && w.reason) || "Fare book write failed", true); return; }
-    setNewRow({ from: "", to: "", fare: "", operator: "", verified: true }); setAdding(false); load();
+    // fareBookSave only writes the IC fare on an existing row; carry the ticket fare too.
+    if (w.status !== "created" && Number.isInteger(tk) && tk > 0 && w.id) await supabase.from("cost_management_fare_book").update({ fare_ticket: tk }).eq("id", w.id);
+    setNewRow({ from: "", to: "", fare: "", ticket: "", operator: "", verified: true }); setAdding(false); load();
     say(w.status === "clash" ? "That pair is already verified at a different fare" : "Added");
   };
 
@@ -5173,7 +5158,7 @@ function FareBookView() {
     say(`Imported ${ok} row${ok === 1 ? "" : "s"}${bad ? ` · ${bad} skipped (${firstErr})` : ""}`, bad > 0 && ok === 0);
   };
   const exportCsv = () => {
-    const body = ["From,To,Fare,Operator,Verified", ...(rows || []).map((r) => [r.pair_a, r.pair_b, r.fare_ic, r.operator || "", r.verified ? "yes" : "no"].join(","))].join("\n");
+    const body = ["From,To,Fare,Operator,Verified,Ticket", ...(rows || []).map((r) => [r.pair_a, r.pair_b, r.fare_ic, r.operator || "", r.verified ? "yes" : "no", r.fare_ticket ?? ""].join(","))].join("\n");
     const url = URL.createObjectURL(new Blob([body], { type: "text/csv" }));
     const a = document.createElement("a"); a.href = url; a.download = "fare-book.csv"; a.click(); URL.revokeObjectURL(url);
   };
@@ -5260,8 +5245,9 @@ function FareBookView() {
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
             <input type="number" inputMode="numeric" value={newRow.fare} onChange={(e) => setNewRow({ ...newRow, fare: e.target.value })} placeholder={CUR.symbol + " IC fare"} style={inputStyle}/>
-            <input value={newRow.operator} onChange={(e) => setNewRow({ ...newRow, operator: e.target.value })} placeholder="Operator (optional)" style={inputStyle}/>
+            <input type="number" inputMode="numeric" value={newRow.ticket} onChange={(e) => setNewRow({ ...newRow, ticket: e.target.value })} placeholder={CUR.symbol + " ticket fare"} style={inputStyle}/>
           </div>
+          <input value={newRow.operator} onChange={(e) => setNewRow({ ...newRow, operator: e.target.value })} placeholder="Operator (optional)" style={inputStyle}/>
           <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, color: theme.textMuted, cursor: "pointer" }}>
             <input type="checkbox" checked={newRow.verified} onChange={(e) => setNewRow({ ...newRow, verified: e.target.checked })}/>I have checked this fare myself
           </label>
@@ -5291,8 +5277,9 @@ function FareBookView() {
               <div style={{ fontSize: 12.5, fontWeight: 700, color: "#fff" }}>{r.pair_a} ↔ {r.pair_b}</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 <input type="number" inputMode="numeric" value={draft.fare_ic} onChange={(e) => setDraft({ ...draft, fare_ic: e.target.value })} placeholder={CUR.symbol + " IC fare"} style={inputStyle}/>
-                <input value={draft.operator} onChange={(e) => setDraft({ ...draft, operator: e.target.value })} placeholder="Operator" style={inputStyle}/>
+                <input type="number" inputMode="numeric" value={draft.fare_ticket} onChange={(e) => setDraft({ ...draft, fare_ticket: e.target.value })} placeholder={CUR.symbol + " ticket fare"} style={inputStyle}/>
               </div>
+              <input value={draft.operator} onChange={(e) => setDraft({ ...draft, operator: e.target.value })} placeholder="Operator" style={inputStyle}/>
               <input value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} placeholder="Notes (optional)" style={inputStyle}/>
               <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, color: theme.textMuted, cursor: "pointer" }}>
                 <input type="checkbox" checked={!!draft.verified} onChange={(e) => setDraft({ ...draft, verified: e.target.checked })}/>Verified — I have checked this fare
@@ -5310,10 +5297,10 @@ function FareBookView() {
                 <span style={{ display: "block", fontSize: 12.5, fontWeight: 600, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.pair_a} ↔ {r.pair_b}</span>
                 <span style={{ display: "block", fontSize: 10.5, color: theme.textDim }}>{r.operator ? r.operator + " · " : ""}{r.origin}{r.hit_count ? ` · confirmed ${r.hit_count}×` : ""} · {String(r.updated_at).slice(0, 10)}</span>
               </span>
-              <span style={{ fontSize: 13.5, fontWeight: 700, color: "#fff", whiteSpace: "nowrap" }}>{fmt(r.fare_ic)}</span>
+              <span style={{ textAlign: "right", whiteSpace: "nowrap" }}><span style={{ display: "block", fontSize: 13.5, fontWeight: 700, color: "#fff" }}>{fmt(r.fare_ic)}</span>{r.fare_ticket != null && <span style={{ display: "block", fontSize: 10, color: theme.textDim }}>ticket {fmt(r.fare_ticket)}</span>}</span>
               <span style={{ display: "flex", gap: 4 }}>
                 {!r.verified && <button onClick={() => patch(r, { verified: true })} title="Mark verified" style={{ border: `1px solid ${theme.success}55`, background: "transparent", color: theme.success, borderRadius: 8, padding: "4px 9px", cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 700 }}>✓</button>}
-                <button onClick={() => { setEditing(r.id); setDraft({ fare_ic: String(r.fare_ic), operator: r.operator || "", notes: r.notes || "", verified: r.verified }); }} title="Edit" style={{ border: `1px solid ${theme.cardBorder}`, background: "transparent", color: theme.textMuted, borderRadius: 8, padding: "4px 9px", cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600 }}>Edit</button>
+                <button onClick={() => { setEditing(r.id); setDraft({ fare_ic: String(r.fare_ic), fare_ticket: r.fare_ticket != null ? String(r.fare_ticket) : "", operator: r.operator || "", notes: r.notes || "", verified: r.verified }); }} title="Edit" style={{ border: `1px solid ${theme.cardBorder}`, background: "transparent", color: theme.textMuted, borderRadius: 8, padding: "4px 9px", cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600 }}>Edit</button>
               </span>
             </div>
           ))}
@@ -5326,7 +5313,8 @@ function FareBookView() {
 // ═══ PHASE C — Location-based Shop Capture + category inference ═══
 function ShopCaptureView({ allExpenses }) {
   const { theme, inputStyle, labelStyle, supabase, fetchData, categories, currency, getCatIcon, stopPins = [] } = useTheme();
-  const budget = usePlacesBudget();
+  const [hubCalls, setHubCalls] = useState(null); // this month's count, as the hub reports it
+  const [capped, setCapped] = useState(false);
   const [candSource, setCandSource] = useState(null); // "pins" | "cache" | "google"
   const [lastPos, setLastPos] = useState(null);
   const { insertExpense, modals } = useExpenseMutations({ onChange: fetchData });
@@ -5338,52 +5326,47 @@ function ShopCaptureView({ allExpenses }) {
   const [infer, setInfer] = useState(null);
   const [saved, setSaved] = useState(false);
   const validCats = useMemo(() => categories.map((c) => c.name), [categories]);
-  const startForm = (name, placeTypes) => {
+  const startForm = (name, placeTypes, placeId = null) => {
     const inf = inferCategory(name, allExpenses, placeTypes, validCats);
     // instrument the cascade: which step produced this suggestion
     console.log(`[capture] cascade step ${inf.step} (${CASCADE_LABELS[inf.step]})`, { shop: name, ...inf });
     setInfer(inf); setSaved(false);
-    setForm({ shop: name, category: inf.category, amount: "", date: ymdToday(), notes: "" });
+    setForm({ shop: name, category: inf.category, amount: "", date: ymdToday(), notes: "", place_id: placeId, place_name: placeId ? name : null });
   };
-  // Guard order: pinned shops → remembered corner → (under cap) Google. `force`
-  // skips the first two so a mis-pinned corner can still be re-asked — it costs one call.
-  const askGoogle = async (pos) => {
-    if (placesAtCap()) { setLocErr(placesCap() === 0 ? "Google lookups are switched off — pick a pinned shop or type the name." : `Monthly Google budget used (${getPlacesCalls()}/${placesCap()}) — pick a pinned shop or type the name.`); return; }
+  // Order: your pinned shops (free, local maths) → the hub. The hub answers from its own corner
+  // cache ("hit") or asks Google ("fetched"); `force` skips both caches and costs one call.
+  const askGoogle = async (pos, force = false) => {
     setLocState("locating");
-    let res = null, err = null;
-    try { const r = await supabase.functions.invoke("places-nearby", { body: { lat: pos.lat, lng: pos.lng } }); res = r.data; err = r.error; }
-    catch (e) { err = e; }
+    let res = null, err = null, http = null;
+    try { const r = await hubPlacesNearby({ lat: pos.lat, lng: pos.lng, force: !!force }); res = r.res; http = r.http; }
+    catch (e) { console.warn("[capture] hub places unreachable", e); err = { message: "Couldn't reach Akatsuki's shop lookup — type the name instead." }; }
+    if (!err && !res) err = { message: `Akatsuki's shop lookup answered HTTP ${http}${http === 404 ? " — function not deployed" : ""}.` };
     setLocState("idle");
-    if (err || !res || res.error || !Array.isArray(res.candidates)) { setLocErr((res && res.reason) || (err && err.message) || "Shop lookup failed — type the name instead."); return; }
-    bumpPlacesCalls(); // the request reached Google; an empty answer still cost a unit
-    placesCachePut(pos, res.candidates);
-    if (!res.candidates.length) { setLocErr("No shops found nearby — type the name instead."); return; }
-    setCands(res.candidates.map((c) => ({ ...c, source: "google" }))); setCandSource("google"); // pick-list, never auto-select (GPS drift indoors)
+    const st = res && res.status;
+    console.log("[capture] hub places", { status: st, cached: res && res.cached, calls: res && res.calls, n: res && Array.isArray(res.candidates) ? res.candidates.length : null, place_id: !!(res && res.candidates && res.candidates[0] && res.candidates[0].place_id), http });
+    if (res && res.calls != null) setHubCalls(res.calls);
+    if (st === "capped") { setCapped(true); setLocErr(res.reason || "This month's Google lookups are used up — pick a pinned shop or type the name."); return; }
+    if (!res || st === "error" || !Array.isArray(res.candidates)) { setLocErr((res && res.reason) || (err && err.message) || "Shop lookup failed — type the name instead."); return; }
+    if (st === "empty" || !res.candidates.length) { setLocErr("No shops found nearby — type the name instead."); return; }
+    const src2 = st === "hit" || res.cached ? "cache" : "google";
+    setCands(res.candidates.map((c) => ({ name: c.name, place_types: c.types || [], distance_m: c.distance_m, place_id: c.place_id || null, source: src2 }))); setCandSource(src2); // pick-list, never auto-select (GPS drift indoors)
   };
   const locate = (force = false) => {
     setLocErr(""); setCands(null); setCandSource(null); setForm(null);
-    if (force && lastPos) { askGoogle(lastPos); return; }
+    if (force && lastPos) { askGoogle(lastPos, true); return; }
     if (!("geolocation" in navigator)) { setLocErr("Location isn't available here — type the shop name instead."); return; }
     setLocState("locating");
     navigator.geolocation.getCurrentPosition(async (p) => {
       const pos = { lat: p.coords.latitude, lng: p.coords.longitude };
       setLastPos(pos);
-      if (force) { await askGoogle(pos); return; }
+      if (force) { await askGoogle(pos, true); return; }
       // 1. Pinned shops within reach — pure maths, free.
       const pinned = stopPins.filter((x) => x.shop && x.category)
         .map((x) => ({ name: x.shop, place_types: [], distance_m: Math.round(distanceMeters(pos, x)), radius: x.radius, source: "pin" }))
         .filter((x) => x.distance_m <= Math.max(150, x.radius || 0)).sort((a, b) => a.distance_m - b.distance_m);
       const seen = new Set(); const uniq = pinned.filter((x) => (seen.has(x.name) ? false : (seen.add(x.name), true)));
       if (uniq.length) { setLocState("idle"); setCands(uniq.slice(0, 6)); setCandSource("pins"); return; }
-      // 2. A corner already asked about — answer from memory.
-      const hit = placesCacheGet(pos);
-      if (hit) {
-        setLocState("idle");
-        const list = (hit.candidates || []).map((c) => ({ ...c, source: "cache" }));
-        if (list.length) { setCands(list); setCandSource("cache"); } else setLocErr("Nothing was found at this corner last time either — type the name, or search Google again.");
-        return;
-      }
-      // 3. Google, under the cap.
+      // 2. The hub (its cache first, then Google under its cap).
       await askGoogle(pos);
     }, (e) => { setLocState("idle"); setLocErr(e.code === 1 ? "Location permission denied — type the shop name instead." : "Couldn't get your location — type the shop name instead."); }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 });
   };
@@ -5392,6 +5375,12 @@ function ShopCaptureView({ allExpenses }) {
     if (!(amt > 0) || !form.shop.trim() || !form.category) return;
     // Whatever I confirm is written back, so cascade step 1 covers this shop next time.
     const res = await insertExpense({ region: currency, date: form.date, category: form.category, shop: form.shop.trim(), amount: amt, notes: form.notes || "", expense_type: "normal", tags: "" });
+    // The Google place the user picked is stored on the shop (014). First pick wins; a renamed
+    // entry doesn't carry it, since the id belongs to the name Google gave.
+    if (res.ok && form.place_id && form.place_name === form.shop.trim()) {
+      const { error } = await supabase.from("cost_management_shops").update({ place_id: form.place_id }).eq("region", currency).eq("name", form.shop.trim()).eq("category", form.category).is("place_id", null);
+      if (error) console.warn("[capture] place_id not stored — run migrations/014_hub_ids_place_id.sql:", error.message);
+    }
     if (res.ok) { setSaved(true); setForm(null); setCands(null); setInfer(null); setManualName(""); }
   };
   const amtNum = form ? parseInt(form.amount, 10) : NaN;
@@ -5408,11 +5397,11 @@ function ShopCaptureView({ allExpenses }) {
         <div style={{ fontSize: 11, color: theme.textDim, marginBottom: 12 }}>One tap resolves where you are, infers the category, and pre-fills the entry for you to confirm.</div>
         <button onClick={() => locate(false)} disabled={locState === "locating"} style={{ width: "100%", padding: "12px", borderRadius: 10, border: "none", cursor: locState === "locating" ? "wait" : "pointer", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})`, opacity: locState === "locating" ? 0.6 : 1 }}>{locState === "locating" ? "Finding shops near you…" : "📍 Find shops near me"}</button>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 7, fontSize: 10.5, color: theme.textDim }}>
-          <span>Pinned shops and remembered corners answer free; Google only when neither knows.</span>
-          <span style={{ whiteSpace: "nowrap", fontWeight: 600, color: budget.calls >= budget.cap ? theme.danger : theme.textMuted }}>{budget.cap === 0 ? "Google off" : `${budget.calls}/${budget.cap} lookups`}</span>
+          <span>Your pins answer free. Otherwise Akatsuki asks Google — it remembers corners and caps the month.</span>
+          <span style={{ whiteSpace: "nowrap", fontWeight: 600, color: capped ? theme.danger : theme.textMuted }}>{capped ? "monthly cap reached" : hubCalls != null ? `${hubCalls} lookups this month` : "via Akatsuki"}</span>
         </div>
         {locErr && <div style={{ fontSize: 11.5, color: theme.warning, marginTop: 8 }}>{locErr}</div>}
-        {locErr && lastPos && !placesAtCap() && locErr.indexOf("Monthly") !== 0 && <button onClick={() => locate(true)} style={{ marginTop: 6, border: "none", background: "none", color: theme.primary, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>Search Google again · 1 lookup</button>}
+        {locErr && lastPos && !capped && <button onClick={() => locate(true)} style={{ marginTop: 6, border: "none", background: "none", color: theme.primary, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>Search Google again · 1 lookup</button>}
         {cands && !form && (
           <div className="cm-slide-in" style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
@@ -5420,12 +5409,12 @@ function ShopCaptureView({ allExpenses }) {
               <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 6, padding: "2px 7px", whiteSpace: "nowrap", color: candSource === "google" ? theme.warning : theme.success, background: `${candSource === "google" ? theme.warning : theme.success}16`, border: `1px solid ${candSource === "google" ? theme.warning : theme.success}44` }}>{candSource === "pins" ? "your pins · free" : candSource === "cache" ? "remembered · free" : "Google · 1 lookup"}</span>
             </div>
             {cands.map((c, i) => (
-              <button key={i} onClick={() => startForm(c.name, c.place_types || [])} style={{ display: "flex", alignItems: "center", gap: 10, textAlign: "left", width: "100%", padding: "10px 12px", borderRadius: 10, border: `1px solid ${theme.cardBorder}`, background: theme.inputBg, cursor: "pointer", fontFamily: "inherit" }}>
+              <button key={i} onClick={() => startForm(c.name, c.place_types || [], c.place_id || null)} style={{ display: "flex", alignItems: "center", gap: 10, textAlign: "left", width: "100%", padding: "10px 12px", borderRadius: 10, border: `1px solid ${theme.cardBorder}`, background: theme.inputBg, cursor: "pointer", fontFamily: "inherit" }}>
                 <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
                 {c.distance_m != null && <span style={{ fontSize: 10.5, color: theme.textMuted, whiteSpace: "nowrap" }}>{c.distance_m} m</span>}
               </button>
             ))}
-            {candSource !== "google" && !placesAtCap() && <button onClick={() => locate(true)} style={{ alignSelf: "flex-start", border: "none", background: "none", color: theme.textDim, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", padding: "2px 0" }}>Not here? Search Google · 1 lookup</button>}
+            {candSource !== "google" && !capped && <button onClick={() => locate(true)} style={{ alignSelf: "flex-start", border: "none", background: "none", color: theme.textDim, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", padding: "2px 0" }}>Not here? Search Google · 1 lookup</button>}
           </div>
         )}
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
