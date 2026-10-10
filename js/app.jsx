@@ -869,14 +869,60 @@ function App({ session, onSignOut }) {
   // when signed in, so the unmount cleanup is the sign-out stop (the gate also stops it on SIGNED_OUT).
   useEffect(() => {
     if (loading || !window.AkatsukiLocation || window.cm.hubLoc) return;
+    // R018 step 2b · quiet self-check: last/first visit events and last error go to localStorage,
+    // read back by the #hubreport sheet. No visible UI.
+    const put = (k, v) => { try { localStorage.setItem(k, JSON.stringify({ ...v, at: new Date().toISOString(), build: "v56" })); } catch (e) {} };
+    const evt = (kind) => (v) => {
+      console.log("[hub visit] " + kind, v);
+      put("cm_hubloc_last", { kind, ...v });
+      if (!localStorage.getItem("cm_hubloc_first")) put("cm_hubloc_first", { kind, ...v });
+    };
     try {
       window.cm.hubLoc = AkatsukiLocation.start(supabase, "cost", {
-        onVisitOpen:  (v) => console.log("[hub visit] open", v),
-        onVisitClose: (v) => console.log("[hub visit] close", v),
-        onError:      (fn, e) => console.warn("[hub visit]", fn, e.code || e.message),
+        onVisitOpen:  evt("open"),
+        onVisitClose: evt("close"),
+        onError:      (fn, e) => { console.warn("[hub visit]", fn, e.code || e.message); put("cm_hubloc_err", { fn, code: (e && e.code) || null, message: (e && e.message) || String(e) }); },
       });
-    } catch (e) { console.warn("[hub visit] start failed", e); }
-    return () => { if (window.cm.hubLoc) { window.cm.hubLoc.stop(); window.cm.hubLoc = null; } };
+      put("cm_hubloc_started", { device: window.cm.hubLoc.device, lib: window.cm.hubLoc.build });
+    } catch (e) { console.warn("[hub visit] start failed", e); put("cm_hubloc_err", { fn: "start", code: null, message: String(e && e.message || e) }); }
+    // Foreground minutes with the detector running — the "how long was Cost open" answer.
+    const fg = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      try { const o = JSON.parse(localStorage.getItem("cm_hubloc_fg") || "null") || { since: new Date().toISOString(), min: 0, days: {} }; const d = ymdToday(); o.min += 1; o.days[d] = (o.days[d] || 0) + 1; localStorage.setItem("cm_hubloc_fg", JSON.stringify(o)); } catch (e) {}
+    }, 60000);
+    return () => { clearInterval(fg); if (window.cm.hubLoc) { window.cm.hubLoc.stop(); window.cm.hubLoc = null; } };
+  }, [loading]);
+
+  // ── #hubreport: a hidden sheet (open the app with #hubreport at the end of the address) that
+  // assembles the R018 step 2b reply from the self-check keys and the hub view, with a Copy button.
+  const [hubReport, setHubReport] = useState(null);
+  useEffect(() => {
+    if (loading) return;
+    const run = async () => {
+      if (window.location.hash !== "#hubreport") { setHubReport(null); return; }
+      const rd = (k) => { try { return JSON.parse(localStorage.getItem(k) || "null"); } catch (e) { return null; } };
+      const cnt = await supabase.from("akatsuki_visits_recent").select("*", { count: "exact", head: true });
+      const rows = await supabase.from("akatsuki_visits_recent").select("*").order("since", { ascending: false }).limit(5);
+      const fg = rd("cm_hubloc_fg");
+      const st = window.cm.hubLoc ? window.cm.hubLoc.state() : null;
+      const lines = [
+        "Cost → Akatsuki · R018 step 2b · " + new Date().toISOString(),
+        "Build: v56 (" + (window.cm.hubLoc ? window.cm.hubLoc.build : "detector not running") + ")",
+        "Commit: <fill in after push>",
+        "Started: " + JSON.stringify(rd("cm_hubloc_started")),
+        "cm_hubloc_first: " + (JSON.stringify(rd("cm_hubloc_first")) || "none"),
+        "cm_hubloc_last: " + (JSON.stringify(rd("cm_hubloc_last")) || "none"),
+        "cm_hubloc_err: " + (JSON.stringify(rd("cm_hubloc_err")) || "none"),
+        "akatsuki_visits_recent rows: " + (cnt.error ? "error " + (cnt.error.code || "") + " " + cnt.error.message : cnt.count),
+        "Latest rows: " + (rows.error ? "—" : JSON.stringify(rows.data || [])),
+        "Detector state now: " + JSON.stringify(st),
+        "Foreground minutes with detector on: " + (fg ? fg.min + " since " + fg.since.slice(0, 10) + " · per day " + JSON.stringify(fg.days) : "none recorded"),
+      ];
+      setHubReport(lines.join("\n"));
+    };
+    run();
+    window.addEventListener("hashchange", run);
+    return () => window.removeEventListener("hashchange", run);
   }, [loading]);
 
   // ── Stop logging: pins → thresholds → dwell detector → the fill-in-later panel ──
@@ -1285,6 +1331,15 @@ function App({ session, onSignOut }) {
 
         {stopsOpen && openStops.length > 0 && (
           <StopsPanel stops={openStops} onLog={logStop} onDismiss={dismissStop} onBlock={blockStop} onCheckDup={stopDup} onClose={() => setStopsOpen(false)} />
+        )}
+
+        {hubReport && (
+          <Modal sheet onClose={() => { history.replaceState(null, "", window.location.pathname + window.location.search); setHubReport(null); }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#fff", marginBottom: 6 }}>Hub visit report</div>
+            <div style={{ fontSize: 11, color: theme.textMuted, marginBottom: 10 }}>Copy this and send it to Akatsuki as the step 2b reply.</div>
+            <pre style={{ fontSize: 10.5, lineHeight: 1.5, color: theme.text, background: theme.inputBg, borderRadius: 10, padding: 10, maxHeight: "50vh", overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all", margin: 0 }}>{hubReport}</pre>
+            <button onClick={() => { try { navigator.clipboard.writeText(hubReport); flashDue("Report copied"); } catch (e) {} }} style={{ marginTop: 10, width: "100%", padding: 11, borderRadius: 10, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: theme.primary }}>Copy report</button>
+          </Modal>
         )}
 
         {dueModalOpen && dueList.length > 0 && (
@@ -5527,7 +5582,7 @@ function TransactionsView({ pageTx, txPage, setTxPage, txPages }) {
 //  SVG CHARTS (dependency-free — replaces Recharts, which fails to paint)
 // ═══════════════════════════════════════════
 const yenK = (v) => `${CUR.symbol}${Math.round(v / 1000)}k`;
-function SvgAreaChart({ data, height = 220, color, gridColor, labelColor, labelStep = 1, peakColor, fmtY = yenK, fmtV = fmt }) {
+function SvgAreaChart({ data, height = 220, color, gridColor, labelColor, labelStep = 1, peakColor, fmtY = yenK, fmtV = fmt, reveal = null }) {
   if (!data || data.length === 0) return <div style={{ height, display: "flex", alignItems: "center", justifyContent: "center", color: labelColor, fontSize: 12 }}>No data for this range</div>;
   const W = 540, H = height, padL = 42, padR = 10, padT = 14, padB = 22;
   const innerW = W - padL - padR, innerH = H - padT - padB;
@@ -5536,9 +5591,15 @@ function SvgAreaChart({ data, height = 220, color, gridColor, labelColor, labelS
   const x = i => padL + (n === 1 ? innerW / 2 : (i / (n - 1)) * innerW);
   const y = v => padT + innerH * (1 - v / max);
   const pts = data.map((d, i) => [x(i), y(d.total)]);
-  let line = `M ${pts[0][0]} ${pts[0][1]}`;
-  for (let i = 1; i < n; i++) { const mx = (pts[i-1][0] + pts[i][0]) / 2; line += ` C ${mx} ${pts[i-1][1]}, ${mx} ${pts[i][1]}, ${pts[i][0]} ${pts[i][1]}`; }
-  const area = `${line} L ${pts[n-1][0]} ${padT + innerH} L ${pts[0][0]} ${padT + innerH} Z`;
+  // reveal (float bucket index) draws the series only up to that point, with an interpolated head —
+  // the scale and the x-axis stay fixed, so playback reads as the line growing into the frame.
+  const k = reveal == null ? n - 1 : Math.max(0, Math.min(n - 1, Math.floor(reveal)));
+  const fr = reveal == null ? 0 : Math.min(1, Math.max(0, reveal - k));
+  const shown = pts.slice(0, k + 1);
+  if (fr > 0 && k < n - 1) shown.push([pts[k][0] + (pts[k + 1][0] - pts[k][0]) * fr, pts[k][1] + (pts[k + 1][1] - pts[k][1]) * fr]);
+  let line = `M ${shown[0][0]} ${shown[0][1]}`;
+  for (let i = 1; i < shown.length; i++) { const mx = (shown[i-1][0] + shown[i][0]) / 2; line += ` C ${mx} ${shown[i-1][1]}, ${mx} ${shown[i][1]}, ${shown[i][0]} ${shown[i][1]}`; }
+  const area = `${line} L ${shown[shown.length-1][0]} ${padT + innerH} L ${shown[0][0]} ${padT + innerH} Z`;
   const peakIdx = data.reduce((bi, d, i, a) => (d.total > a[bi].total ? i : bi), 0);
   const gridVals = [0, 0.5, 1].map(t => (max / 1.12) * t);
   const uid = useMemo(() => Math.random().toString(36).slice(2, 8), []);
@@ -5553,16 +5614,17 @@ function SvgAreaChart({ data, height = 220, color, gridColor, labelColor, labelS
       ))}
       <path d={area} fill={`url(#ag-${uid})`} />
       <path d={line} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
-      {pts.map(([cx, cy], i) => (
+      {pts.map(([cx, cy], i) => (reveal != null && i > k) ? null : (
         <circle key={i} cx={cx} cy={cy} r={i === peakIdx ? 4 : (n > 40 ? 0 : 2.2)} fill={i === peakIdx ? (peakColor || color) : color} stroke="rgba(0,0,0,0.4)" strokeWidth="1">
           <title>{data[i].label}: {fmtV(data[i].total)}</title>
         </circle>
       ))}
+      {reveal != null && <circle cx={shown[shown.length-1][0]} cy={shown[shown.length-1][1]} r="5" fill={peakColor || color} stroke="#fff" strokeWidth="1.5" />}
       {data.map((d, i) => (i % labelStep === 0 ? <text key={`l${i}`} x={x(i)} y={H - 6} textAnchor="middle" fontSize={n > 20 ? 7.5 : 9} fill={i === peakIdx ? (peakColor || color) : labelColor} fontWeight={i === peakIdx ? 700 : 400} fontFamily="inherit">{d.label}</text> : null))}
     </svg>
   );
 }
-function SvgBarChart({ data, height = 180, color, gridColor, labelColor, labelStep = 1, peakColor, fmtY = yenK, fmtV = fmt }) {
+function SvgBarChart({ data, height = 180, color, gridColor, labelColor, labelStep = 1, peakColor, fmtY = yenK, fmtV = fmt, reveal = null }) {
   if (!data || data.length === 0) return <div style={{ height, display: "flex", alignItems: "center", justifyContent: "center", color: labelColor, fontSize: 12 }}>No data for this range</div>;
   const W = 540, H = height, padL = 42, padR = 10, padT = 12, padB = 22;
   const innerW = W - padL - padR, innerH = H - padT - padB;
@@ -5584,7 +5646,7 @@ function SvgBarChart({ data, height = 180, color, gridColor, labelColor, labelSt
         const by = y(d.total);
         return (
           <g key={i}>
-            <rect x={bx} y={by} width={bw} height={Math.max(0, padT + innerH - by)} rx="2" fill={i === peakIdx ? (peakColor || color) : color} opacity={i === peakIdx ? 1 : 0.85}>
+            <rect x={bx} y={by} width={bw} height={Math.max(0, padT + innerH - by)} rx="2" fill={i === peakIdx ? (peakColor || color) : color} opacity={reveal != null && i > reveal ? 0.07 : (i === peakIdx ? 1 : 0.85)}>
               <title>{d.label}: {fmtV(d.total)}</title>
             </rect>
             {i % labelStep === 0 && <text x={bx + bw / 2} y={H - 6} textAnchor="middle" fontSize={n > 20 ? 7 : 8.5} fill={labelColor} fontFamily="inherit">{d.label}</text>}
@@ -5623,6 +5685,11 @@ function OverviewView({ filtered, totalSpend, monthlyAvg, dailyAvg, monthlyData,
   const [timeRange, setTimeRange] = useState("monthly"); // monthly | weekly | daily | timeline (by filing time)
   const [span, setSpan] = useState("recent"); // recent | long | all — how far back the chart looks
   const isTimeline = timeRange === "timeline";
+  const [playPos, setPlayPos] = useState(null); // null = whole chart; else a float bucket index
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const [basis, setBasis] = useState("spent"); // timeline x-axis: "filed" = created_at, "spent" = expense date
+  const bySpent = isTimeline && basis === "spent";
   const [filters, setFilters] = useState(getStoredGraphFilters);
   const [filterOpen, setFilterOpen] = useState(false); const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
   const [filterToast, setFilterToast] = useState(null);
@@ -5670,9 +5737,9 @@ function OverviewView({ filtered, totalSpend, monthlyAvg, dailyAvg, monthlyData,
     const dayKey = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
     const mondayOf = (dt) => { const x = new Date(dt); const day = x.getDay(); x.setDate(x.getDate() - (day === 0 ? 6 : day - 1)); x.setHours(0, 0, 0, 0); return x; };
     const filedKey = (e) => { const t = e.created_at || e._ts; if (!t) return null; const d = new Date(t); return isNaN(d) ? null : dayKey(d); };
-    const keyOf = isTimeline ? filedKey : (e) => e.date;
+    const keyOf = isTimeline && !bySpent ? filedKey : (e) => e.date;
     const keys = fd.map(keyOf).filter(Boolean).sort();
-    const noStamps = isTimeline && fd.length > 0 && keys.length === 0;
+    const noStamps = isTimeline && !bySpent && fd.length > 0 && keys.length === 0;
     if (!keys.length) return { data: [], gran: isTimeline ? "daily" : timeRange, from: dayKey(now), to: dayKey(now), noStamps, lagDays: null, dbTotal: 0 };
     const firstD = parse(keys[0]), lastD = parse(keys[keys.length - 1]);
     // Granularity: spend modes are fixed; the timeline picks one that fits the span.
@@ -5691,32 +5758,71 @@ function OverviewView({ filtered, totalSpend, monthlyAvg, dailyAvg, monthlyData,
     const buckets = [], idx = {};
     if (gran === "monthly") {
       let d = new Date(fromD.getFullYear(), fromD.getMonth(), 1); const end = new Date(toD.getFullYear(), toD.getMonth(), 1);
-      while (d <= end) { const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; idx[k] = buckets.length; buckets.push({ key: k, label: `${MONTHS_SHORT[d.getMonth() + 1]} ${String(d.getFullYear()).slice(2)}`, start: new Date(d), total: 0, count: 0 }); d = new Date(d.getFullYear(), d.getMonth() + 1, 1); }
+      while (d <= end) { const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; idx[k] = buckets.length; buckets.push({ key: k, label: `${MONTHS_SHORT[d.getMonth() + 1]} ${String(d.getFullYear()).slice(2)}`, start: new Date(d), total: 0, count: 0, items: [] }); d = new Date(d.getFullYear(), d.getMonth() + 1, 1); }
     } else if (gran === "weekly") {
       let d = mondayOf(fromD); const end = mondayOf(toD);
-      while (d <= end) { const k = dayKey(d); idx[k] = buckets.length; buckets.push({ key: k, label: `${d.getMonth() + 1}/${d.getDate()}`, start: new Date(d), total: 0, count: 0 }); d = new Date(d); d.setDate(d.getDate() + 7); }
+      while (d <= end) { const k = dayKey(d); idx[k] = buckets.length; buckets.push({ key: k, label: `${d.getMonth() + 1}/${d.getDate()}`, start: new Date(d), total: 0, count: 0, items: [] }); d = new Date(d); d.setDate(d.getDate() + 7); }
     } else {
       let d = new Date(fromD); d.setHours(0, 0, 0, 0); const end = new Date(toD); end.setHours(0, 0, 0, 0);
-      while (d <= end) { const k = dayKey(d); idx[k] = buckets.length; buckets.push({ key: k, label: `${d.getMonth() + 1}/${d.getDate()}`, start: new Date(d), total: 0, count: 0 }); d = new Date(d); d.setDate(d.getDate() + 1); }
+      while (d <= end) { const k = dayKey(d); idx[k] = buckets.length; buckets.push({ key: k, label: `${d.getMonth() + 1}/${d.getDate()}`, start: new Date(d), total: 0, count: 0, items: [] }); d = new Date(d); d.setDate(d.getDate() + 1); }
     }
     const bucketOf = (k) => gran === "daily" ? idx[k] : gran === "monthly" ? idx[k.slice(0, 7)] : idx[dayKey(mondayOf(parse(k)))];
-    let before = 0, lagSum = 0, lagN = 0;
+    let before = 0, beforeSpend = 0, lagSum = 0, lagN = 0;
     const startKey = buckets.length ? dayKey(buckets[0].start) : null;
     fd.forEach((e) => {
       const k = keyOf(e); if (!k) return;
-      if (isTimeline && startKey && k < startKey) { before += 1; return; }
+      if (isTimeline && startKey && k < startKey) { before += 1; beforeSpend += e.amount; return; }
       const i = bucketOf(k); if (i == null) return;
-      buckets[i].total += e.amount; buckets[i].count += 1;
-      if (isTimeline && e.date) { const lag = Math.round((parse(k) - parse(e.date)) / 86400000); if (isFinite(lag)) { lagSum += lag; lagN += 1; } }
+      buckets[i].total += e.amount; buckets[i].count += 1; if (isTimeline) buckets[i].items.push(e);
+      if (isTimeline && !bySpent && e.date) { const lag = Math.round((parse(k) - parse(e.date)) / 86400000); if (isFinite(lag)) { lagSum += lag; lagN += 1; } }
     });
-    if (isTimeline) { let cum = before; buckets.forEach((b) => { cum += b.count; b.spend = b.total; b.total = cum; }); }
+    if (isTimeline) {
+      let cum = before, cs = beforeSpend;
+      buckets.forEach((b) => {
+        // Per-period value on the axis (so gaps show as dips to zero); running totals kept for the overlay.
+        cum += b.count; cs += b.total; b.spend = b.total; b.cum = cum; b.cumSpend = cs; b.total = bySpent ? b.spend : b.count;
+        b.items.sort((p, q) => bySpent ? String(q.date).localeCompare(String(p.date)) : String(q.created_at || "").localeCompare(String(p.created_at || "")));
+      });
+    }
     const fmtLocal = (dt) => dayKey(dt);
     return { data: buckets, gran, from: fmtLocal(fromD), to: fmtLocal(toD), noStamps: false, lagDays: lagN ? Math.round(lagSum / lagN) : null, dbTotal: before + buckets.reduce((s, b) => s + b.count, 0) };
-  }, [graphFiltered, timeRange, span, isTimeline, filters.dateFrom, filters.dateTo]);
+  }, [graphFiltered, timeRange, span, isTimeline, bySpent, filters.dateFrom, filters.dateTo]);
   const chartData = chartInfo.data;
   // Bars show the per-period figure; in Timeline mode that is entries filed, while the area shows the running total.
   const barData = useMemo(() => isTimeline ? chartData.map((b) => ({ ...b, total: b.count })) : chartData, [chartData, isTimeline]);
   const labelStep = Math.max(1, Math.ceil(chartData.length / 12));
+
+  // Playback: the whole window plays in ~12 s at 1×, frame-driven so it stays smooth at any length.
+  const nB = chartData.length;
+  useEffect(() => { setPlaying(false); setPlayPos(null); }, [timeRange, span, basis, filters.dateFrom, filters.dateTo]);
+  useEffect(() => {
+    if (!playing || nB < 2) return;
+    let raf, last = performance.now();
+    const perSec = ((nB - 1) / 12) * speed;
+    const step = (t) => {
+      const dt = Math.min(0.1, (t - last) / 1000); last = t;
+      setPlayPos((p) => Math.min(nB - 1, (p == null ? 0 : p) + dt * perSec));
+      raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [playing, speed, nB]);
+  useEffect(() => { if (playing && playPos != null && playPos >= nB - 1) setPlaying(false); }, [playing, playPos, nB]);
+  const playIdx = playPos == null ? -1 : Math.min(nB - 1, Math.floor(playPos));
+  const playCur = playIdx >= 0 ? chartData[playIdx] : null;
+  // The last few entries filed up to the playhead — the "being written" ticker.
+  const playFeed = useMemo(() => {
+    if (playIdx < 0) return [];
+    const out = [];
+    for (let i = playIdx; i >= 0 && out.length < 4; i--) for (const e of chartData[i].items || []) { if (out.length >= 4) break; out.push(e); }
+    return out;
+  }, [playIdx, chartData]);
+  const startPlay = () => { if (playPos == null || playPos >= nB - 1) setPlayPos(0); setPlaying(true); };
+  const bucketDate = (b) => {
+    if (!b) return "";
+    const d = b.start, ds = `${d.getDate()} ${MONTHS_SHORT[d.getMonth() + 1]} ${d.getFullYear()}`;
+    return chartInfo.gran === "monthly" ? `${MONTHS_SHORT[d.getMonth() + 1]} ${d.getFullYear()}` : chartInfo.gran === "weekly" ? `Week of ${ds}` : ds;
+  };
 
   // Date span the chart currently covers (for the exclusion summary).
   const windowRange = useMemo(() => ({ start: chartInfo.from, end: chartInfo.to }), [chartInfo.from, chartInfo.to]);
@@ -5748,7 +5854,7 @@ function OverviewView({ filtered, totalSpend, monthlyAvg, dailyAvg, monthlyData,
 
   // Stats for the window: spend modes sum yen; the timeline counts entries filed.
   const rangeStats = useMemo(() => {
-    const vals = isTimeline ? chartData.map(d => d.count) : chartData.map(d => d.total);
+    const vals = isTimeline && !bySpent ? chartData.map(d => d.count) : chartData.map(d => d.total);
     const active = vals.filter(v => v > 0);
     const total = vals.reduce((s, v) => s + v, 0);
     const avg = active.length ? Math.round(total / active.length) : 0;
@@ -5762,7 +5868,7 @@ function OverviewView({ filtered, totalSpend, monthlyAvg, dailyAvg, monthlyData,
   const spanText = (filters.dateFrom || filters.dateTo) ? "custom range" : SPAN_LABELS[["recent", "long", "all"].indexOf(span)].toLowerCase();
   const perWord = GRAN_WORD[chartInfo.gran];
   const rangeLabels = {
-    title: isTimeline ? `Entries filed per ${perWord} · ${spanText}` : `${timeRange.charAt(0).toUpperCase() + timeRange.slice(1)} · ${spanText}`,
+    title: isTimeline ? (bySpent ? `Entries per ${perWord} · ${spanText}` : `Entries filed per ${perWord} · ${spanText}`) : `${timeRange.charAt(0).toUpperCase() + timeRange.slice(1)} · ${spanText}`,
     avgLabel: isTimeline ? `Avg/${perWord}` : `Avg/${perWord.charAt(0).toUpperCase() + perWord.slice(1)}`,
   };
   const countFmt = (v) => `${Math.round(v)}`;
@@ -5873,12 +5979,12 @@ function OverviewView({ filtered, totalSpend, monthlyAvg, dailyAvg, monthlyData,
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
           <div>
             <h3 style={{fontSize:12,fontWeight:600,color:theme.textMuted,margin:0}}>{isTimeline ? "Filing Timeline" : "Spending Trend"}</h3>
-            <div style={{fontSize:10.5,color:theme.textDim,marginTop:2}}>{isTimeline ? "How the database was filled in: the line is the running total of entries, by the day each was filed." : rangeLabels.title}</div>
+            <div style={{fontSize:10.5,color:theme.textDim,marginTop:2}}>{isTimeline ? (bySpent ? "Spending per period across the whole record, played in order. Dips to zero are months with nothing recorded." : "How the database was filled in: entries filed per period, by the day each was entered.") : rangeLabels.title}</div>
           </div>
           <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
             <div style={{display:"flex",gap:3,padding:3,background:theme.inputBg,borderRadius:8,border:`1px solid ${theme.cardBorder}`}}>
               {[["monthly","Monthly"],["weekly","Weekly"],["daily","Daily"],["timeline","Timeline"]].map(([range, label]) => (
-                <button key={range} onClick={() => setTimeRange(range)} title={range === "timeline" ? "By the time each entry was filed" : undefined} style={{
+                <button key={range} onClick={() => { setTimeRange(range); if (range === "timeline") setSpan("all"); }} title={range === "timeline" ? "By the time each entry was filed" : undefined} style={{
                   padding:"5px 10px",borderRadius:6,border:"none",cursor:"pointer",fontSize:10.5,fontFamily:"inherit",fontWeight:timeRange===range?700:500,
                   background:timeRange===range?(range==="timeline"?theme.warning:theme.primary):"transparent",
                   color:timeRange===range?"#fff":theme.textMuted,
@@ -5900,14 +6006,14 @@ function OverviewView({ filtered, totalSpend, monthlyAvg, dailyAvg, monthlyData,
         {/* Range Stats */}
         <div style={{display:"flex",gap:16,marginBottom:12,flexWrap:"wrap"}}>
           <div style={{fontSize:11,color:theme.textDim}}>
-            <span style={{color:theme.textMuted}}>{isTimeline ? "Filed in window:" : "Period Total:"}</span> <span style={{color:"#fff",fontWeight:600}}>{isTimeline ? `${rangeStats.total} entries` : fmt(rangeStats.total)}</span>
+            <span style={{color:theme.textMuted}}>{isTimeline && !bySpent ? "Filed in window:" : "Period Total:"}</span> <span style={{color:"#fff",fontWeight:600}}>{isTimeline && !bySpent ? `${rangeStats.total} entries` : fmt(rangeStats.total)}</span>
           </div>
           <div style={{fontSize:11,color:theme.textDim}}>
-            <span style={{color:theme.textMuted}}>{rangeLabels.avgLabel}:</span> <span style={{color:"#fff",fontWeight:600}}>{isTimeline ? rangeStats.avg : fmt(rangeStats.avg)}</span>
+            <span style={{color:theme.textMuted}}>{rangeLabels.avgLabel}:</span> <span style={{color:"#fff",fontWeight:600}}>{isTimeline && !bySpent ? rangeStats.avg : fmt(rangeStats.avg)}</span>
           </div>
           {rangeStats.maxPeriod && (
             <div style={{fontSize:11,color:theme.textDim}}>
-              <span style={{color:theme.textMuted}}>{isTimeline ? "Busiest:" : "Peak:"}</span> <span style={{color:theme.warning,fontWeight:600}}>{rangeStats.maxPeriod.label} ({isTimeline ? `${rangeStats.max} entries` : fmt(rangeStats.max)})</span>
+              <span style={{color:theme.textMuted}}>{isTimeline ? "Busiest:" : "Peak:"}</span> <span style={{color:theme.warning,fontWeight:600}}>{rangeStats.maxPeriod.label} ({isTimeline && !bySpent ? `${rangeStats.max} entries` : fmt(rangeStats.max)})</span>
             </div>
           )}
           {isTimeline && chartInfo.dbTotal > 0 && (
@@ -5915,16 +6021,41 @@ function OverviewView({ filtered, totalSpend, monthlyAvg, dailyAvg, monthlyData,
               <span style={{color:theme.textMuted}}>Database:</span> <span style={{color:"#fff",fontWeight:600}}>{chartInfo.dbTotal} entries</span>
             </div>
           )}
-          {isTimeline && chartInfo.lagDays != null && (
+          {isTimeline && !bySpent && chartInfo.lagDays != null && (
             <div style={{fontSize:11,color:theme.textDim}} title="Average gap between the expense date and the day it was filed — how far back entries were typically backfilled">
               <span style={{color:theme.textMuted}}>Avg backfill:</span> <span style={{color:"#fff",fontWeight:600}}>{chartInfo.lagDays === 0 ? "same day" : `${chartInfo.lagDays} day${chartInfo.lagDays === 1 ? "" : "s"}`}</span>
             </div>
           )}
         </div>
 
+        {isTimeline && !chartInfo.noStamps && nB > 1 && (
+          <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:10,padding:"9px 12px",borderRadius:10,background:theme.inputBg,border:`1px solid ${theme.cardBorder}`}}>
+            <button onClick={playing ? () => setPlaying(false) : startPlay} title={playing ? "Pause" : "Play how the database was filled in"} style={{width:36,height:36,borderRadius:"50%",border:"none",cursor:"pointer",background:theme.warning,color:"#fff",fontSize:13,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontFamily:"inherit"}}>{playing ? "❚❚" : "▶"}</button>
+            <input type="range" min="0" max={nB - 1} step="0.01" value={playPos == null ? nB - 1 : playPos} onChange={(e) => { setPlaying(false); setPlayPos(Number(e.target.value)); }} aria-label="Timeline position" style={{flex:1,minWidth:120,accentColor:theme.warning}}/>
+            <div style={{display:"flex",gap:3,padding:2,background:theme.cardBg,borderRadius:7,border:`1px solid ${theme.cardBorder}`}} title="Which date puts an entry on the timeline">
+              {[["filed","Filed"],["spent","Spent"]].map(([b, l]) => <button key={b} onClick={() => setBasis(b)} style={{padding:"4px 9px",borderRadius:5,border:"none",cursor:"pointer",fontSize:10.5,fontFamily:"inherit",fontWeight:basis===b?700:500,background:basis===b?theme.warning:"transparent",color:basis===b?"#fff":theme.textMuted}}>{l}</button>)}
+            </div>
+            <div style={{display:"flex",gap:3}}>
+              {[1, 2, 4].map((s) => <button key={s} onClick={() => setSpeed(s)} style={{padding:"4px 8px",borderRadius:6,border:"none",cursor:"pointer",fontSize:10.5,fontFamily:"inherit",fontWeight:speed===s?700:500,background:speed===s?theme.cardBg:"transparent",color:speed===s?"#fff":theme.textMuted}}>{s}×</button>)}
+            </div>
+            {playPos != null && <button onClick={() => { setPlaying(false); setPlayPos(null); }} style={{border:"none",background:"none",color:theme.textMuted,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit",padding:0}}>Show all</button>}
+          </div>
+        )}
         {chartInfo.noStamps
           ? <div style={{height:220,display:"flex",alignItems:"center",justifyContent:"center",textAlign:"center",padding:"0 24px",color:theme.textDim,fontSize:12,lineHeight:1.5}}>These entries carry no filing timestamp, so the timeline can't be drawn for them.</div>
-          : <SvgAreaChart data={chartData} height={220} color={isTimeline ? theme.warning : theme.primary} gridColor={theme.cardBorder} labelColor={theme.textDim} labelStep={labelStep} peakColor={isTimeline ? theme.primary : theme.warning} fmtY={isTimeline ? countFmt : undefined} fmtV={isTimeline ? (v) => `${Math.round(v)} entries so far` : undefined} />}
+          : <div style={{position:"relative"}}>
+            {isTimeline && playCur && (
+              <div style={{position:"absolute",top:2,left:50,pointerEvents:"none",display:"flex",flexDirection:"column",gap:3,maxWidth:"62%",textShadow:"0 1px 2px rgba(0,0,0,.85), 0 0 10px rgba(0,0,0,.6)"}}>
+                <div style={{fontSize:22,fontWeight:700,color:"#fff",lineHeight:1.1,fontVariantNumeric:"tabular-nums"}}>{bucketDate(playCur)}</div>
+                <div style={{fontSize:12,fontWeight:700,color:theme.warning,fontVariantNumeric:"tabular-nums"}}>{bySpent ? `${fmt(playCur.spend || 0)} this ${perWord} · ${playCur.count} entries` : `${playCur.count} filed this ${perWord}`}</div>
+                <div style={{fontSize:10.5,color:theme.textMuted,fontVariantNumeric:"tabular-nums"}}>so far: {playCur.cum} entries · {fmt(playCur.cumSpend || 0)}</div>
+                {playFeed.map((e, i) => (
+                  <div key={(e.id || "") + ":" + i} style={{fontSize:10.5,color:theme.textMuted,opacity:1 - i * 0.2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>+ {e.shop} {fmt(e.amount)} <span style={{color:theme.textDim}}>{bySpent ? (e.created_at ? `· filed ${String(e.created_at).slice(0, 10)}` : "") : `· spent ${e.date}`}</span></div>
+                ))}
+              </div>
+            )}
+            <SvgAreaChart reveal={isTimeline ? playPos : null} data={chartData} height={220} color={isTimeline ? theme.warning : theme.primary} gridColor={theme.cardBorder} labelColor={theme.textDim} labelStep={labelStep} peakColor={isTimeline ? theme.primary : theme.warning} fmtY={isTimeline && !bySpent ? countFmt : undefined} fmtV={isTimeline && !bySpent ? (v) => `${Math.round(v)} filed` : undefined} />
+          </div>}
       </div>
 
       {/* Bar Chart for same data */}
@@ -5932,7 +6063,7 @@ function OverviewView({ filtered, totalSpend, monthlyAvg, dailyAvg, monthlyData,
         <h3 style={{fontSize:12,fontWeight:600,color:theme.textMuted,marginBottom:12,marginTop:0}}>
           {rangeLabels.title}{isTimeline ? "" : " · comparison"}
         </h3>
-        <SvgBarChart data={barData} height={180} color={isTimeline ? theme.warning : theme.primary} gridColor={theme.cardBorder} labelColor={theme.textDim} labelStep={Math.max(labelStep, chartData.length > 40 ? Math.ceil(chartData.length / 8) : 1)} peakColor={isTimeline ? theme.primary : theme.warning} fmtY={isTimeline ? countFmt : undefined} fmtV={isTimeline ? (v) => `${Math.round(v)} filed` : undefined} />
+        <SvgBarChart reveal={isTimeline ? playPos : null} data={barData} height={180} color={isTimeline ? theme.warning : theme.primary} gridColor={theme.cardBorder} labelColor={theme.textDim} labelStep={Math.max(labelStep, chartData.length > 40 ? Math.ceil(chartData.length / 8) : 1)} peakColor={isTimeline ? theme.primary : theme.warning} fmtY={isTimeline ? countFmt : undefined} fmtV={isTimeline ? (v) => `${Math.round(v)} ${bySpent ? "entries" : "filed"}` : undefined} />
       </div>
 
       {/* Exclusion summary */}
