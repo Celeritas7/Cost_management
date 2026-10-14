@@ -162,6 +162,48 @@ const ymdLocal = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.g
 const todayStr = () => ymdLocal(new Date());
 const vibrate = (ms) => { try { if (navigator.vibrate) navigator.vibrate(ms); } catch (e) {} };
 
+// ── On-screen keyboard awareness ──
+// A text field with focus means the soft keyboard is (or is about to be) up.
+// Anything that would move focus away — an autoFocus in a sheet that opens on a
+// timer, a fixed bar jumping above the keyboard — makes the keyboard drop or
+// switch layouts mid-word, so those behaviours check here first. <select> and
+// buttons are excluded: they don't raise a keyboard.
+const TEXT_INPUT_TYPES = new Set(["text", "search", "email", "url", "tel", "password", "number", "decimal"]);
+const isTextEntry = (el) => !!el && (el.tagName === "TEXTAREA" || el.isContentEditable || (el.tagName === "INPUT" && TEXT_INPUT_TYPES.has((el.getAttribute("type") || "text").toLowerCase())));
+const isTyping = () => isTextEntry(document.activeElement);
+// True while a text field has focus. Focus moving between two fields passes
+// through a brief focusout → focusin, so the "up" state is only dropped after a
+// short grace period — fixed bars don't flicker while tabbing between inputs.
+function useKeyboardUp() {
+  const [up, setUp] = useState(isTyping);
+  useEffect(() => {
+    let t = null;
+    const onIn = (e) => { clearTimeout(t); if (isTextEntry(e.target)) setUp(true); };
+    const onOut = () => { clearTimeout(t); t = setTimeout(() => setUp(isTyping()), 120); };
+    document.addEventListener("focusin", onIn); document.addEventListener("focusout", onOut);
+    return () => { clearTimeout(t); document.removeEventListener("focusin", onIn); document.removeEventListener("focusout", onOut); };
+  }, []);
+  return up;
+}
+// Japanese keyboards often emit full-width digits (１２３．); amount fields
+// accept them as their ASCII equivalents instead of silently dropping them.
+// The visible part of the screen. With the soft keyboard up, Chrome on Android
+// may overlay it (visual viewport shrinks, layout viewport doesn't) or resize the
+// page — the meta tag asks for the latter but installed apps don't always get
+// it. Sizing overlays from visualViewport works in both cases.
+const readVV = () => { const vv = window.visualViewport; return vv ? { top: Math.round(vv.offsetTop), height: Math.round(vv.height), width: Math.round(vv.width) } : { top: 0, height: window.innerHeight, width: window.innerWidth }; };
+function useVisualViewport() {
+  const [vv, setVV] = useState(readVV);
+  useEffect(() => {
+    const vvo = window.visualViewport; if (!vvo) return;
+    const on = () => setVV((p) => { const n = readVV(); return p.top === n.top && p.height === n.height && p.width === n.width ? p : n; });
+    vvo.addEventListener("resize", on); vvo.addEventListener("scroll", on);
+    return () => { vvo.removeEventListener("resize", on); vvo.removeEventListener("scroll", on); };
+  }, []);
+  return vv;
+}
+const asciiDigits = (v) => String(v).replace(/[\uFF10-\uFF19]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/[\uFF0E\u3002]/g, ".").replace(/[^0-9.]/g, "");
+
 // ── Recurring (templates) ──
 const FREQ_ORDER = ["daily", "weekdays", "weekly", "monthly"];
 const FREQ_LABELS = { daily: "Daily", weekdays: "Weekdays", weekly: "Weekly", monthly: "Monthly" };
@@ -841,7 +883,9 @@ function App({ session, onSignOut }) {
         }
         if (timeOk && locOk && dayOk) fire.push(hasLoc ? { ...tg, _distance: Math.round(dist) } : { ...tg, _timeOnly: true });
       });
-      if (fire.length) {
+      // Typing in a text field? Hold the sheet for the next tick — opening it now
+      // would pull the focus (and the keyboard) out from under the user.
+      if (fire.length && !isTyping()) {
         setLocDueList((prev) => { const ids = new Set(prev.map((x) => x.id)); return [...prev, ...fire.filter((f) => !ids.has(f.id))]; });
         setLocDueOpen(true);
       }
@@ -871,7 +915,7 @@ function App({ session, onSignOut }) {
     if (loading || !window.AkatsukiLocation || window.cm.hubLoc) return;
     // R018 step 2b · quiet self-check: last/first visit events and last error go to localStorage,
     // read back by the #hubreport sheet. No visible UI.
-    const put = (k, v) => { try { localStorage.setItem(k, JSON.stringify({ ...v, at: new Date().toISOString(), build: "v56" })); } catch (e) {} };
+    const put = (k, v) => { try { localStorage.setItem(k, JSON.stringify({ ...v, at: new Date().toISOString(), build: "v59" })); } catch (e) {} };
     const evt = (kind) => (v) => {
       console.log("[hub visit] " + kind, v);
       put("cm_hubloc_last", { kind, ...v });
@@ -907,7 +951,7 @@ function App({ session, onSignOut }) {
       const st = window.cm.hubLoc ? window.cm.hubLoc.state() : null;
       const lines = [
         "Cost → Akatsuki · R018 step 2b · " + new Date().toISOString(),
-        "Build: v56 (" + (window.cm.hubLoc ? window.cm.hubLoc.build : "detector not running") + ")",
+        "Build: v59 (" + (window.cm.hubLoc ? window.cm.hubLoc.build : "detector not running") + ")",
         "Commit: <fill in after push>",
         "Started: " + JSON.stringify(rd("cm_hubloc_started")),
         "cm_hubloc_first: " + (JSON.stringify(rd("cm_hubloc_first")) || "none"),
@@ -1172,12 +1216,17 @@ function App({ session, onSignOut }) {
   }, []);
   const tabById = (id) => navTabs.find((t) => t.id === id);
   const bottomTabs = [tabById("add"), tabById("transactions"), tabById("overview"), tabById("smart")];
+  // With the keyboard up the viewport is half its height; the tab bar and the
+  // floating pills would ride on top of the keyboard and cover the field being
+  // typed into, so they step aside until the field loses focus.
+  const keyboardUp = useKeyboardUp();
+  const hideFloating = isMobile && keyboardUp;
 
   return (
     <ThemeContext.Provider value={{ theme, themeName, inputStyle, labelStyle, pillStyle, supabase, fetchData, categories, tags, getCatIcon, getCatColor, getTagIcon, getTagColor, shops: regionShops, recurring: regionRecurring, currency, changeTheme, setView, presetDate, setPresetDate, locTriggers: regionTriggers, reloadTriggers, checkLocation, locStatus, simulateStop, stopStatus, stopPins }}>
       <div style={{minHeight:"100vh",background:theme.bg,color:theme.text,fontFamily:"'Noto Sans JP', system-ui, sans-serif"}}>
         {/* Header */}
-        <div style={{background:theme.headerBg,borderBottom:`1px solid ${theme.cardBorder}`,padding:"14px 16px"}}>
+        <div style={{background:theme.headerBg,borderBottom:`1px solid ${theme.cardBorder}`,padding:"calc(14px + env(safe-area-inset-top, 0px)) 16px 14px"}}>
          <div style={{maxWidth:1080,margin:"0 auto",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
           <div style={{display:"flex",alignItems:"center",gap:10}}><img src="icons/icon.svg" alt="" width="30" height="30" style={{borderRadius:8,display:"block"}}/><h1 style={{fontSize:18,fontWeight:700,color:"#fff",margin:0}}>Cost Management</h1></div>
           <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>
@@ -1278,7 +1327,7 @@ function App({ session, onSignOut }) {
         </div>
 
         {/* Mobile bottom tab bar — thumb-reachable primary navigation */}
-        {isMobile && (
+        {isMobile && !keyboardUp && (
           <nav style={{position:"fixed",left:0,right:0,bottom:0,zIndex:200,background:"rgba(10,10,18,0.94)",backdropFilter:"blur(14px) saturate(140%)",WebkitBackdropFilter:"blur(14px) saturate(140%)",borderTop:`1px solid ${theme.cardBorder}`,padding:"6px 6px calc(6px + env(safe-area-inset-bottom))",display:"grid",gridTemplateColumns:`repeat(${bottomTabs.length + 1 + (regionPending.length>0?1:0)}, 1fr)`,gap:2,boxShadow:"0 -6px 20px rgba(0,0,0,0.35)"}}>
             {bottomTabs.map(tab => {
               const on = view===tab.id || (tab.id==="transactions" && view==="calendar");
@@ -1302,7 +1351,7 @@ function App({ session, onSignOut }) {
         )}
 
         {/* Purchase-requests reminder — floats on every screen while requests are pending */}
-        {sukkiriPending.length > 0 && !reqReminderHidden && view !== "sukkiri" && view !== "add" && (
+        {!hideFloating && sukkiriPending.length > 0 && !reqReminderHidden && view !== "sukkiri" && view !== "add" && (
           <div style={{ position: "fixed", bottom: isMobile ? 84 : 18, left: "50%", transform: "translateX(-50%)", zIndex: 80, display: "flex", alignItems: "center", gap: 10, background: theme.headerBg, border: `1px solid ${theme.primary}55`, borderRadius: 14, padding: "10px 14px", boxShadow: `0 8px 30px rgba(0,0,0,0.45)`, maxWidth: "92vw" }}>
             <span style={{ fontSize: 16 }}>🛒</span>
             <span style={{ fontSize: 12.5, color: "#fff" }}><b>{sukkiriPending.reduce((s, r) => s + (r.items ? r.items.length : 0), 0)} item{sukkiriPending.reduce((s, r) => s + (r.items ? r.items.length : 0), 0) === 1 ? "" : "s"} to buy</b> · {sukkiriPending.length} request{sukkiriPending.length === 1 ? "" : "s"} waiting</span>
@@ -1312,7 +1361,7 @@ function App({ session, onSignOut }) {
         )}
 
         {/* Offline / unsent-work badge — above the stops pill, which sits above the requests reminder */}
-        {(outbox.pending > 0 || !outbox.online) && (
+        {!hideFloating && (outbox.pending > 0 || !outbox.online) && (
           <div style={{ position: "fixed", bottom: (isMobile ? 84 : 18) + ((sukkiriPending.length > 0 && !reqReminderHidden && view !== "sukkiri" && view !== "add") ? 56 : 0) + ((openStops.length > 0 && !stopsOpen) ? 56 : 0), left: "50%", transform: "translateX(-50%)", zIndex: 82, display: "flex", alignItems: "center", gap: 10, background: theme.headerBg, border: `1px solid ${outbox.online ? theme.cardBorder : "rgba(239,68,68,0.45)"}`, borderRadius: 14, padding: "9px 13px", boxShadow: "0 8px 30px rgba(0,0,0,0.45)", maxWidth: "92vw" }}>
             <span style={{ width: 8, height: 8, borderRadius: 4, background: outbox.online ? theme.warning : theme.danger, flexShrink: 0 }}/>
             <span style={{ fontSize: 12, color: "#fff" }}>{!outbox.online ? (outbox.pending > 0 ? `Offline · ${outbox.pending} waiting to sync` : "Offline · saving on this device") : `${outbox.pending} waiting to sync`}</span>
@@ -1321,7 +1370,7 @@ function App({ session, onSignOut }) {
         )}
 
         {/* Stops waiting to be filled in — sits above the requests reminder when both are up */}
-        {openStops.length > 0 && !stopsOpen && (
+        {!hideFloating && openStops.length > 0 && !stopsOpen && (
           <div style={{ position: "fixed", bottom: (isMobile ? 84 : 18) + ((sukkiriPending.length > 0 && !reqReminderHidden && view !== "sukkiri" && view !== "add") ? 56 : 0), left: "50%", transform: "translateX(-50%)", zIndex: 81, display: "flex", alignItems: "center", gap: 10, background: theme.headerBg, border: "1px solid rgba(245,158,11,0.45)", borderRadius: 14, padding: "10px 14px", boxShadow: "0 8px 30px rgba(0,0,0,0.45)", maxWidth: "92vw" }}>
             <Icon name="thumbtack" size={15} style={{ color: "#f59e0b" }}/>
             <span style={{ fontSize: 12.5, color: "#fff" }}><b>{openStops.length} stop{openStops.length === 1 ? "" : "s"} to log</b>{(() => { const u = openStops.filter((s) => !s.shop).length; return u ? ` · ${u} unnamed` : ""; })()}</span>
@@ -1330,7 +1379,7 @@ function App({ session, onSignOut }) {
         )}
 
         {stopsOpen && openStops.length > 0 && (
-          <StopsPanel stops={openStops} onLog={logStop} onDismiss={dismissStop} onBlock={blockStop} onCheckDup={stopDup} onClose={() => setStopsOpen(false)} />
+          <StopsPanel stops={openStops} pins={stopPins} onLog={logStop} onDismiss={dismissStop} onBlock={blockStop} onCheckDup={stopDup} onClose={() => setStopsOpen(false)} />
         )}
 
         {hubReport && (
@@ -1708,7 +1757,16 @@ const matchPin = (pos, pins) => {
 };
 
 // The panel: every unlogged stop, oldest first, each one an amount away from being an expense.
-function StopsPanel({ stops, onLog, onDismiss, onBlock, onCheckDup, onClose }) {
+// Nearest saved shop pin within 400 m, even outside its own radius — a memory jog
+// for an unnamed stop, never an answer: it only offers the shop, it doesn't pick it.
+const nearestShopPin = (pos, pins) => {
+  let best = null, bestD = 400;
+  (pins || []).forEach((p) => { if (!p.shop) return; const d = distanceMeters(pos, p); if (d <= bestD) { best = p; bestD = d; } });
+  return best ? { shop: best.shop, d: Math.round(bestD / 10) * 10 } : null;
+};
+const stopMapUrl = (s) => "https://www.google.com/maps/search/?api=1&query=" + Number(s.lat).toFixed(6) + "," + Number(s.lng).toFixed(6);
+
+function StopsPanel({ stops, pins, onLog, onDismiss, onBlock, onCheckDup, onClose }) {
   const { theme, shops, getCatIcon, getCatColor, inputStyle } = useTheme();
   const [drafts, setDrafts] = useState({});
   const [busyId, setBusyId] = useState(null);
@@ -1734,7 +1792,7 @@ function StopsPanel({ stops, onLog, onDismiss, onBlock, onCheckDup, onClose }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", gap: 8 }}><Icon name="thumbtack" size={16}/>Stops to log</div>
-          <div style={{ fontSize: 11.5, color: theme.textMuted, marginTop: 3 }}>{stops.length} {stops.length === 1 ? "place" : "places"} you stopped at · they wait here until you log or drop them</div>
+          <div style={{ fontSize: 11.5, color: theme.textMuted, marginTop: 3 }}>{stops.length} {stops.length === 1 ? "place" : "places"} you stopped at · tap Map to see where · just passing? "Didn't spend"</div>
         </div>
         <button onClick={onClose} style={{ border: "none", background: theme.inputBg, color: theme.textMuted, width: 30, height: 30, borderRadius: 15, fontSize: 17, cursor: "pointer", boxShadow: `inset 0 0 0 1px ${theme.cardBorder}`, flexShrink: 0 }}>×</button>
       </div>
@@ -1746,15 +1804,23 @@ function StopsPanel({ stops, onLog, onDismiss, onBlock, onCheckDup, onClose }) {
           const col = getCatColor(cat);
           const ready = !!dr.shop && amt > 0;
           const dup = ready && onCheckDup ? onCheckDup(s, dr.shop, amt) : null;
+          const near = s.pinned ? null : nearestShopPin(s, pins);
           return (
             <div key={s.id} className={fadingId === s.id ? "cm-fade-out" : undefined} style={{ borderRadius: 12, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${s.pinned ? theme.cardBorder : "rgba(245,158,11,0.35)"}`, padding: "11px 12px", opacity: busy ? 0.6 : 1 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 9 }}>
                 <span style={{ width: 30, height: 30, borderRadius: 9, background: `${col}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>{cat ? getCatIcon(cat) : "📍"}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13.5, fontWeight: 600, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.place || "Unknown stop"}</div>
-                  <div style={{ fontSize: 10.5, color: theme.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{stopDayLabel(s)} {hhmm(s.startedAt)}{s.endedAt ? "–" + hhmm(s.endedAt) : ""} · {stopMins(s)} min · {s.pinned ? "pinned shop" : (s.near ? "near " + s.near + " · " + stopCoords(s) : stopCoords(s))}</div>
+                  <div style={{ fontSize: 10.5, color: theme.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{stopDayLabel(s)} {hhmm(s.startedAt)}{s.endedAt ? "–" + hhmm(s.endedAt) : ""} · {stopMins(s)} min · {s.pinned ? "pinned shop" : (s.near ? "near " + s.near : stopCoords(s))}</div>
                 </div>
               </div>
+              {!s.pinned && (
+                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: theme.textMuted, marginBottom: 7 }}>
+                  <a href={stopMapUrl(s)} target="_blank" rel="noopener noreferrer" style={{ border: `1px solid ${theme.cardBorder}`, color: theme.primary, borderRadius: 7, padding: "3px 9px", fontSize: 11, fontWeight: 600, textDecoration: "none", flexShrink: 0 }}>📍 Map ↗</a>
+                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{near ? `≈ ${near.d} m from ${near.shop}` : ""}</span>
+                  {near && dr.shop !== near.shop && <button onClick={() => setDraft(s, { shop: near.shop })} disabled={busy} style={{ border: `1px solid ${theme.cardBorder}`, background: "transparent", color: theme.primary, borderRadius: 7, padding: "3px 9px", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>Use</button>}
+                </div>
+              )}
               <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
                 <select value={dr.shop} onChange={(e) => setDraft(s, { shop: e.target.value })} disabled={busy} style={{ ...inputStyle, flex: 1, minWidth: 0, padding: "9px 10px", fontSize: 13 }}>
                   <option value="">Which shop?</option>
@@ -3041,7 +3107,7 @@ function AddEntryView({ recentEntries, allExpenses }) {
         <div className="cm-slide-in" style={creatorCard}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
             <span style={{ width: 38, height: 38, borderRadius: 11, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 19, flexShrink: 0, background: `${newCat.color}22`, boxShadow: `inset 0 0 0 1.5px ${newCat.color}` }}>{newCat.icon}</span>
-            <input value={newCat.name} onChange={(e) => setNewCat((n) => ({ ...n, name: e.target.value }))} placeholder="Category name" style={fieldInput} />
+            <input autoFocus enterKeyHint="done" value={newCat.name} onChange={(e) => setNewCat((n) => ({ ...n, name: e.target.value }))} onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing && newCat.name.trim()) { e.preventDefault(); addCategory(); } }} placeholder="Category name" style={fieldInput} />
           </div>
           <div style={{ ...sLbl, marginBottom: 7 }}>Icon</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 13 }}>
@@ -3116,7 +3182,7 @@ function AddEntryView({ recentEntries, allExpenses }) {
       </div>
       {newShopOpen && (
         <div className="cm-slide-in" style={creatorCard}>
-          <input value={newShop.name} onChange={(e) => setNewShop((s) => ({ ...s, name: e.target.value }))} placeholder={`New shop in ${curCat}`} style={fieldInput} />
+          <input autoFocus enterKeyHint="done" value={newShop.name} onChange={(e) => setNewShop((s) => ({ ...s, name: e.target.value }))} onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing && newShop.name.trim()) { e.preventDefault(); addShop(); } }} placeholder={`New shop in ${curCat}`} style={fieldInput} />
           <label style={{ display: "flex", alignItems: "center", gap: 9, margin: "13px 2px 15px", fontSize: 13.5, color: C.muted, cursor: "pointer" }}>
             <input type="checkbox" checked={newShop.fav} onChange={(e) => setNewShop((s) => ({ ...s, fav: e.target.checked }))} style={{ width: 17, height: 17, accentColor: accent }} />
             ⭐ Mark as favorite (shows first)
@@ -4170,11 +4236,35 @@ function SettingsView({ allExpenses, pendingSpots = 0, onPendingSpots }) {
   );
 }
 
+// Every overlay sits above the fixed bottom bar (z 200) and each one opened
+// later stacks above the ones already up, so a dialog raised from a sheet, or a
+// sheet that opens on a timer while another is showing, is never hidden
+// behind — and never silently takes the focus — of what the user is looking at.
+let MODAL_DEPTH = 0;
 function Modal({ children, onClose, sheet }) {
   const { theme } = useTheme();
+  const [z] = useState(() => 300 + MODAL_DEPTH * 2);
+  useEffect(() => { MODAL_DEPTH += 1; return () => { MODAL_DEPTH = Math.max(0, MODAL_DEPTH - 1); }; }, []);
+  // v59 · the overlay covers only the visible part of the screen, so a sheet
+  // sits on top of the keyboard instead of under it; the field being typed in
+  // is scrolled into the sheet's view once the keyboard has settled.
+  const vv = useVisualViewport();
+  const kbUp = useKeyboardUp();
+  const boxRef = useRef(null);
+  const reveal = () => {
+    const box = boxRef.current, el = document.activeElement;
+    if (!box || !isTextEntry(el) || !box.contains(el)) return;
+    const b = box.getBoundingClientRect(), r = el.getBoundingClientRect();
+    const below = r.bottom - (b.bottom - 16), above = (b.top + 16) - r.top;
+    if (below > 0) box.scrollTop += below; else if (above > 0) box.scrollTop -= above;
+  };
+  useEffect(() => { const t1 = setTimeout(reveal, 250), t2 = setTimeout(reveal, 600); return () => { clearTimeout(t1); clearTimeout(t2); }; }, [kbUp, vv.height, vv.top]);
+  // Sheets hug the bottom edge on phones; on a wide screen they sit centred like a dialog.
+  const bottom = sheet && vv.width < 640;
+  const maxH = bottom ? (kbUp ? vv.height : Math.round(vv.height * 0.8)) : Math.max(0, vv.height - 40);
   return (
-    <div onClick={sheet ? onClose : undefined} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",display:"flex",alignItems:sheet?"flex-end":"center",justifyContent:"center",zIndex:sheet?300:100,padding:sheet?0:20}}>
-      <div className={sheet ? "cm-sheet-in" : undefined} onClick={sheet ? (e) => e.stopPropagation() : undefined} style={{background:"#1a1a2e",borderRadius:sheet?"18px 18px 0 0":12,padding:16,width:"100%",maxWidth:sheet?460:360,maxHeight:sheet?"80vh":undefined,overflowY:sheet?"auto":undefined}}>
+    <div onClick={sheet ? onClose : undefined} style={{position:"fixed",top:vv.top,left:0,right:0,height:vv.height,background:"rgba(0,0,0,0.8)",display:"flex",alignItems:bottom?"flex-end":"center",justifyContent:"center",zIndex:z,padding:bottom?0:20}}>
+      <div ref={boxRef} className={sheet ? "cm-sheet-in" : undefined} onClick={sheet ? (e) => e.stopPropagation() : undefined} onFocus={() => setTimeout(reveal, 250)} style={{background:"#1a1a2e",borderRadius:bottom?"18px 18px 0 0":16,padding:16,width:"100%",maxWidth:sheet?460:360,maxHeight:maxH,overflowY:"auto"}}>
         {children}
       </div>
     </div>
@@ -6601,7 +6691,7 @@ function RecurringDueModal({ items, onAdd, onSkip, onSnooze, onResolve, onClose 
               </div>
               {needsAmount && (
                 <input
-                  type="number" inputMode="numeric" autoFocus
+                  type="number" inputMode="numeric" autoFocus={!isTyping()}
                   value={rawAmt ?? ""}
                   onChange={(e) => setAmt(rec.id, e.target.value)}
                   placeholder={CUR.symbol + " Enter amount"}
@@ -6689,7 +6779,7 @@ function LocationDueModal({ items, onAdd, onSkip, onSnooze, onResolve, onClose }
                 <span style={{ fontSize: 14, fontWeight: 700, color: "#fff", whiteSpace: "nowrap" }}>{needsAmount ? "—" : fmt(t.amount)}</span>
               </div>
               {needsAmount && (
-                <input type="number" inputMode="numeric" autoFocus value={rawAmt ?? ""} onChange={(e) => setAmt(t.id, e.target.value)} placeholder={CUR.symbol + " Enter amount"} disabled={busy} style={{ ...inputStyle, fontSize: 14, fontWeight: 600, marginBottom: 6 }} />
+                <input type="number" inputMode="numeric" autoFocus={!isTyping()} value={rawAmt ?? ""} onChange={(e) => setAmt(t.id, e.target.value)} placeholder={CUR.symbol + " Enter amount"} disabled={busy} style={{ ...inputStyle, fontSize: 14, fontWeight: 600, marginBottom: 6 }} />
               )}
               <div style={{ display: "flex", gap: 6 }}>
                 <button onClick={() => doAdd(t, needsAmount ? amtNum : undefined)} disabled={busy || (needsAmount && !amtValid)} style={{ ...addBtn, opacity: (needsAmount && !amtValid) ? 0.5 : 1, cursor: (needsAmount && !amtValid) ? "not-allowed" : "pointer" }}>Add</button>
@@ -6842,7 +6932,7 @@ function RequestInboxView() {
           <div style={{ marginTop: 10, background: theme.cardBg, borderRadius: 10, padding: "11px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8 }}>
               <div><label style={lbl}>Bought at</label><input list="req-inbox-shops" value={buy.shop} onChange={(e) => setBuy((b) => ({ ...b, shop: e.target.value }))} style={field} /></div>
-              <div><label style={lbl}>Paid {sym(r)}</label><input autoFocus inputMode="decimal" value={buy.amount} onChange={(e) => setBuy((b) => ({ ...b, amount: e.target.value.replace(/[^0-9.]/g, "") }))} style={{ ...field, textAlign: "right" }} /></div>
+              <div><label style={lbl}>Paid {sym(r)}</label><input autoFocus inputMode="decimal" value={buy.amount} onChange={(e) => setBuy((b) => ({ ...b, amount: asciiDigits(e.target.value) }))} style={{ ...field, textAlign: "right" }} /></div>
               <div><label style={lbl}>Category</label><select value={buy.category} onChange={(e) => setBuy((b) => ({ ...b, category: e.target.value }))} style={field}>{categories.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}</select></div>
               <div><label style={lbl}>Date</label><input type="date" value={buy.date} max={ymdToday()} onChange={(e) => setBuy((b) => ({ ...b, date: e.target.value }))} style={field} /></div>
             </div>
@@ -7217,7 +7307,7 @@ function SukkiriRequestsView({ requests, reload }) {
           {(req.items || []).map((it, i) => (
             <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
               <span style={{ fontSize: 12, color: "#fff", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</span>
-              <input autoFocus={i === 0} inputMode="numeric" value={confAmts[i] ?? ""} onChange={(e) => setConfAmts((a) => ({ ...a, [i]: e.target.value.replace(/[^0-9.]/g, "") }))} placeholder={curSym(req)} style={{ ...inputStyle, width: 96, textAlign: "right", boxSizing: "border-box" }} />
+              <input autoFocus={i === 0} inputMode="numeric" value={confAmts[i] ?? ""} onChange={(e) => setConfAmts((a) => ({ ...a, [i]: asciiDigits(e.target.value) }))} placeholder={curSym(req)} style={{ ...inputStyle, width: 96, textAlign: "right", boxSizing: "border-box" }} />
             </div>
           ))}
           <div style={{ fontSize: 10.5, color: theme.textDim, margin: "2px 0 9px" }}>Items priced 0 are skipped. Real prices from the till beat the app's estimates. Save shop changes the shop only — nothing is logged.</div>
@@ -7391,7 +7481,7 @@ function SentToWFView() {
           <div style={{ marginTop: 11, background: theme.cardBg, borderRadius: 10, padding: "11px 12px", boxShadow: `inset 0 0 0 1px ${theme.primary}44`, display: "flex", flexDirection: "column", gap: 8 }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8 }}>
               <div><label style={lbl}>Bought at</label><input list="wf-sent-shops" value={lg.shop} onChange={(ev) => setLg((x) => ({ ...x, shop: ev.target.value }))} placeholder="Shop name…" style={field} /></div>
-              <div><label style={lbl}>Paid {sym(p)}</label><input autoFocus inputMode="decimal" value={lg.amount} onChange={(ev) => setLg((x) => ({ ...x, amount: ev.target.value.replace(/[^0-9.]/g, "") }))} style={{ ...field, textAlign: "right" }} /></div>
+              <div><label style={lbl}>Paid {sym(p)}</label><input autoFocus inputMode="decimal" value={lg.amount} onChange={(ev) => setLg((x) => ({ ...x, amount: asciiDigits(ev.target.value) }))} style={{ ...field, textAlign: "right" }} /></div>
               <div><label style={lbl}>Category</label><select value={lg.category} onChange={(ev) => setLg((x) => ({ ...x, category: ev.target.value }))} style={field}>{[...new Set([...categories.map((c) => c.name), catFor(p)])].map((n) => <option key={n} value={n}>{n}</option>)}</select></div>
               <div><label style={lbl}>Date</label><input type="date" value={lg.date} max={ymdToday()} onChange={(ev) => setLg((x) => ({ ...x, date: ev.target.value }))} style={field} /></div>
             </div>
