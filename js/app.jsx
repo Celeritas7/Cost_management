@@ -1364,7 +1364,7 @@ function App({ session, onSignOut }) {
         )}
 
         {stopsOpen && openStops.length > 0 && (
-          <StopsPanel stops={openStops} onLog={logStop} onDismiss={dismissStop} onBlock={blockStop} onCheckDup={stopDup} onClose={() => setStopsOpen(false)} />
+          <StopsPanel stops={openStops} pins={stopPins} onLog={logStop} onDismiss={dismissStop} onBlock={blockStop} onCheckDup={stopDup} onClose={() => setStopsOpen(false)} />
         )}
 
         {hubReport && (
@@ -1742,7 +1742,16 @@ const matchPin = (pos, pins) => {
 };
 
 // The panel: every unlogged stop, oldest first, each one an amount away from being an expense.
-function StopsPanel({ stops, onLog, onDismiss, onBlock, onCheckDup, onClose }) {
+// Nearest saved shop pin within 400 m, even outside its own radius — a memory jog
+// for an unnamed stop, never an answer: it only offers the shop, it doesn't pick it.
+const nearestShopPin = (pos, pins) => {
+  let best = null, bestD = 400;
+  (pins || []).forEach((p) => { if (!p.shop) return; const d = distanceMeters(pos, p); if (d <= bestD) { best = p; bestD = d; } });
+  return best ? { shop: best.shop, d: Math.round(bestD / 10) * 10 } : null;
+};
+const stopMapUrl = (s) => "https://www.google.com/maps/search/?api=1&query=" + Number(s.lat).toFixed(6) + "," + Number(s.lng).toFixed(6);
+
+function StopsPanel({ stops, pins, onLog, onDismiss, onBlock, onCheckDup, onClose }) {
   const { theme, shops, getCatIcon, getCatColor, inputStyle } = useTheme();
   const [drafts, setDrafts] = useState({});
   const [busyId, setBusyId] = useState(null);
@@ -1768,7 +1777,7 @@ function StopsPanel({ stops, onLog, onDismiss, onBlock, onCheckDup, onClose }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", gap: 8 }}><Icon name="thumbtack" size={16}/>Stops to log</div>
-          <div style={{ fontSize: 11.5, color: theme.textMuted, marginTop: 3 }}>{stops.length} {stops.length === 1 ? "place" : "places"} you stopped at · they wait here until you log or drop them</div>
+          <div style={{ fontSize: 11.5, color: theme.textMuted, marginTop: 3 }}>{stops.length} {stops.length === 1 ? "place" : "places"} you stopped at · tap Map to see where · just passing? "Didn't spend"</div>
         </div>
         <button onClick={onClose} style={{ border: "none", background: theme.inputBg, color: theme.textMuted, width: 30, height: 30, borderRadius: 15, fontSize: 17, cursor: "pointer", boxShadow: `inset 0 0 0 1px ${theme.cardBorder}`, flexShrink: 0 }}>×</button>
       </div>
@@ -1780,15 +1789,23 @@ function StopsPanel({ stops, onLog, onDismiss, onBlock, onCheckDup, onClose }) {
           const col = getCatColor(cat);
           const ready = !!dr.shop && amt > 0;
           const dup = ready && onCheckDup ? onCheckDup(s, dr.shop, amt) : null;
+          const near = s.pinned ? null : nearestShopPin(s, pins);
           return (
             <div key={s.id} className={fadingId === s.id ? "cm-fade-out" : undefined} style={{ borderRadius: 12, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${s.pinned ? theme.cardBorder : "rgba(245,158,11,0.35)"}`, padding: "11px 12px", opacity: busy ? 0.6 : 1 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 9 }}>
                 <span style={{ width: 30, height: 30, borderRadius: 9, background: `${col}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>{cat ? getCatIcon(cat) : "📍"}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13.5, fontWeight: 600, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.place || "Unknown stop"}</div>
-                  <div style={{ fontSize: 10.5, color: theme.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{stopDayLabel(s)} {hhmm(s.startedAt)}{s.endedAt ? "–" + hhmm(s.endedAt) : ""} · {stopMins(s)} min · {s.pinned ? "pinned shop" : (s.near ? "near " + s.near + " · " + stopCoords(s) : stopCoords(s))}</div>
+                  <div style={{ fontSize: 10.5, color: theme.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{stopDayLabel(s)} {hhmm(s.startedAt)}{s.endedAt ? "–" + hhmm(s.endedAt) : ""} · {stopMins(s)} min · {s.pinned ? "pinned shop" : (s.near ? "near " + s.near : stopCoords(s))}</div>
                 </div>
               </div>
+              {!s.pinned && (
+                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: theme.textMuted, marginBottom: 7 }}>
+                  <a href={stopMapUrl(s)} target="_blank" rel="noopener noreferrer" style={{ border: `1px solid ${theme.cardBorder}`, color: theme.primary, borderRadius: 7, padding: "3px 9px", fontSize: 11, fontWeight: 600, textDecoration: "none", flexShrink: 0 }}>📍 Map ↗</a>
+                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{near ? `≈ ${near.d} m from ${near.shop}` : ""}</span>
+                  {near && dr.shop !== near.shop && <button onClick={() => setDraft(s, { shop: near.shop })} disabled={busy} style={{ border: `1px solid ${theme.cardBorder}`, background: "transparent", color: theme.primary, borderRadius: 7, padding: "3px 9px", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>Use</button>}
+                </div>
+              )}
               <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
                 <select value={dr.shop} onChange={(e) => setDraft(s, { shop: e.target.value })} disabled={busy} style={{ ...inputStyle, flex: 1, minWidth: 0, padding: "9px 10px", fontSize: 13 }}>
                   <option value="">Which shop?</option>
