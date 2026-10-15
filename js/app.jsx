@@ -187,7 +187,6 @@ function useKeyboardUp() {
 }
 // Japanese keyboards often emit full-width digits (１２３．); amount fields
 // accept them as their ASCII equivalents instead of silently dropping them.
-<<<<<<< HEAD
 // The visible part of the screen. With the soft keyboard up, Chrome on Android
 // may overlay it (visual viewport shrinks, layout viewport doesn't) or resize the
 // page — the meta tag asks for the latter but installed apps don't always get
@@ -203,8 +202,6 @@ function useVisualViewport() {
   }, []);
   return vv;
 }
-=======
->>>>>>> 23ee057c9bf7435742330138c32483111ffab4b5
 const asciiDigits = (v) => String(v).replace(/[\uFF10-\uFF19]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/[\uFF0E\u3002]/g, ".").replace(/[^0-9.]/g, "");
 
 // ── Recurring (templates) ──
@@ -4248,7 +4245,6 @@ function Modal({ children, onClose, sheet }) {
   const { theme } = useTheme();
   const [z] = useState(() => 300 + MODAL_DEPTH * 2);
   useEffect(() => { MODAL_DEPTH += 1; return () => { MODAL_DEPTH = Math.max(0, MODAL_DEPTH - 1); }; }, []);
-<<<<<<< HEAD
   // v59 · the overlay covers only the visible part of the screen, so a sheet
   // sits on top of the keyboard instead of under it; the field being typed in
   // is scrolled into the sheet's view once the keyboard has settled.
@@ -4269,11 +4265,6 @@ function Modal({ children, onClose, sheet }) {
   return (
     <div onClick={sheet ? onClose : undefined} style={{position:"fixed",top:vv.top,left:0,right:0,height:vv.height,background:"rgba(0,0,0,0.8)",display:"flex",alignItems:bottom?"flex-end":"center",justifyContent:"center",zIndex:z,padding:bottom?0:20}}>
       <div ref={boxRef} className={sheet ? "cm-sheet-in" : undefined} onClick={sheet ? (e) => e.stopPropagation() : undefined} onFocus={() => setTimeout(reveal, 250)} style={{background:"#1a1a2e",borderRadius:bottom?"18px 18px 0 0":16,padding:16,width:"100%",maxWidth:sheet?460:360,maxHeight:maxH,overflowY:"auto"}}>
-=======
-  return (
-    <div onClick={sheet ? onClose : undefined} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",display:"flex",alignItems:sheet?"flex-end":"center",justifyContent:"center",zIndex:z,padding:sheet?0:20}}>
-      <div className={sheet ? "cm-sheet-in" : undefined} onClick={sheet ? (e) => e.stopPropagation() : undefined} style={{background:"#1a1a2e",borderRadius:sheet?"18px 18px 0 0":12,padding:16,width:"100%",maxWidth:sheet?460:360,maxHeight:sheet?"80vh":undefined,overflowY:sheet?"auto":undefined}}>
->>>>>>> 23ee057c9bf7435742330138c32483111ffab4b5
         {children}
       </div>
     </div>
