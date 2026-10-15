@@ -1227,9 +1227,9 @@ function App({ session, onSignOut }) {
       <div style={{minHeight:"100vh",background:theme.bg,color:theme.text,fontFamily:"'Noto Sans JP', system-ui, sans-serif"}}>
         {/* Header */}
         <div style={{background:theme.headerBg,borderBottom:`1px solid ${theme.cardBorder}`,padding:"calc(14px + env(safe-area-inset-top, 0px)) 16px 14px"}}>
-         <div style={{maxWidth:1080,margin:"0 auto",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
-          <div style={{display:"flex",alignItems:"center",gap:10}}><img src="icons/icon.svg" alt="" width="30" height="30" style={{borderRadius:8,display:"block"}}/><h1 style={{fontSize:18,fontWeight:700,color:"#fff",margin:0}}>Cost Management</h1></div>
-          <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>
+         <div style={{maxWidth:1080,margin:"0 auto",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:isMobile?"nowrap":"wrap",gap:8}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0}}><img src="icons/icon.svg" alt="" width="30" height="30" style={{borderRadius:8,display:"block",flexShrink:0}}/><h1 style={{fontSize:18,fontWeight:700,color:"#fff",margin:0,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>Cost Management</h1></div>
+          <div style={{display:"flex",gap:4,flexWrap:isMobile?"nowrap":"wrap",alignItems:"center",flexShrink:0}}>
             {(isMobile ? navTabs.filter(t => t.id === "settings") : navTabs).map(tab => (
               <button key={tab.id} onClick={() => { setView(tab.id); setTxPage(0); }} style={{...pillStyle(view===tab.id || (tab.id==="transactions" && view==="calendar")),padding:"5px 11px",fontSize:11,display:"inline-flex",alignItems:"center",gap:6}}><Icon name={tab.icon} size={15}/>{isMobile && tab.id==="settings" ? "" : tab.label}{tab.id==="settings" && pendingSpots>0 && <span title={`${pendingSpots} learned ${pendingSpots===1?"spot":"spots"} to review`} style={{background:"#f59e0b",color:"#1a1000",fontSize:9,fontWeight:800,borderRadius:9,padding:"1px 5px",lineHeight:1.6}}>{pendingSpots}</span>}</button>
             ))}
