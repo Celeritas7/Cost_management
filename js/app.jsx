@@ -3529,7 +3529,7 @@ function AddCalSheet({ dates, setDates, today, yest, C, chip, theme, onClose, on
 // ═══════════════════════════════════════════
 const fmtDist = (m) => m == null || !isFinite(m) ? null : m < 950 ? Math.round(m / 10) * 10 + "m" : (m / 1000).toFixed(m < 9500 ? 1 : 0) + "km";
 function ShopAreasPanel({ allExpenses = [], onPending }) {
-  const { theme, supabase, categories, shops, getCatIcon, currency } = useTheme();
+  const { theme, supabase, categories, shops, getCatIcon, currency, fetchData } = useTheme();
   const [areas, setAreas] = useState([]);
   const [points, setPoints] = useState([]);
   const [ptsErr, setPtsErr] = useState("");
@@ -3545,6 +3545,8 @@ function ShopAreasPanel({ allExpenses = [], onPending }) {
   const [scopeCat, setScopeCat] = useState("");     // "" = all categories
   const [picker, setPicker] = useState(null);       // area being filled
   const [picked, setPicked] = useState([]);
+  const [newIn, setNewIn] = useState(null);         // category whose "+ new" field is open in the picker
+  const [newName, setNewName] = useState("");
   const [editing, setEditing] = useState(null);     // area being edited
   const [newOpen, setNewOpen] = useState(false);
   const [draft, setDraft] = useState({ name: "", lat: "", lng: "" });
@@ -3684,6 +3686,19 @@ function ShopAreasPanel({ allExpenses = [], onPending }) {
     if (error) { flash(error.message); return; }
     flash(`${picked.length} added to ${picker.name}`); setPicker(null); setPicked([]); load();
   };
+  // Create a shop from inside the picker and put it straight into this area.
+  const addNewShop = async () => {
+    const name = newName.trim(); if (!name || busy || !picker || !newIn) return;
+    const dup = shops.find(s => s.name.trim().toLowerCase() === name.toLowerCase());
+    if (dup) { setPicked(p => p.indexOf(sid(dup)) >= 0 || (byArea[picker.id] || []).indexOf(sid(dup)) >= 0 ? p : [...p, sid(dup)]); setNewName(""); setNewIn(null); flash(`${dup.name} already exists — ticked it`); return; }
+    setBusy(true);
+    const { data, error } = await supabase.from("cost_management_shops").insert({ region: CUR.code, name, category: newIn, is_favorite: false }).select("id").single();
+    if (error) { setBusy(false); flash(error.message.includes("duplicate") ? "Shop exists" : error.message, 4000); return; }
+    const { error: le } = await supabase.from("cost_management_shop_locations").insert({ area_id: picker.id, shop_id: data.id });
+    setBusy(false);
+    if (le) { flash("Shop created, but couldn't add it to " + picker.name + ": " + le.message, 4000); fetchData(); return; }
+    setNewName(""); setNewIn(null); flash(`${name} added to ${picker.name}`); fetchData(); load();
+  };
   const unlink = async (areaId, shopId) => {
     const { error } = await supabase.from("cost_management_shop_locations").delete().eq("area_id", areaId).eq("shop_id", shopId);
     if (error) { flash(error.message); return; }
@@ -3766,7 +3781,7 @@ function ShopAreasPanel({ allExpenses = [], onPending }) {
                     <button onClick={() => unlink(a.id, s.id)} title="Remove from this area" style={{ background: "none", border: "none", color: theme.textDim, cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0, fontFamily: "inherit" }}>×</button>
                   </span>
                 ))}
-                <button onClick={() => { setPicked([]); setPicker(a); }} style={S.add}>+ shop</button>
+                <button onClick={() => { setPicked([]); setNewIn(null); setNewName(""); setPicker(a); }} style={S.add}>+ shop</button>
               </div>
               {pending.map(p => {
                 const gap = spotGap(p, a, points);
@@ -3812,7 +3827,7 @@ function ShopAreasPanel({ allExpenses = [], onPending }) {
       {picker && (
         <Modal sheet onClose={() => setPicker(null)}>
           <div style={{ fontSize: 15, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", gap: 6 }}><Pin s={13}/>Add shops to {picker.name}</div>
-          <p style={{ fontSize: 11, color: theme.textMuted, margin: "2px 0 12px" }}>Tap to tick · already-added shops are ticked</p>
+          <p style={{ fontSize: 11, color: theme.textMuted, margin: "2px 0 12px" }}>Tap to tick · already-added shops are ticked · ＋ new creates a shop here</p>
           <div style={{ maxHeight: "52vh", overflowY: "auto" }}>
             {pickerGroups.map(g => (
               <div key={g.cat}>
@@ -3827,7 +3842,15 @@ function ShopAreasPanel({ allExpenses = [], onPending }) {
                       </button>
                     );
                   })}
+                  {newIn !== g.cat && <button onClick={() => { setNewIn(g.cat); setNewName(""); }} style={S.add}>＋ new</button>}
                 </div>
+                {newIn === g.cat && (
+                  <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                    <input autoFocus enterKeyHint="done" value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.nativeEvent.isComposing && newName.trim()) { e.preventDefault(); addNewShop(); } }} placeholder={`New ${g.cat} shop`} style={{ ...S.field, flex: 1, minWidth: 0 }}/>
+                    <button onClick={() => { setNewIn(null); setNewName(""); }} style={{ padding: "8px 10px", borderRadius: 9, border: `1px solid ${theme.cardBorder}`, background: "transparent", color: theme.textMuted, cursor: "pointer", fontSize: 11.5, fontFamily: "inherit" }}>Cancel</button>
+                    <button onClick={addNewShop} disabled={busy || !newName.trim()} style={{ ...S.cta, opacity: (busy || !newName.trim()) ? 0.45 : 1 }}>Add</button>
+                  </div>
+                )}
               </div>
             ))}
           </div>
