@@ -152,8 +152,13 @@
             try { await (handlers.onPurchaseRequest || (() => {}))(r.payload, r); return {}; }
             finally { applying = false; }
           },
+          // Emails (and backfills) can arrive out of order: if this order's cancellation
+          // is already here, settle it now. consume() acks with this reply in one call.
           'purchase.detected': async (r) => {
+            const { data } = await supabase.from('akatsuki_requests').select('seq')
+              .eq('to_app', APP).eq('kind', 'purchase.cancelled').eq('src_addr', JSON.stringify(r.src_addr)).limit(1);
             await (handlers.onOrder || (() => {}))(r.payload, r);
+            if (data && data.length) return { reply: { order_id: r.payload.order_id, status: 'dismissed', reason: 'cancelled', at: new Date().toISOString() } };
             return {};
           },
           // A cancellation settles the detected row it names: never resolved → dismissed;
