@@ -107,6 +107,31 @@
         return hub.reply(row.from_app || 'sukkiri', 'purchase_request', row.src_addr, reply);
       },
 
+      /** Online orders (purchase.detected / purchase.cancelled from `mail`, contract in
+       *  AKATSUKI-REPLY-cost-amazon-orders). Like R013 the list IS the hub rows. Returns
+       *  every detected row, each with the matching cancellation (same addr) or null. */
+      async orderInbox() {
+        const { data, error } = await supabase.from('akatsuki_requests')
+          .select('seq,from_app,kind,src_addr,payload,reply,reply_seq,created_at')
+          .eq('to_app', APP).in('kind', ['purchase.detected', 'purchase.cancelled'])
+          .order('seq', { ascending: false });
+        if (error) throw new Error(error.message);
+        const key = (a) => (a && a.source) + ':' + (a && a.order_id);
+        const cancelled = {};
+        data.filter((r) => r.kind === 'purchase.cancelled').forEach((r) => { if (!cancelled[key(r.src_addr)]) cancelled[key(r.src_addr)] = r; });
+        return data.filter((r) => r.kind === 'purchase.detected').map((r) => ({ ...r, cancel: cancelled[key(r.src_addr)] || null }));
+      },
+
+      /** Resolve one detected order. Acked by seq so the reply and, when logged, the
+       *  link to the expense ({id}) land in one call — the link is what lets a later
+       *  cancellation find an expense that was already logged. */
+      async orderResolved(row, status, { expenseIds, extra } = {}) {
+        const reply = { order_id: row.payload.order_id, status, ...(extra || {}), at: new Date().toISOString() };
+        if (expenseIds && expenseIds.length) reply.expense_ids = expenseIds;
+        const addr = status === 'logged' && expenseIds && expenseIds.length ? { id: expenseIds[0] } : undefined;
+        return hub.ack(row.seq, { addr, reply });
+      },
+
       /** R016 — the shop to pre-fill at logging. The user may still change it.
        *  Order: WF plan → item shop → payload preferred_shop → null (then location). */
       suggestedShop(row, item) {
@@ -126,6 +151,22 @@
             applying = true;
             try { await (handlers.onPurchaseRequest || (() => {}))(r.payload, r); return {}; }
             finally { applying = false; }
+          },
+          'purchase.detected': async (r) => {
+            await (handlers.onOrder || (() => {}))(r.payload, r);
+            return {};
+          },
+          // A cancellation settles the detected row it names: never resolved → dismissed;
+          // already logged → flagged (the expense stays; the person decides).
+          'purchase.cancelled': async (r) => {
+            const { data } = await supabase.from('akatsuki_requests').select('seq,payload,reply')
+              .eq('to_app', APP).eq('kind', 'purchase.detected').eq('src_addr', JSON.stringify(r.src_addr))
+              .order('seq', { ascending: false }).limit(1);
+            const d = data && data[0];
+            if (d && !d.reply) await hub.ack(d.seq, { reply: { order_id: r.payload.order_id, status: 'dismissed', reason: 'cancelled', at: new Date().toISOString() } });
+            else if (d && d.reply && d.reply.status === 'logged') await hub.ack(d.seq, { reply: { ...d.reply, status: 'flagged', reason: 'cancelled', at: new Date().toISOString() } });
+            await (handlers.onOrder || (() => {}))(r.payload, r);
+            return {};
           }
         }, opts.pollMs || 15000);
       },
