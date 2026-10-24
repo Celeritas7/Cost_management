@@ -2,7 +2,7 @@
 
 **Build:** v65 (`sw.js` → `cm-shell-v65`). v61 built the inbox; v62 closes the gap from reply 2; v63 fixes order dates; v64 adds items, per-item logging and wishlist matching; v65 adds "paid by someone else" and Cost's own record of order lines. Branch `ccr-162e21d1-o2krcr`; the sha follows after push.
 **Basis:** `AKATSUKI-REPLY-cost-amazon-orders.md`, final contract, accepted as written.
-**Not verified live.** Nothing can arrive until R037 exists. Until then the inbox is empty and the section stays hidden. The UI was checked by rendering it with sample rows at phone width.
+**Live.** The 11 backfilled orders arrived and are resolved: 10 logged and 1 dismissed, all with replies and links (checked 2026-10-24). New orders arrive and are logged the same way.
 
 ## What Cost does
 
@@ -47,7 +47,7 @@
 - **Now:** `new Date(ordered_at).toLocaleDateString('sv-SE', { timeZone: 'Asia/Tokyo' })`. The zone follows `payload.currency` (JPY → Asia/Tokyo, INR → Asia/Kolkata, default Tokyo). It does not depend on the phone's own zone. It is used both for the expense date and for the date on the card.
 - **`cancelled_at`:** not shown as a date anywhere. If it ever is, it goes through the same helper (`orderDay`).
 - **Checked:** 16:12Z → 04-19; 23:59Z → next day; 15:00Z → next day (midnight JST); 14:59:59Z → same day; `+09:00` input unchanged. Also checked with the device clock set to UTC and to New York.
-- **Already logged with the wrong date:** none. Cost has not logged any order yet (nothing can arrive before R037).
+- **Already logged with the wrong date:** none. When v63 shipped, Cost had not logged any order yet.
 
 ## v64 · items, per-item logging, closing wishlist cards
 **1 · Items on each card:** name, ×qty and price for every line in `payload.items`.
@@ -76,14 +76,16 @@ Cost also warns "maybe already logged" when an expense with the same amount exis
 
 **Retry:** if closing a card or the reply fails, the inserted ids are kept (`cm_order_logged`), and Log retries without inserting again.
 
-**Today:** every wishlist request was cancelled at 2026-10-24 15:16–15:17 UTC, so no card matches right now. No expense matches any of the 11 orders either, so nothing has been counted twice.
+**When v64 shipped:** every wishlist request had been cancelled (2026-10-24 15:16–15:17 UTC), so no card matched. No existing expense matched any of the 11 orders, so nothing was counted twice.
 
 ## Data issue for Akatsuki · order 249-5735958-9677403
 - `total` = **14,471**, but its 8 lines sum to **41,166**.
 - 14,471 = microSD (6,980) + Zelda (7,491) only. The other 6 lines (neck coolers, wallet, kokeshi, kimono dolls, handy fan) look like they belong to another order or another block in the same email.
 - The other 10 orders add up exactly.
 
-Cost now checks the sum. When the lines don't add up, the card opens in **One expense** mode with a warning, and per-item logging is left to the person. **Please re-parse that email.** If the extra lines are a second order, it should arrive as its own `purchase.detected`.
+Cost now checks the sum. When the lines don't add up, the card opens in **One expense** mode with a warning, and per-item logging is left to the person.
+
+**Resolved:** the person logged that order by hand. The script now permanently skips that email, so it is never re-sent, and it splits emails holding several orders before they reach Cost. Nothing more is needed here.
 
 **Qty > 1:** Cost treats `price` as the amount for the whole line (×2 neck cooler = 6,999 total), as you said. Tell me if any line is per unit instead.
 
@@ -95,7 +97,8 @@ Cost now checks the sum. When the lines don't add up, the card opens in **One ex
   - Until 017 is applied, rows wait on the device and are pushed on the next save.
 - **Reply:** also carries `excluded: [{index, reason: 'paid_by_other'|'skip', note?}]`. It is informational; Cost does not read it back.
 - **Display:** the Requests tab has a "🧾 Past online orders" list, built from Cost's table. Each line shows its status chip and note, e.g. `Zelda ¥7,491 · paid by someone else`.
-- **Backfill for 249-5735958-9677403 (Jul 9):** not done yet. It waits on the user's confirmation and on 017. Plan:
-  - lines 0 (microSD ¥6,980) and 1 (Zelda ¥7,491) → `paid_by_other`
-  - lines 2–7 → `logged` with expenses 1171–1176
-  - the six expenses are not touched
+- **Backfill: done** (2026-10-24, after the person confirmed and applied 017). All 25 lines of the 11 orders were written from the hub rows and Cost's replies:
+  - **19 lines `logged`** in 10 orders, ¥61,717. Each line's `expense_id` points at an existing expense with the same amount.
+  - **Jul 9 (249-5735958-9677403):** lines 0 (microSD ¥6,980) and 1 (Zelda ¥7,491) → `paid_by_other`, note "Bought for someone, paid back". Lines 2–7 → `logged` with expenses 1171–1176.
+  - **Jul 15 (250-2794402-2242249):** all 4 lines (¥6,505) → `paid_by_other`, at the person's request. That order's hub reply stays `dismissed`.
+  - **No expense was created or changed.**
