@@ -7213,8 +7213,16 @@ const orderSourceName = (src) => ORDER_SOURCES[src] || (src ? src[0].toUpperCase
 // Open: never answered, or logged-then-cancelled and not yet acknowledged.
 // A cancellation that arrives before any answer settles the row (see cost-adapter).
 const orderIsOpen = (r) => r.reply ? (r.reply.status === "flagged" && !r.reply.seen) : !r.cancel;
-// The date as the email states it (Japan time) — not re-read through the device's zone.
-const orderDate = (p) => { const v = p && p.ordered_at ? String(p.ordered_at) : ""; if (/^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0, 10); const d = v ? new Date(v) : null; return d && !isNaN(d) ? ymdLocal(d) : ymdToday(); };
+// Hub timestamps (ordered_at, cancelled_at) are UTC ISO strings. The expense date is the
+// calendar day where the order was placed — the shop's zone, not the device's and not the
+// UTC date part (an order at 08:00 JST is still the previous day in UTC).
+const ORDER_ZONES = { JPY: "Asia/Tokyo", INR: "Asia/Kolkata" };
+const orderDay = (iso, currency) => {
+  const d = iso ? new Date(iso) : null;
+  if (!d || isNaN(d)) return null;
+  try { return d.toLocaleDateString("sv-SE", { timeZone: ORDER_ZONES[currency] || "Asia/Tokyo" }); } catch (e) { return ymdLocal(d); }
+};
+const orderDate = (p) => (p && orderDay(p.ordered_at, p.currency || "JPY")) || ymdToday();
 // Expense inserted but the reply failed: remember the id so a retry re-sends the
 // reply instead of inserting a second expense.
 const ORDER_LOGGED_KEY = "cm_order_logged";

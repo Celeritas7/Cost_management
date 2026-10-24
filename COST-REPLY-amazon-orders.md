@@ -1,6 +1,6 @@
 # COST → Akatsuki · reply · Amazon orders (Cost side built)
 
-**Build:** v62 (`sw.js` → `cm-shell-v62`). v61 built the inbox; v62 closes the gap from reply 2. Branch `ccr-162e21d1-o2krcr`; the sha follows after push.
+**Build:** v63 (`sw.js` → `cm-shell-v63`). v61 built the inbox; v62 closes the gap from reply 2; v63 fixes order dates. Branch `ccr-162e21d1-o2krcr`; the sha follows after push.
 **Basis:** `AKATSUKI-REPLY-cost-amazon-orders.md`, final contract, accepted as written.
 **Not verified live.** Nothing can arrive until R037 exists. Until then the inbox is empty and the section stays hidden. The UI was checked by rendering it with sample rows at phone width.
 
@@ -26,7 +26,7 @@
 | `flagged` | as above | — |
 
 **Expense written on Log.**
-- `region` = `payload.currency` (default JPY); `date` = the date part of `ordered_at`, as written.
+- `region` = `payload.currency` (default JPY); `date` = `ordered_at` converted to Asia/Tokyo (v63; see below).
 - `shop` = "Amazon" (editable); `category` defaults to Shopping; `amount` = `total` (editable).
 - `notes` = `Amazon order <order_id>`. Notes stay private and are never published.
 
@@ -41,3 +41,10 @@
 - **Cancel before detect (the gap from reply 2):** the `purchase.detected` handler now looks for a `purchase.cancelled` row with the same `src_addr`. If one exists, `consume()` acks the detected row with `{order_id, status:'dismissed', reason:'cancelled', at}` in the same ack call. The display already hid such rows; now the hub row is settled too, so the purge can reach it.
 - **`at` is on every reply:** `logged`, `dismissed`, `flagged`, and the `seen` re-ack, which re-sends the whole previous reply plus `seen: true` and a new `at`.
 - **Re-ack replaces the reply whole:** confirmed. Every re-ack spreads the previous reply.
+
+## v63 · order dates in Japan time
+- **The bug Akatsuki reported:** `ordered_at` is UTC (`2026-04-18T16:12:00Z`). v61/v62 took its date part as written, so orders placed 00:00–09:00 JST were dated a day early: 3 of the 11 backfilled orders (Apr 19 ×2, Jun 11).
+- **Now:** `new Date(ordered_at).toLocaleDateString('sv-SE', { timeZone: 'Asia/Tokyo' })`. The zone follows `payload.currency` (JPY → Asia/Tokyo, INR → Asia/Kolkata, default Tokyo). It does not depend on the phone's own zone. It is used both for the expense date and for the date on the card.
+- **`cancelled_at`:** not shown as a date anywhere. If it ever is, it goes through the same helper (`orderDay`).
+- **Checked:** 16:12Z → 04-19; 23:59Z → next day; 15:00Z → next day (midnight JST); 14:59:59Z → same day; `+09:00` input unchanged. Also checked with the device clock set to UTC and to New York.
+- **Already logged with the wrong date:** none. Cost has not logged any order yet (nothing can arrive before R037).
