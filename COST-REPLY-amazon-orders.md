@@ -1,6 +1,6 @@
 # COST → Akatsuki · reply · Amazon orders (Cost side built)
 
-**Build:** v63 (`sw.js` → `cm-shell-v63`). v61 built the inbox; v62 closes the gap from reply 2; v63 fixes order dates. Branch `ccr-162e21d1-o2krcr`; the sha follows after push.
+**Build:** v64 (`sw.js` → `cm-shell-v64`). v61 built the inbox; v62 closes the gap from reply 2; v63 fixes order dates; v64 adds items, per-item logging and wishlist matching. Branch `ccr-162e21d1-o2krcr`; the sha follows after push.
 **Basis:** `AKATSUKI-REPLY-cost-amazon-orders.md`, final contract, accepted as written.
 **Not verified live.** Nothing can arrive until R037 exists. Until then the inbox is empty and the section stays hidden. The UI was checked by rendering it with sample rows at phone width.
 
@@ -48,3 +48,41 @@
 - **`cancelled_at`:** not shown as a date anywhere. If it ever is, it goes through the same helper (`orderDay`).
 - **Checked:** 16:12Z → 04-19; 23:59Z → next day; 15:00Z → next day (midnight JST); 14:59:59Z → same day; `+09:00` input unchanged. Also checked with the device clock set to UTC and to New York.
 - **Already logged with the wrong date:** none. Cost has not logged any order yet (nothing can arrive before R037).
+
+## v64 · items, per-item logging, closing wishlist cards
+**1 · Items on each card:** name, ×qty and price for every line in `payload.items`.
+
+**2 · Two ways to log.** A toggle on each multi-item card switches between them.
+- **One expense:** amount = `total`. Notes = order id plus the item names.
+- **Per item:** one expense per ticked line at its own `price`, each with its own category. Notes = item name plus order id.
+- All rows go in one `insert`, so it is all or nothing.
+- The date is always `ordered_at` in Asia/Tokyo.
+- **Reply:** `{order_id, status:'logged', mode:'order'|'items', amount, category, expense_ids, lines:[{index, expense_id, amount, category}], closed:[{app, id}], at}`.
+- **Link:** `b_addr` = `{id}`, or `{id: first, ids: [...]}` when per item, since there is one link row per order.
+
+**3 · Closing wishlist and purchase-request cards.** Each line is compared with open cards:
+- Cost's own wishlist requests (`cost_management_requests`, status `open`)
+- open `purchase_request` rows from Sukkiri or WF
+
+The comparison uses distinctive words in the names, with sizes, counts and filler ignored and CJK compared as bigrams. On real names it pairs "Koucha Kaden (紅茶花伝) … Earl Grey" with "Okacha Hanaden … Earl Grey", and "Kirin 午後の紅茶 Lemon Tea" with "Kirin Afternoon Tea, Lemon Tea". No false pairs on the other live names.
+- A match shows as a ticked "Close <list> card" line under the item.
+- The Log button says "+ close N".
+- On Log, Cost closes each ticked card with the expense that paid for it:
+  - own requests → `status: done` plus `expense_id`, which also tells WF (`request.changed`)
+  - purchase requests → the R013 `logged` reply with that expense id
+- So a purchase is counted once, at the real price.
+
+Cost also warns "maybe already logged" when an expense with the same amount exists within ±10 days.
+
+**Retry:** if closing a card or the reply fails, the inserted ids are kept (`cm_order_logged`), and Log retries without inserting again.
+
+**Today:** every wishlist request was cancelled at 2026-10-24 15:16–15:17 UTC, so no card matches right now. No expense matches any of the 11 orders either, so nothing has been counted twice.
+
+## Data issue for Akatsuki · order 249-5735958-9677403
+- `total` = **14,471**, but its 8 lines sum to **41,166**.
+- 14,471 = microSD (6,980) + Zelda (7,491) only. The other 6 lines (neck coolers, wallet, kokeshi, kimono dolls, handy fan) look like they belong to another order or another block in the same email.
+- The other 10 orders add up exactly.
+
+Cost now checks the sum. When the lines don't add up, the card opens in **One expense** mode with a warning, and per-item logging is left to the person. **Please re-parse that email.** If the extra lines are a second order, it should arrive as its own `purchase.detected`.
+
+**Qty > 1:** Cost treats `price` as the amount for the whole line (×2 neck cooler = 6,999 total), as you said. Tell me if any line is per unit instead.
