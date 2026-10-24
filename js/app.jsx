@@ -7295,6 +7295,7 @@ function OrdersInboxView({ orders, reload, expenses, purchaseReqs, reloadPurchas
   const [drafts, setDrafts] = useState({});
   const [busy, setBusy] = useState(null);
   const [msg, setMsg] = useState("");
+  const [skipping, setSkipping] = useState(null); // { seq, why, note } while Skip asks why
   const [ownReqs, setOwnReqs] = useState(getRequests);
   useEffect(() => { const h = () => setOwnReqs(getRequests()); window.addEventListener(REQ_EVT, h); return () => window.removeEventListener(REQ_EVT, h); }, []);
   const defCat = (categories.find((c) => /shopping/i.test(c.name)) || {}).name || "";
@@ -7321,6 +7322,11 @@ function OrdersInboxView({ orders, reload, expenses, purchaseReqs, reloadPurchas
   const setDraft = (r, patch) => setDrafts((d) => ({ ...d, [r.seq]: { ...draftOf(r), ...patch } }));
   const setLine = (r, i, patch) => { const dr = draftOf(r); setDraft(r, { lines: { ...dr.lines, [i]: { ...dr.lines[i], ...patch } } }); };
 
+  const lineRecords = (r, rowFor) => {
+    const p = r.payload, items = orderItems(p), base = { source: p.source || "amazon", order_id: String(p.order_id), ordered_on: orderDate(p), currency: cur(r) };
+    const list = items.length ? items : [{ i: 0, name: `${orderSourceName(p.source)} order ${p.order_id}`, qty: 1, price: p.total == null ? null : Number(p.total) }];
+    return list.map((it) => ({ id: orderLineId(p, it.i), ...base, line_index: it.i, name: it.name, qty: it.qty, price: it.price, note: null, expense_id: null, ...rowFor(it) }));
+  };
   const resolve = async (r, status, opts) => {
     try { await costHub.orderResolved(r, status, opts); return true; }
     catch (e) { setMsg("Couldn't update Akatsuki: " + e.message); return false; }
@@ -7360,10 +7366,9 @@ function OrdersInboxView({ orders, reload, expenses, purchaseReqs, reloadPurchas
     }
     // Every line, logged or not, is kept in Cost — unticked ones with why (and who paid).
     const excluded = dr.mode === "items" ? items.filter((it) => !(dr.lines[it.i] && dr.lines[it.i].on)).map((it) => ({ index: it.i, reason: dr.lines[it.i].why || "paid_by_other", note: (dr.lines[it.i].note || "").trim() || undefined })) : [];
-    await saveOrderLines(items.map((it) => {
+    await saveOrderLines(lineRecords(r, (it) => {
       const ln = mark.lines.find((l) => l.index === it.i) || (dr.mode === "order" ? mark.lines[0] : null), ex = excluded.find((x) => x.index === it.i);
-      return { id: orderLineId(p, it.i), source: p.source || "amazon", order_id: String(p.order_id), ordered_on: day, line_index: it.i, name: it.name, qty: it.qty,
-        price: ln && dr.mode === "items" ? ln.amount : it.price, currency: cur(r), status: ex ? ex.reason : "logged", note: ex ? ex.note || null : null, expense_id: ex ? null : (ln ? ln.expense_id : null) };
+      return { price: ln && dr.mode === "items" ? ln.amount : (items.length ? it.price : ln && ln.amount), status: ex ? ex.reason : "logged", note: ex ? ex.note || null : null, expense_id: ex ? null : (ln ? ln.expense_id : null) };
     }));
     const total = mark.lines.reduce((s, l) => s + l.amount, 0);
     const ok = await resolve(r, "logged", { expenseIds: mark.ids, extra: { mode: dr.mode, amount: total, category: mark.lines[0].category, lines: mark.lines, excluded, closed: closed.map(({ app, id }) => ({ app, id })) } });
@@ -7372,12 +7377,22 @@ function OrdersInboxView({ orders, reload, expenses, purchaseReqs, reloadPurchas
     else if (!ok) setMsg((m) => m + " — the expenses are saved; tap Log again to retry.");
     setBusy(null); await fetchData(); reload(); if (closed.some((c) => c.app !== "cost") && reloadPurchases) reloadPurchases();
   };
-  const dismiss = async (r, extra) => { if (busy) return; setBusy(r.seq); await resolve(r, "dismissed", { extra }); setBusy(null); reload(); };
+  // Skip asks why: someone else paid (who, optional) or not mine. Every line is kept in Cost either way.
+  const confirmSkip = async (r) => {
+    if (busy || !skipping || skipping.seq !== r.seq) return;
+    const why = skipping.why, note = (skipping.note || "").trim() || null;
+    setBusy(r.seq); setMsg("");
+    await saveOrderLines(lineRecords(r, () => ({ status: why, note: why === "paid_by_other" ? note : null })));
+    const ok = await resolve(r, "dismissed", { extra: { reason: why, ...(why === "paid_by_other" && note ? { note } : {}) } });
+    setBusy(null); if (ok) setSkipping(null); reload();
+  };
   const seenFlag = async (r) => { if (busy) return; setBusy(r.seq); await resolve(r, "flagged", { expenseIds: r.reply.expense_ids, extra: { ...r.reply, seen: true } }); setBusy(null); reload(); };
   const past = orders.filter((r) => !r.reply && r.payload.backfill);
   const dismissPast = async () => {
     if (busy || !confirm(`Dismiss all ${past.length} past orders without logging them?`)) return;
-    setBusy("all"); for (const r of past) await resolve(r, "dismissed", { extra: { reason: "backfill" } }); setBusy(null); reload();
+    setBusy("all");
+    for (const r of past) { await saveOrderLines(lineRecords(r, () => ({ status: "skip" }))); await resolve(r, "dismissed", { extra: { reason: "backfill" } }); }
+    setBusy(null); reload();
   };
 
   const btn = { padding: "8px 11px", borderRadius: 9, cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit", border: `1px solid ${theme.cardBorder}`, background: "transparent", color: theme.textMuted };
@@ -7478,12 +7493,28 @@ function OrdersInboxView({ orders, reload, expenses, purchaseReqs, reloadPurchas
               </div>
               {!perItem && catSelect(dr.category, (v) => setDraft(r, { category: v }), b, { width: "100%", padding: "9px 10px", fontSize: 13, marginBottom: 6 })}
               {!perItem && dupNote(orderDupOf(expenses, Number(asciiDigits(dr.amount)), day))}
+              {skipping && skipping.seq === r.seq ? (
+                <div style={{ marginTop: 6, background: theme.cardBg, borderRadius: 10, padding: "10px 11px", display: "flex", flexDirection: "column", gap: 7 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#fff" }}>Why skip this order?</div>
+                  <div role="radiogroup" aria-label="Why skip" style={{ display: "flex", gap: 4, background: theme.inputBg, borderRadius: 10, padding: 3 }}>
+                    <button role="radio" aria-checked={skipping.why === "paid_by_other"} onClick={() => setSkipping({ ...skipping, why: "paid_by_other" })} disabled={b} style={seg(skipping.why === "paid_by_other")}>Someone else paid</button>
+                    <button role="radio" aria-checked={skipping.why === "skip"} onClick={() => setSkipping({ ...skipping, why: "skip" })} disabled={b} style={seg(skipping.why === "skip")}>Not mine / skip</button>
+                  </div>
+                  {skipping.why === "paid_by_other" && <input value={skipping.note} onChange={(e) => setSkipping({ ...skipping, note: e.target.value })} disabled={b} placeholder="Who paid? (optional)" aria-label="Who paid" style={{ ...small, width: "100%" }} />}
+                  <div style={{ fontSize: 10.5, color: theme.textDim }}>No expense is made. The order stays in Past online orders{skipping.why === "paid_by_other" ? ", marked paid by someone else" : ""}.</div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={() => confirmSkip(r)} disabled={b} style={{ flex: 1, padding: "8px 6px", borderRadius: 9, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: theme.primary }}>Skip order</button>
+                    <button onClick={() => setSkipping(null)} disabled={b} style={btn}>Back</button>
+                  </div>
+                </div>
+              ) : (
               <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
                 <button onClick={() => log(r)} disabled={b || !ready} style={{ flex: 1, minWidth: 0, padding: "9px 6px", borderRadius: 9, border: "none", cursor: ready ? "pointer" : "not-allowed", opacity: ready ? 1 : 0.5, fontSize: 12, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})` }}>
                   {perItem ? `Log ${picked.length} item${picked.length === 1 ? "" : "s"}` : "Log"}{ready ? " · " + fmtIn(sum, cur(r)) : ""}{willClose.size ? ` + close ${willClose.size}` : ""}
                 </button>
-                <button onClick={() => dismiss(r)} disabled={b} style={btn}>Skip</button>
+                <button onClick={() => setSkipping({ seq: r.seq, why: "paid_by_other", note: "" })} disabled={b} style={btn}>Skip</button>
               </div>
+              )}
             </div>
           );
         })}
