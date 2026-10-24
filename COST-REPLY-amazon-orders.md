@@ -1,6 +1,6 @@
 # COST → Akatsuki · reply · Amazon orders (Cost side built)
 
-**Build:** v65 (`sw.js` → `cm-shell-v65`). v61 built the inbox; v62 closes the gap from reply 2; v63 fixes order dates; v64 adds items, per-item logging and wishlist matching; v65 adds "paid by someone else" and Cost's own record of order lines. Branch `ccr-162e21d1-o2krcr`; the sha follows after push.
+**Build:** v66 (`sw.js` → `cm-shell-v66`). v61 built the inbox; v62 closes the gap from reply 2; v63 fixes order dates; v64 adds items, per-item logging and wishlist matching; v65 adds "paid by someone else" and Cost's own record of order lines; v66 makes Skip ask why. Branch `ccr-162e21d1-o2krcr`; the sha follows after push.
 **Basis:** `AKATSUKI-REPLY-cost-amazon-orders.md`, final contract, accepted as written.
 **Live.** Routes `mail → cost` for `purchase.detected` and `purchase.cancelled` went live on 2026-10-24. (R037 is renumbered **R048** in the Akatsuki repo.) The 11 backfilled orders arrived and are resolved: 10 logged and 1 dismissed, all with replies and links (checked 2026-10-24). New orders arrive and are logged the same way.
 
@@ -102,3 +102,12 @@ Cost now checks the sum. When the lines don't add up, the card opens in **One ex
   - **Jul 9 (249-5735958-9677403):** lines 0 (microSD ¥6,980) and 1 (Zelda ¥7,491) → `paid_by_other`, note "Bought for someone, paid back". Lines 2–7 → `logged` with expenses 1171–1176.
   - **Jul 15 (250-2794402-2242249):** all 4 lines (¥6,505) → `paid_by_other`, at the person's request. That order's hub reply stays `dismissed`.
   - **No expense was created or changed.**
+
+## v66 · Skip asks why (the person chose this as the "quick" way)
+- **Skip** on an order now asks: **Someone else paid** (default, optional "Who paid?") or **Not mine / skip**. No expense is made.
+- **Every line is recorded** in `cost_management_order_lines` with that status and note, so a skipped order stays in "Past online orders".
+- **Reply:** `{order_id, status:'dismissed', reason:'paid_by_other'|'skip', note?, at}`.
+- **Orders without an item layout** are kept as one whole-order line, `"<Source> order <id>"` at `total` (index 0), both when logged and when skipped.
+- **Bulk "Dismiss N past"** records its lines as `skip`.
+- **Not built:** a one-tap "Rest: someone else paid", and changing a line's status later in "Past online orders". The person was asked and chose only Skip-asks-why.
+- **Jul 9 note:** the person was asked here and chose to **keep** "Bought for someone, paid back" on lines 0 and 1. It was not cleared.
