@@ -128,7 +128,8 @@
       async orderResolved(row, status, { expenseIds, extra } = {}) {
         const reply = { order_id: row.payload.order_id, status, ...(extra || {}), at: new Date().toISOString() };
         if (expenseIds && expenseIds.length) reply.expense_ids = expenseIds;
-        const addr = status === 'logged' && expenseIds && expenseIds.length ? { id: expenseIds[0] } : undefined;
+        // One link per order (a_app, a_addr, b_app): per-item logging links the first expense and lists all.
+        const addr = status === 'logged' && expenseIds && expenseIds.length ? (expenseIds.length > 1 ? { id: expenseIds[0], ids: expenseIds } : { id: expenseIds[0] }) : undefined;
         return hub.ack(row.seq, { addr, reply });
       },
 

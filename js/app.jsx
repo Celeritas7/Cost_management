@@ -1325,7 +1325,7 @@ function App({ session, onSignOut }) {
           ) : view === "sukkiri" ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <RequestInboxView />
-              {openOrders.length > 0 && <OrdersInboxView orders={openOrders} reload={reloadOrders} />}
+              {openOrders.length > 0 && <OrdersInboxView orders={openOrders} reload={reloadOrders} expenses={RAW} purchaseReqs={sukkiriPending} reloadPurchases={reloadSukkiri} />}
               <SukkiriRequestsView requests={sukkiriReqs} reload={reloadSukkiri} />
               <SentToWFView />
             </div>
@@ -7080,8 +7080,10 @@ function usePurchaseLogger(reload) {
     if (loggedHere(req)) { console.warn("[ak] reject refused — expenses already logged", { req: req.id, seq: req.hub && req.hub.seq }); return { ok: false, error: "Already logged as expenses — can't reject" }; }
     return reply(req, "rejected");
   };
+  // Expenses already exist (logged from an online order): mark and reply, never insert.
+  const closeWithExpenses = async (req, ids, shop, category) => { markLogged(req.id, ids, shop, category); setShopOverride(req.id, null); return sendLogged(req, ids, shop, category); };
   const finish = async () => { reload(); await fetchData(); };
-  return { logRequest, rejectRequest, resendLogged, finish };
+  return { logRequest, rejectRequest, resendLogged, closeWithExpenses, finish };
 }
 
 //  TO LOG — open purchase requests on the Add screen, grouped by the shop they're planned for
@@ -7223,42 +7225,127 @@ const orderDay = (iso, currency) => {
   try { return d.toLocaleDateString("sv-SE", { timeZone: ORDER_ZONES[currency] || "Asia/Tokyo" }); } catch (e) { return ymdLocal(d); }
 };
 const orderDate = (p) => (p && orderDay(p.ordered_at, p.currency || "JPY")) || ymdToday();
-// Expense inserted but the reply failed: remember the id so a retry re-sends the
-// reply instead of inserting a second expense.
-const ORDER_LOGGED_KEY = "cm_order_logged";
+// Lines as sent by the hub: [{name, qty, price}], price = the JPY amount for the whole line.
+const orderItems = (p) => (Array.isArray(p && p.items) ? p.items : []).filter((it) => it && it.name)
+  .map((it, i) => ({ i, name: String(it.name), qty: Number(it.qty) || 1, price: it.price == null ? null : Number(it.price) }));
+// Per-item logging is only trusted when the lines add up to the order total. One live order
+// (249-5735958) carries lines from elsewhere in the email; those must not become expenses silently.
+const orderItemsSum = (items) => items.reduce((s, it) => s + (Number(it.price) || 0), 0);
+const orderItemsAddUp = (p, items) => items.length > 0 && items.every((it) => it.price != null) && Math.round(orderItemsSum(items)) === Math.round(Number(p.total));
 
-function OrdersInboxView({ orders, reload }) {
+// "Same product?" between an order line and a wishlist / purchase-request card. Names differ
+// across Amazon's English and Japanese listings (Koucha Kaden vs Okacha Hanaden), so this
+// compares distinctive words (CJK as bigrams) and ignores sizes, counts and filler. It only
+// SUGGESTS: closing a card always needs the tick that the card shows.
+const MATCH_STOP = new Set(("tea the and for with of in on a an to by set pcs pc pieces piece pack packs case cases bottle bottles pet " +
+  "ml l fl oz gal g kg cm mm inch inches x type size new model compatible japanese japan from free shipping amazon " +
+  "regular color colors includes included only").split(" "));
+const matchTokens = (s) => {
+  const t = String(s || "").normalize("NFKC").toLowerCase();
+  const out = new Set();
+  (t.match(/[a-z]+|[぀-ヿ㐀-鿿]+/g) || []).forEach((w) => {
+    if (/^[a-z]+$/.test(w)) { if (w.length > 1 && !MATCH_STOP.has(w)) out.add(w); return; }
+    if (w.length === 1) { out.add(w); return; }                    // CJK runs → bigrams, so 紅茶花伝 meets 紅茶
+    for (let i = 0; i < w.length - 1; i++) out.add(w.slice(i, i + 2));
+  });
+  return out;
+};
+const matchScore = (a, b) => {
+  const A = matchTokens(a), B = matchTokens(b);
+  const min = Math.min(A.size, B.size);
+  if (!min) return 0;
+  let shared = 0; A.forEach((w) => { if (B.has(w)) shared++; });
+  return shared >= Math.min(2, min) ? shared / min : 0;
+};
+const isSameProduct = (a, b) => matchScore(a, b) >= 0.5;
+
+// Expenses inserted but the follow-up (closing cards, the hub reply) failed: remember the ids
+// so a retry finishes the job instead of inserting the purchase a second time.
+const ORDER_LOGGED_KEY = "cm_order_logged";
+const orderMark = (seq) => { const m = readJSON(ORDER_LOGGED_KEY, {})[seq]; return m == null ? null : (typeof m === "object" ? m : { ids: [m] }); };
+const setOrderMark = (seq, v) => { try { const m = readJSON(ORDER_LOGGED_KEY, {}); if (v) m[seq] = v; else delete m[seq]; localStorage.setItem(ORDER_LOGGED_KEY, JSON.stringify(m)); } catch (e) {} };
+// An expense that already looks like this purchase: same amount, a few days around the order.
+const orderDupOf = (expenses, amount, day) => {
+  if (!(amount > 0) || !day) return null;
+  const t = Date.parse(day);
+  return (expenses || []).find((e) => Number(e.amount) === Number(amount) && Math.abs(Date.parse(e.date) - t) <= 10 * 864e5) || null;
+};
+
+function OrdersInboxView({ orders, reload, expenses, purchaseReqs, reloadPurchases }) {
   const { theme, inputStyle, categories, supabase, fetchData } = useTheme();
+  const { closeWithExpenses } = usePurchaseLogger(reloadPurchases || (() => {}));
   const [drafts, setDrafts] = useState({});
   const [busy, setBusy] = useState(null);
   const [msg, setMsg] = useState("");
+  const [ownReqs, setOwnReqs] = useState(getRequests);
+  useEffect(() => { const h = () => setOwnReqs(getRequests()); window.addEventListener(REQ_EVT, h); return () => window.removeEventListener(REQ_EVT, h); }, []);
   const defCat = (categories.find((c) => /shopping/i.test(c.name)) || {}).name || "";
-  const draftOf = (r) => drafts[r.seq] || { shop: orderSourceName(r.payload.source), category: defCat, amount: r.payload.total != null ? String(r.payload.total) : "" };
+  const cur = (r) => r.payload.currency || "JPY";
+
+  // Open cards that could be this purchase: your own wishlist requests and Sukkiri / WF purchase requests.
+  const cards = useMemo(() => [
+    ...ownReqs.filter((q) => q.status === "open").map((q) => ({ key: "own:" + q.id, kind: "own", req: q, name: q.item, label: REQ_SOURCES[q.source] || "Wishlist", cap: q.budget_cap, category: null })),
+    ...(purchaseReqs || []).flatMap((q) => (q.items || []).filter((it) => it && it.name).map((it) => ({ key: "hub:" + q.id, kind: "hub", req: q, name: it.name, label: senderLabel(q.from), cap: lineYen(it), category: it.category || null }))),
+  ], [ownReqs, purchaseReqs]);
+  const matchesFor = (name) => { const seen = new Set(); return cards.filter((c) => !seen.has(c.key) && isSameProduct(name, c.name) && seen.add(c.key)); };
+
+  const draftOf = (r) => {
+    if (drafts[r.seq]) return drafts[r.seq];
+    const items = orderItems(r.payload), split = items.length > 1 && orderItemsAddUp(r.payload, items);
+    const lines = {}, close = {};
+    items.forEach((it) => {
+      const m = matchesFor(it.name);
+      lines[it.i] = { on: true, price: it.price != null ? String(it.price) : "", category: (m.find((c) => c.category) || {}).category || defCat };
+      m.forEach((c) => { close[c.key] = true; });
+    });
+    return { mode: split ? "items" : "order", shop: orderSourceName(r.payload.source), category: defCat, amount: r.payload.total != null ? String(r.payload.total) : "", lines, close };
+  };
   const setDraft = (r, patch) => setDrafts((d) => ({ ...d, [r.seq]: { ...draftOf(r), ...patch } }));
+  const setLine = (r, i, patch) => { const dr = draftOf(r); setDraft(r, { lines: { ...dr.lines, [i]: { ...dr.lines[i], ...patch } } }); };
+
   const resolve = async (r, status, opts) => {
     try { await costHub.orderResolved(r, status, opts); return true; }
     catch (e) { setMsg("Couldn't update Akatsuki: " + e.message); return false; }
   };
+
   const log = async (r) => {
-    const dr = draftOf(r), amt = Number(asciiDigits(dr.amount));
-    if (busy || !dr.shop.trim() || !(amt > 0)) return;
+    const p = r.payload, dr = draftOf(r), items = orderItems(p), day = orderDate(p), shop = dr.shop.trim(), oid = `${orderSourceName(p.source)} order ${p.order_id}`;
+    if (busy || !shop) return;
     if (!navigator.onLine) { setMsg("Needs internet — the order list lives in Akatsuki."); return; }
+    // What becomes expenses: one row for the order, or one per ticked line at its own price.
+    const rows = dr.mode === "items"
+      ? items.filter((it) => dr.lines[it.i] && dr.lines[it.i].on).map((it) => ({ i: it.i, name: it.name, amount: Number(asciiDigits(dr.lines[it.i].price)), category: dr.lines[it.i].category || "Other",
+          notes: `${it.name}${it.qty > 1 ? " ×" + it.qty : ""} · ${oid}` }))
+      : [{ i: null, name: null, amount: Number(asciiDigits(dr.amount)), category: dr.category || "Other", notes: [oid, items.map((it) => it.name + (it.qty > 1 ? " ×" + it.qty : "")).join(", ")].filter(Boolean).join(" — ").slice(0, 500) }];
+    if (!rows.length || rows.some((x) => !(x.amount > 0))) { setMsg(rows.length ? "Every ticked item needs a price above zero." : "Tick at least one item."); return; }
     setBusy(r.seq); setMsg("");
-    const marks = readJSON(ORDER_LOGGED_KEY, {});
-    let id = marks[r.seq];
-    if (!id) {
-      const p = r.payload;
-      const record = { region: p.currency || "JPY", date: orderDate(p), category: dr.category || "Other", shop: dr.shop.trim(), amount: amt,
-        notes: `${orderSourceName(p.source)} order ${p.order_id}`, expense_type: "normal", tags: "" };
-      const { data, error } = await supabase.from("cost_management_expenses").insert(record).select("id").single();
-      if (error) { setBusy(null); setMsg(error.message); return; }
-      id = data.id;
-      try { marks[r.seq] = id; localStorage.setItem(ORDER_LOGGED_KEY, JSON.stringify(marks)); } catch (e) {}
+    let mark = orderMark(r.seq);
+    if (!mark) {
+      const recs = rows.map((x) => ({ region: cur(r), date: day, category: x.category, shop, amount: x.amount, notes: x.notes, expense_type: "normal", tags: "" }));
+      const { data, error } = await supabase.from("cost_management_expenses").insert(recs).select("id");
+      if (error || !data || data.length !== recs.length) { setBusy(null); setMsg(error ? error.message : "Couldn't save the expenses."); return; }
+      mark = { ids: data.map((d) => d.id), lines: rows.map((x, k) => ({ index: x.i, expense_id: data[k].id, amount: x.amount, category: x.category })) };
+      setOrderMark(r.seq, mark);
     }
-    const ok = await resolve(r, "logged", { expenseIds: [id], extra: { category: dr.category || "Other", amount: amt } });
-    if (ok) { try { const m = readJSON(ORDER_LOGGED_KEY, {}); delete m[r.seq]; localStorage.setItem(ORDER_LOGGED_KEY, JSON.stringify(m)); } catch (e) {} }
-    else setMsg((m) => m + " — the expense is saved; tap Log again to retry.");
-    setBusy(null); await fetchData(); reload();
+    // Close the ticked wishlist / purchase cards with the expense that paid for them — so the
+    // purchase is counted once, at the real price. Whole-order mode closes them with the one expense.
+    const expFor = (name) => { const ln = mark.lines.find((l) => l.index != null && items[l.index] && isSameProduct(items[l.index].name, name)); return ln || mark.lines[0]; };
+    const closed = [], problems = [];
+    for (const c of cards.filter((c) => dr.close[c.key] && items.some((it) => (dr.mode === "order" || (dr.lines[it.i] && dr.lines[it.i].on)) && isSameProduct(it.name, c.name)))) {
+      const ln = expFor(c.name);
+      if (closed.some((x) => x.key === c.key)) continue;
+      if (c.kind === "own") { updateRequest(c.req.id, { status: "done", expense_id: ln.expense_id }); closed.push({ key: c.key, app: "cost", id: c.req.id }); }
+      else {
+        const res = await closeWithExpenses(c.req, [ln.expense_id], shop, ln.category);
+        if (res && res.ok) closed.push({ key: c.key, app: c.req.from, id: c.req.id }); else problems.push(`${c.label}: ${(res && res.error) || "not closed"}`);
+      }
+    }
+    const total = mark.lines.reduce((s, l) => s + l.amount, 0);
+    const ok = await resolve(r, "logged", { expenseIds: mark.ids, extra: { mode: dr.mode, amount: total, category: mark.lines[0].category, lines: mark.lines, closed: closed.map(({ app, id }) => ({ app, id })) } });
+    if (ok && !problems.length) setOrderMark(r.seq, null);
+    if (problems.length) setMsg("Expenses saved, but " + problems.join("; ") + " — tap Log again to retry.");
+    else if (!ok) setMsg((m) => m + " — the expenses are saved; tap Log again to retry.");
+    setBusy(null); await fetchData(); reload(); if (closed.some((c) => c.app !== "cost") && reloadPurchases) reloadPurchases();
   };
   const dismiss = async (r, extra) => { if (busy) return; setBusy(r.seq); await resolve(r, "dismissed", { extra }); setBusy(null); reload(); };
   const seenFlag = async (r) => { if (busy) return; setBusy(r.seq); await resolve(r, "flagged", { expenseIds: r.reply.expense_ids, extra: { ...r.reply, seen: true } }); setBusy(null); reload(); };
@@ -7267,48 +7354,101 @@ function OrdersInboxView({ orders, reload }) {
     if (busy || !confirm(`Dismiss all ${past.length} past orders without logging them?`)) return;
     setBusy("all"); for (const r of past) await resolve(r, "dismissed", { extra: { reason: "backfill" } }); setBusy(null); reload();
   };
+
   const btn = { padding: "8px 11px", borderRadius: 9, cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit", border: `1px solid ${theme.cardBorder}`, background: "transparent", color: theme.textMuted };
+  const seg = (on) => ({ flex: 1, padding: "6px 8px", borderRadius: 8, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 11.5, fontWeight: 700, background: on ? theme.primary : "transparent", color: on ? "#fff" : theme.textMuted });
+  const small = { ...inputStyle, padding: "7px 8px", fontSize: 12.5 };
+  const catSelect = (value, onChange, disabled, style) => (
+    <select value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled} style={{ ...small, ...style }}>
+      <option value="">Category…</option>
+      {categories.map((c) => <option key={c.id || c.name} value={c.name}>{c.name}</option>)}
+    </select>
+  );
+  const dupNote = (e) => e && <div style={{ fontSize: 10.5, color: theme.warning, marginTop: 2 }}>⚠ maybe already logged: {fmtIn(e.amount, e.region || "JPY")} · {e.shop || "—"} · {e.date}</div>;
+
   return (
     <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 14, padding: 14 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: "#fff" }}>📦 Online orders to confirm</div>
         {past.length > 1 && <button onClick={dismissPast} disabled={!!busy} style={{ ...btn, padding: "4px 9px", fontSize: 11 }}>Dismiss {past.length} past</button>}
       </div>
-      <div style={{ fontSize: 11.5, color: theme.textMuted, marginBottom: 10 }}>Read from your order emails. Check the amount — points, gift cards or split shipments can change what was charged.</div>
+      <div style={{ fontSize: 11.5, color: theme.textMuted, marginBottom: 10 }}>Read from your order emails. Log the order as one expense or item by item.</div>
       {msg && <div style={{ fontSize: 11.5, color: theme.danger, marginBottom: 8 }}>{msg}</div>}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {orders.map((r) => {
-          const p = r.payload || {}, dr = draftOf(r), b = busy === r.seq || busy === "all";
-          const items = Array.isArray(p.items) ? p.items.map((it) => it && it.name).filter(Boolean) : [];
+          const p = r.payload || {}, b = busy === r.seq || busy === "all", items = orderItems(p), day = orderDate(p);
+          const addsUp = orderItemsAddUp(p, items);
           const head = (
             <div style={{ marginBottom: 8, minWidth: 0 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 600, color: "#fff" }}>{orderSourceName(p.source)} · {orderDate(p)} · {fmtIn(p.total, p.currency || "JPY")}{p.backfill ? <span style={{ fontSize: 10.5, color: theme.textDim, fontWeight: 500 }}> · past order</span> : null}</div>
-              {items.length > 0 && <div style={{ fontSize: 11, color: theme.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{items.slice(0, 2).join(" · ")}{items.length > 2 ? ` · +${items.length - 2} more` : ""}</div>}
-              <div style={{ fontSize: 10.5, color: theme.textDim }}>Order {p.order_id}</div>
+              <div style={{ fontSize: 13.5, fontWeight: 600, color: "#fff" }}>{orderSourceName(p.source)} · {day} · {fmtIn(p.total, cur(r))}{p.backfill ? <span style={{ fontSize: 10.5, color: theme.textDim, fontWeight: 500 }}> · past order</span> : null}</div>
+              <div style={{ fontSize: 10.5, color: theme.textDim }}>Order {p.order_id}{items.length ? ` · ${items.length} item${items.length === 1 ? "" : "s"}` : ""}</div>
             </div>
           );
           if (r.reply && r.reply.status === "flagged") return (
             <div key={r.seq} style={{ borderRadius: 12, background: theme.inputBg, boxShadow: "inset 0 0 0 1px rgba(239,68,68,0.45)", padding: "11px 12px", opacity: b ? 0.6 : 1 }}>
               {head}
-              <div style={{ fontSize: 12, color: theme.warning, marginBottom: 8 }}>⚠ Logged as an expense, but this order was cancelled{r.cancel && r.cancel.payload && r.cancel.payload.refund_total != null ? ` (refund ${fmtIn(r.cancel.payload.refund_total, p.currency || "JPY")})` : ""}. The expense is still there — delete or edit it in History if needed.</div>
+              <div style={{ fontSize: 12, color: theme.warning, marginBottom: 8 }}>⚠ Logged as an expense, but this order was cancelled{r.cancel && r.cancel.payload && r.cancel.payload.refund_total != null ? ` (refund ${fmtIn(r.cancel.payload.refund_total, cur(r))})` : ""}. The expense is still there — delete or edit it in History if needed.</div>
               <button onClick={() => seenFlag(r)} disabled={b} style={btn}>OK, got it</button>
             </div>
           );
-          const amt = Number(asciiDigits(dr.amount)), ready = !!dr.shop.trim() && amt > 0;
+          const dr = draftOf(r), perItem = dr.mode === "items";
+          const picked = perItem ? items.filter((it) => dr.lines[it.i] && dr.lines[it.i].on) : items;
+          const sum = perItem ? picked.reduce((s, it) => s + (Number(asciiDigits(dr.lines[it.i].price)) || 0), 0) : Number(asciiDigits(dr.amount));
+          const ready = !!dr.shop.trim() && sum > 0 && (!perItem || (picked.length > 0 && picked.every((it) => Number(asciiDigits(dr.lines[it.i].price)) > 0)));
+          const willClose = new Set(); picked.forEach((it) => matchesFor(it.name).forEach((c) => { if (dr.close[c.key]) willClose.add(c.key); }));
           return (
-            <div key={r.seq} style={{ borderRadius: 12, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${theme.cardBorder}`, padding: "11px 12px", opacity: b ? 0.6 : 1 }}>
+            <div key={r.seq} style={{ borderRadius: 12, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${theme.cardBorder}`, padding: "11px 12px", opacity: b ? 0.6 : 1, minWidth: 0 }}>
               {head}
-              <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-                <input value={dr.shop} onChange={(e) => setDraft(r, { shop: e.target.value })} disabled={b} placeholder="Shop" style={{ ...inputStyle, flex: 1, minWidth: 0, padding: "9px 10px", fontSize: 13 }} />
-                <input type="text" inputMode="numeric" value={dr.amount} onChange={(e) => setDraft(r, { amount: e.target.value })} disabled={b} placeholder="Amount" style={{ ...inputStyle, width: 110, flexShrink: 0, padding: "9px 10px", fontSize: 13, fontWeight: 600 }} />
+              {items.length > 1 && (
+                <div style={{ display: "flex", gap: 4, background: theme.cardBg, borderRadius: 10, padding: 3, marginBottom: 8 }}>
+                  <button onClick={() => setDraft(r, { mode: "order" })} disabled={b} style={seg(!perItem)}>One expense</button>
+                  <button onClick={() => setDraft(r, { mode: "items" })} disabled={b} style={seg(perItem)}>Per item</button>
+                </div>
+              )}
+              {items.length > 0 && !addsUp && (
+                <div style={{ fontSize: 11, color: theme.warning, marginBottom: 8 }}>⚠ The items add up to {fmtIn(orderItemsSum(items), cur(r))}, but the order total is {fmtIn(p.total, cur(r))} — some lines may belong to another order. Untick those before logging per item.</div>
+              )}
+              <div style={{ display: "flex", flexDirection: "column", gap: 7, marginBottom: 8 }}>
+                {items.map((it) => {
+                  const ln = dr.lines[it.i] || {}, m = matchesFor(it.name), off = perItem && !ln.on;
+                  return (
+                    <div key={it.i} style={{ borderTop: it.i ? `1px solid ${theme.cardBorder}` : "none", paddingTop: it.i ? 7 : 0, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 7, minWidth: 0 }}>
+                        {perItem && <input type="checkbox" checked={!!ln.on} onChange={(e) => setLine(r, it.i, { on: e.target.checked })} disabled={b} style={{ marginTop: 2, flexShrink: 0, width: 16, height: 16 }} aria-label={"Log " + it.name} />}
+                        <div style={{ flex: 1, minWidth: 0, opacity: off ? 0.5 : 1 }}>
+                          <div style={{ fontSize: 12, color: theme.text || "#ddd", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</div>
+                          {!perItem && <div style={{ fontSize: 11, color: theme.textDim }}>{it.qty > 1 ? `×${it.qty} · ` : ""}{it.price != null ? fmtIn(it.price, cur(r)) : "price not in email"}</div>}
+                        </div>
+                      </div>
+                      {perItem && !off && (
+                        <div style={{ display: "flex", gap: 6, marginTop: 5, paddingLeft: 23 }}>
+                          <input type="text" inputMode="numeric" value={ln.price} onChange={(e) => setLine(r, it.i, { price: e.target.value })} disabled={b} aria-label="Price" style={{ ...small, width: 92, flexShrink: 0, fontWeight: 600 }} />
+                          {catSelect(ln.category, (v) => setLine(r, it.i, { category: v }), b, { flex: 1, minWidth: 0 })}
+                        </div>
+                      )}
+                      {perItem && it.qty > 1 && !off && <div style={{ fontSize: 10.5, color: theme.textDim, paddingLeft: 23, marginTop: 2 }}>×{it.qty} — price is for the whole line</div>}
+                      {m.map((c) => (
+                        <label key={c.key} style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 5, paddingLeft: perItem ? 23 : 0, fontSize: 11, color: theme.primary, cursor: "pointer", minWidth: 0, opacity: off ? 0.5 : 1 }}>
+                          <input type="checkbox" checked={!!dr.close[c.key]} onChange={(e) => setDraft(r, { close: { ...dr.close, [c.key]: e.target.checked } })} disabled={b || off} style={{ flexShrink: 0 }} />
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Close {c.label} card: {c.name}{c.cap != null ? ` (was ${fmtIn(c.cap, cur(r))})` : ""}</span>
+                        </label>
+                      ))}
+                      {(!perItem || !off) && dupNote(orderDupOf(expenses, perItem ? Number(asciiDigits(ln.price)) : it.price, day))}
+                    </div>
+                  );
+                })}
               </div>
-              <select value={dr.category} onChange={(e) => setDraft(r, { category: e.target.value })} disabled={b} style={{ ...inputStyle, width: "100%", padding: "9px 10px", fontSize: 13, marginBottom: 6 }}>
-                <option value="">Category…</option>
-                {categories.map((c) => <option key={c.id || c.name} value={c.name}>{c.name}</option>)}
-              </select>
-              <div style={{ display: "flex", gap: 6 }}>
-                <button onClick={() => log(r)} disabled={b || !ready} style={{ flex: 1, padding: "9px 6px", borderRadius: 9, border: "none", cursor: ready ? "pointer" : "not-allowed", opacity: ready ? 1 : 0.5, fontSize: 12, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})` }}>Log{ready ? " " + fmtIn(amt, p.currency || "JPY") : ""}</button>
-                <button onClick={() => dismiss(r)} disabled={b} style={btn}>Not mine / skip</button>
+              <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                <input value={dr.shop} onChange={(e) => setDraft(r, { shop: e.target.value })} disabled={b} placeholder="Shop" aria-label="Shop" style={{ ...inputStyle, flex: 1, minWidth: 0, padding: "9px 10px", fontSize: 13 }} />
+                {!perItem && <input type="text" inputMode="numeric" value={dr.amount} onChange={(e) => setDraft(r, { amount: e.target.value })} disabled={b} placeholder="Amount" aria-label="Amount" style={{ ...inputStyle, width: 110, flexShrink: 0, padding: "9px 10px", fontSize: 13, fontWeight: 600 }} />}
+              </div>
+              {!perItem && catSelect(dr.category, (v) => setDraft(r, { category: v }), b, { width: "100%", padding: "9px 10px", fontSize: 13, marginBottom: 6 })}
+              {!perItem && dupNote(orderDupOf(expenses, Number(asciiDigits(dr.amount)), day))}
+              <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                <button onClick={() => log(r)} disabled={b || !ready} style={{ flex: 1, minWidth: 0, padding: "9px 6px", borderRadius: 9, border: "none", cursor: ready ? "pointer" : "not-allowed", opacity: ready ? 1 : 0.5, fontSize: 12, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})` }}>
+                  {perItem ? `Log ${picked.length} item${picked.length === 1 ? "" : "s"}` : "Log"}{ready ? " · " + fmtIn(sum, cur(r)) : ""}{willClose.size ? ` + close ${willClose.size}` : ""}
+                </button>
+                <button onClick={() => dismiss(r)} disabled={b} style={btn}>Skip</button>
               </div>
             </div>
           );
