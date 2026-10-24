@@ -598,7 +598,14 @@ function App({ session, onSignOut }) {
   const sukkiriReqs = useMemo(() => hubReqRows.map(hubToRequest), [hubReqRows]);
   const sukkiriPending = useMemo(() => sukkiriReqs.filter(reqIsOpen), [sukkiriReqs]);
   useEffect(() => startRequestHub(), []); // hub needs the signed-in session; App only mounts with one
-  useEffect(() => { reloadSukkiri(); return costHub.listen({ onPurchaseRequest: () => reloadSukkiri() }); }, []); // acks new purchase_requests, then re-reads the inbox
+  // Online orders (Amazon etc. via Akatsuki `mail`): the list is the hub rows, like purchase requests.
+  const [orderRows, setOrderRows] = useState([]);
+  const reloadOrders = useCallback(async () => {
+    if (!navigator.onLine) return;
+    try { setOrderRows(await costHub.orderInbox()); } catch (e) { console.warn("[akatsuki] order inbox failed", e.message); }
+  }, []);
+  const openOrders = useMemo(() => orderRows.filter(orderIsOpen), [orderRows]);
+  useEffect(() => { reloadSukkiri(); reloadOrders(); return costHub.listen({ onPurchaseRequest: () => reloadSukkiri(), onOrder: () => reloadOrders() }); }, []); // acks new rows, then re-reads the inboxes
   // reminder banner: shows when requests are pending; a dismiss hides it,
   // but it re-surfaces every 30 minutes and on each app load
   const [reqReminderHidden, setReqReminderHidden] = useState(false);
@@ -1236,7 +1243,7 @@ function App({ session, onSignOut }) {
             {!isMobile && regionPending.length>0 && (
               <button onClick={() => setView("outstanding")} title="Outstanding payments" style={{...pillStyle(view==="outstanding"),padding:"5px 9px",fontSize:11,display:"inline-flex",alignItems:"center",gap:5}}><Icon name="inbox" size={15}/><span style={{background:theme.danger,color:"#fff",fontSize:9,fontWeight:700,borderRadius:9,padding:"1px 5px",lineHeight:1.6}}>{regionPending.length}</span></button>
             )}
-            {!isMobile && <button onClick={() => { reloadSukkiri(); setView("sukkiri"); }} title="Purchase requests from companion apps" style={{...pillStyle(view==="sukkiri"),padding:"5px 11px",fontSize:11,display:"inline-flex",alignItems:"center",gap:6}}>🛒 Requests{sukkiriPending.length>0 && <span style={{background:theme.danger,color:"#fff",fontSize:9,fontWeight:700,borderRadius:9,padding:"1px 5px",lineHeight:1.6}}>{sukkiriPending.length}</span>}</button>}
+            {!isMobile && <button onClick={() => { reloadSukkiri(); setView("sukkiri"); }} title="Purchase requests from companion apps" style={{...pillStyle(view==="sukkiri"),padding:"5px 11px",fontSize:11,display:"inline-flex",alignItems:"center",gap:6}}>🛒 Requests{(sukkiriPending.length + openOrders.length)>0 && <span style={{background:theme.danger,color:"#fff",fontSize:9,fontWeight:700,borderRadius:9,padding:"1px 5px",lineHeight:1.6}}>{sukkiriPending.length + openOrders.length}</span>}</button>}
             <button onClick={onSignOut} title={`Sign out${session && session.user ? " · " + session.user.email : ""}`} style={{...pillStyle(false),padding:"6px 10px",display:"inline-flex",alignItems:"center",justifyContent:"center",color:theme.textMuted,minWidth:32,lineHeight:1}}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
             </button>
@@ -1318,6 +1325,7 @@ function App({ session, onSignOut }) {
           ) : view === "sukkiri" ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <RequestInboxView />
+              {openOrders.length > 0 && <OrdersInboxView orders={openOrders} reload={reloadOrders} />}
               <SukkiriRequestsView requests={sukkiriReqs} reload={reloadSukkiri} />
               <SentToWFView />
             </div>
@@ -1345,7 +1353,7 @@ function App({ session, onSignOut }) {
             )}
             <button onClick={() => { reloadSukkiri(); setView("sukkiri"); }} style={{position:"relative",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,minHeight:52,border:"none",borderRadius:12,cursor:"pointer",fontFamily:"inherit",fontSize:10,fontWeight:600,background:view==="sukkiri"?theme.primaryGlow:"transparent",color:view==="sukkiri"?"#fff":theme.textMuted}}>
               <span style={{fontSize:17,lineHeight:1.1}}>🛒</span>Requests
-              {sukkiriPending.length>0 && <span style={{position:"absolute",top:4,right:"50%",marginRight:-22,background:theme.danger,color:"#fff",fontSize:9,fontWeight:700,borderRadius:9,padding:"1px 5px",lineHeight:1.6}}>{sukkiriPending.length}</span>}
+              {(sukkiriPending.length + openOrders.length)>0 && <span style={{position:"absolute",top:4,right:"50%",marginRight:-22,background:theme.danger,color:"#fff",fontSize:9,fontWeight:700,borderRadius:9,padding:"1px 5px",lineHeight:1.6}}>{sukkiriPending.length + openOrders.length}</span>}
             </button>
           </nav>
         )}
@@ -7195,6 +7203,121 @@ function ToLogStrip({ requests, reload, onOpenRequests }) {
 
 //  PURCHASE REQUESTS INBOX  (buy-requests from companion apps)
 // ╔══ kept under the historical component name ══
+// ═══════════════════════════════════════════
+//  ONLINE ORDERS — purchase.detected from Akatsuki's `mail` app (Amazon order emails).
+//  Nothing becomes an expense until confirmed here: the emailed total is the checkout
+//  total, and points, gift cards or split shipments can change what is charged.
+// ═══════════════════════════════════════════
+const ORDER_SOURCES = { amazon: "Amazon" };
+const orderSourceName = (src) => ORDER_SOURCES[src] || (src ? src[0].toUpperCase() + src.slice(1) : "Online order");
+// Open: never answered, or logged-then-cancelled and not yet acknowledged.
+// A cancellation that arrives before any answer settles the row (see cost-adapter).
+const orderIsOpen = (r) => r.reply ? (r.reply.status === "flagged" && !r.reply.seen) : !r.cancel;
+// Hub timestamps (ordered_at, cancelled_at) are UTC ISO strings. The expense date is the
+// calendar day where the order was placed — the shop's zone, not the device's and not the
+// UTC date part (an order at 08:00 JST is still the previous day in UTC).
+const ORDER_ZONES = { JPY: "Asia/Tokyo", INR: "Asia/Kolkata" };
+const orderDay = (iso, currency) => {
+  const d = iso ? new Date(iso) : null;
+  if (!d || isNaN(d)) return null;
+  try { return d.toLocaleDateString("sv-SE", { timeZone: ORDER_ZONES[currency] || "Asia/Tokyo" }); } catch (e) { return ymdLocal(d); }
+};
+const orderDate = (p) => (p && orderDay(p.ordered_at, p.currency || "JPY")) || ymdToday();
+// Expense inserted but the reply failed: remember the id so a retry re-sends the
+// reply instead of inserting a second expense.
+const ORDER_LOGGED_KEY = "cm_order_logged";
+
+function OrdersInboxView({ orders, reload }) {
+  const { theme, inputStyle, categories, supabase, fetchData } = useTheme();
+  const [drafts, setDrafts] = useState({});
+  const [busy, setBusy] = useState(null);
+  const [msg, setMsg] = useState("");
+  const defCat = (categories.find((c) => /shopping/i.test(c.name)) || {}).name || "";
+  const draftOf = (r) => drafts[r.seq] || { shop: orderSourceName(r.payload.source), category: defCat, amount: r.payload.total != null ? String(r.payload.total) : "" };
+  const setDraft = (r, patch) => setDrafts((d) => ({ ...d, [r.seq]: { ...draftOf(r), ...patch } }));
+  const resolve = async (r, status, opts) => {
+    try { await costHub.orderResolved(r, status, opts); return true; }
+    catch (e) { setMsg("Couldn't update Akatsuki: " + e.message); return false; }
+  };
+  const log = async (r) => {
+    const dr = draftOf(r), amt = Number(asciiDigits(dr.amount));
+    if (busy || !dr.shop.trim() || !(amt > 0)) return;
+    if (!navigator.onLine) { setMsg("Needs internet — the order list lives in Akatsuki."); return; }
+    setBusy(r.seq); setMsg("");
+    const marks = readJSON(ORDER_LOGGED_KEY, {});
+    let id = marks[r.seq];
+    if (!id) {
+      const p = r.payload;
+      const record = { region: p.currency || "JPY", date: orderDate(p), category: dr.category || "Other", shop: dr.shop.trim(), amount: amt,
+        notes: `${orderSourceName(p.source)} order ${p.order_id}`, expense_type: "normal", tags: "" };
+      const { data, error } = await supabase.from("cost_management_expenses").insert(record).select("id").single();
+      if (error) { setBusy(null); setMsg(error.message); return; }
+      id = data.id;
+      try { marks[r.seq] = id; localStorage.setItem(ORDER_LOGGED_KEY, JSON.stringify(marks)); } catch (e) {}
+    }
+    const ok = await resolve(r, "logged", { expenseIds: [id], extra: { category: dr.category || "Other", amount: amt } });
+    if (ok) { try { const m = readJSON(ORDER_LOGGED_KEY, {}); delete m[r.seq]; localStorage.setItem(ORDER_LOGGED_KEY, JSON.stringify(m)); } catch (e) {} }
+    else setMsg((m) => m + " — the expense is saved; tap Log again to retry.");
+    setBusy(null); await fetchData(); reload();
+  };
+  const dismiss = async (r, extra) => { if (busy) return; setBusy(r.seq); await resolve(r, "dismissed", { extra }); setBusy(null); reload(); };
+  const seenFlag = async (r) => { if (busy) return; setBusy(r.seq); await resolve(r, "flagged", { expenseIds: r.reply.expense_ids, extra: { ...r.reply, seen: true } }); setBusy(null); reload(); };
+  const past = orders.filter((r) => !r.reply && r.payload.backfill);
+  const dismissPast = async () => {
+    if (busy || !confirm(`Dismiss all ${past.length} past orders without logging them?`)) return;
+    setBusy("all"); for (const r of past) await resolve(r, "dismissed", { extra: { reason: "backfill" } }); setBusy(null); reload();
+  };
+  const btn = { padding: "8px 11px", borderRadius: 9, cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit", border: `1px solid ${theme.cardBorder}`, background: "transparent", color: theme.textMuted };
+  return (
+    <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 14, padding: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#fff" }}>📦 Online orders to confirm</div>
+        {past.length > 1 && <button onClick={dismissPast} disabled={!!busy} style={{ ...btn, padding: "4px 9px", fontSize: 11 }}>Dismiss {past.length} past</button>}
+      </div>
+      <div style={{ fontSize: 11.5, color: theme.textMuted, marginBottom: 10 }}>Read from your order emails. Check the amount — points, gift cards or split shipments can change what was charged.</div>
+      {msg && <div style={{ fontSize: 11.5, color: theme.danger, marginBottom: 8 }}>{msg}</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {orders.map((r) => {
+          const p = r.payload || {}, dr = draftOf(r), b = busy === r.seq || busy === "all";
+          const items = Array.isArray(p.items) ? p.items.map((it) => it && it.name).filter(Boolean) : [];
+          const head = (
+            <div style={{ marginBottom: 8, minWidth: 0 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 600, color: "#fff" }}>{orderSourceName(p.source)} · {orderDate(p)} · {fmtIn(p.total, p.currency || "JPY")}{p.backfill ? <span style={{ fontSize: 10.5, color: theme.textDim, fontWeight: 500 }}> · past order</span> : null}</div>
+              {items.length > 0 && <div style={{ fontSize: 11, color: theme.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{items.slice(0, 2).join(" · ")}{items.length > 2 ? ` · +${items.length - 2} more` : ""}</div>}
+              <div style={{ fontSize: 10.5, color: theme.textDim }}>Order {p.order_id}</div>
+            </div>
+          );
+          if (r.reply && r.reply.status === "flagged") return (
+            <div key={r.seq} style={{ borderRadius: 12, background: theme.inputBg, boxShadow: "inset 0 0 0 1px rgba(239,68,68,0.45)", padding: "11px 12px", opacity: b ? 0.6 : 1 }}>
+              {head}
+              <div style={{ fontSize: 12, color: theme.warning, marginBottom: 8 }}>⚠ Logged as an expense, but this order was cancelled{r.cancel && r.cancel.payload && r.cancel.payload.refund_total != null ? ` (refund ${fmtIn(r.cancel.payload.refund_total, p.currency || "JPY")})` : ""}. The expense is still there — delete or edit it in History if needed.</div>
+              <button onClick={() => seenFlag(r)} disabled={b} style={btn}>OK, got it</button>
+            </div>
+          );
+          const amt = Number(asciiDigits(dr.amount)), ready = !!dr.shop.trim() && amt > 0;
+          return (
+            <div key={r.seq} style={{ borderRadius: 12, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${theme.cardBorder}`, padding: "11px 12px", opacity: b ? 0.6 : 1 }}>
+              {head}
+              <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                <input value={dr.shop} onChange={(e) => setDraft(r, { shop: e.target.value })} disabled={b} placeholder="Shop" style={{ ...inputStyle, flex: 1, minWidth: 0, padding: "9px 10px", fontSize: 13 }} />
+                <input type="text" inputMode="numeric" value={dr.amount} onChange={(e) => setDraft(r, { amount: e.target.value })} disabled={b} placeholder="Amount" style={{ ...inputStyle, width: 110, flexShrink: 0, padding: "9px 10px", fontSize: 13, fontWeight: 600 }} />
+              </div>
+              <select value={dr.category} onChange={(e) => setDraft(r, { category: e.target.value })} disabled={b} style={{ ...inputStyle, width: "100%", padding: "9px 10px", fontSize: 13, marginBottom: 6 }}>
+                <option value="">Category…</option>
+                {categories.map((c) => <option key={c.id || c.name} value={c.name}>{c.name}</option>)}
+              </select>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => log(r)} disabled={b || !ready} style={{ flex: 1, padding: "9px 6px", borderRadius: 9, border: "none", cursor: ready ? "pointer" : "not-allowed", opacity: ready ? 1 : 0.5, fontSize: 12, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})` }}>Log{ready ? " " + fmtIn(amt, p.currency || "JPY") : ""}</button>
+                <button onClick={() => dismiss(r)} disabled={b} style={btn}>Not mine / skip</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function SukkiriRequestsView({ requests, reload }) {
   const { theme, inputStyle, categories, shops } = useTheme();
   const { logRequest, rejectRequest, resendLogged, finish } = usePurchaseLogger(reload);
