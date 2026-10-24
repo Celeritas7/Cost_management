@@ -1326,6 +1326,7 @@ function App({ session, onSignOut }) {
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <RequestInboxView />
               {openOrders.length > 0 && <OrdersInboxView orders={openOrders} reload={reloadOrders} expenses={RAW} purchaseReqs={sukkiriPending} reloadPurchases={reloadSukkiri} />}
+              <OrderHistoryView />
               <SukkiriRequestsView requests={sukkiriReqs} reload={reloadSukkiri} />
               <SentToWFView />
             </div>
@@ -7264,6 +7265,23 @@ const isSameProduct = (a, b) => matchScore(a, b) >= 0.5;
 const ORDER_LOGGED_KEY = "cm_order_logged";
 const orderMark = (seq) => { const m = readJSON(ORDER_LOGGED_KEY, {})[seq]; return m == null ? null : (typeof m === "object" ? m : { ids: [m] }); };
 const setOrderMark = (seq, v) => { try { const m = readJSON(ORDER_LOGGED_KEY, {}); if (v) m[seq] = v; else delete m[seq]; localStorage.setItem(ORDER_LOGGED_KEY, JSON.stringify(m)); } catch (e) {} };
+// Every line of a resolved order, kept in Cost (migration 017): the hub purges item names 30 days
+// after resolution, and a line someone else paid for must still explain itself months later.
+// Until 017 runs, records wait on this device and are pushed on the next successful save.
+const ORDER_LINES_T = "cost_management_order_lines", ORDER_LINES_PENDING = "cm_order_lines_pending", ORDER_LINES_EVT = "cm-order-lines-changed";
+const LINE_STATUS = { logged: "logged", paid_by_other: "paid by someone else", skip: "skipped" };
+const orderLineId = (p, i) => `${p.source || "amazon"}:${p.order_id}:${i}`;
+async function saveOrderLines(recs) {
+  const pending = readJSON(ORDER_LINES_PENDING, []);
+  const byId = new Map([...pending, ...(recs || [])].map((r) => [r.id, r]));
+  const all = [...byId.values()];
+  if (!all.length) return { ok: true };
+  const { error } = await supabase.from(ORDER_LINES_T).upsert(all.map((r) => ({ ...r, updated_at: new Date().toISOString() })), { onConflict: "id" });
+  try { localStorage.setItem(ORDER_LINES_PENDING, JSON.stringify(error ? all.slice(-500) : [])); } catch (e) {}
+  window.dispatchEvent(new Event(ORDER_LINES_EVT));
+  if (error) console.warn("[orders] lines kept on this device:", error.message, missingTable(error.message) ? "— run migrations/017_order_lines.sql" : "");
+  return { ok: !error, error: error && error.message };
+}
 // An expense that already looks like this purchase: same amount, a few days around the order.
 const orderDupOf = (expenses, amount, day) => {
   if (!(amount > 0) || !day) return null;
@@ -7295,7 +7313,7 @@ function OrdersInboxView({ orders, reload, expenses, purchaseReqs, reloadPurchas
     const lines = {}, close = {};
     items.forEach((it) => {
       const m = matchesFor(it.name);
-      lines[it.i] = { on: true, price: it.price != null ? String(it.price) : "", category: (m.find((c) => c.category) || {}).category || defCat };
+      lines[it.i] = { on: true, price: it.price != null ? String(it.price) : "", category: (m.find((c) => c.category) || {}).category || defCat, why: "paid_by_other", note: "" };
       m.forEach((c) => { close[c.key] = true; });
     });
     return { mode: split ? "items" : "order", shop: orderSourceName(r.payload.source), category: defCat, amount: r.payload.total != null ? String(r.payload.total) : "", lines, close };
@@ -7340,8 +7358,15 @@ function OrdersInboxView({ orders, reload, expenses, purchaseReqs, reloadPurchas
         if (res && res.ok) closed.push({ key: c.key, app: c.req.from, id: c.req.id }); else problems.push(`${c.label}: ${(res && res.error) || "not closed"}`);
       }
     }
+    // Every line, logged or not, is kept in Cost — unticked ones with why (and who paid).
+    const excluded = dr.mode === "items" ? items.filter((it) => !(dr.lines[it.i] && dr.lines[it.i].on)).map((it) => ({ index: it.i, reason: dr.lines[it.i].why || "paid_by_other", note: (dr.lines[it.i].note || "").trim() || undefined })) : [];
+    await saveOrderLines(items.map((it) => {
+      const ln = mark.lines.find((l) => l.index === it.i) || (dr.mode === "order" ? mark.lines[0] : null), ex = excluded.find((x) => x.index === it.i);
+      return { id: orderLineId(p, it.i), source: p.source || "amazon", order_id: String(p.order_id), ordered_on: day, line_index: it.i, name: it.name, qty: it.qty,
+        price: ln && dr.mode === "items" ? ln.amount : it.price, currency: cur(r), status: ex ? ex.reason : "logged", note: ex ? ex.note || null : null, expense_id: ex ? null : (ln ? ln.expense_id : null) };
+    }));
     const total = mark.lines.reduce((s, l) => s + l.amount, 0);
-    const ok = await resolve(r, "logged", { expenseIds: mark.ids, extra: { mode: dr.mode, amount: total, category: mark.lines[0].category, lines: mark.lines, closed: closed.map(({ app, id }) => ({ app, id })) } });
+    const ok = await resolve(r, "logged", { expenseIds: mark.ids, extra: { mode: dr.mode, amount: total, category: mark.lines[0].category, lines: mark.lines, excluded, closed: closed.map(({ app, id }) => ({ app, id })) } });
     if (ok && !problems.length) setOrderMark(r.seq, null);
     if (problems.length) setMsg("Expenses saved, but " + problems.join("; ") + " — tap Log again to retry.");
     else if (!ok) setMsg((m) => m + " — the expenses are saved; tap Log again to retry.");
@@ -7427,6 +7452,15 @@ function OrdersInboxView({ orders, reload, expenses, purchaseReqs, reloadPurchas
                         </div>
                       )}
                       {perItem && it.qty > 1 && !off && <div style={{ fontSize: 10.5, color: theme.textDim, paddingLeft: 23, marginTop: 2 }}>×{it.qty} — price is for the whole line</div>}
+                      {off && (
+                        <div style={{ display: "flex", gap: 6, marginTop: 5, paddingLeft: 23 }}>
+                          <select value={ln.why || "paid_by_other"} onChange={(e) => setLine(r, it.i, { why: e.target.value })} disabled={b} aria-label="Why not logged" style={{ ...small, flex: "0 0 auto", maxWidth: "55%" }}>
+                            <option value="paid_by_other">Someone else paid</option>
+                            <option value="skip">Skip</option>
+                          </select>
+                          {(ln.why || "paid_by_other") === "paid_by_other" && <input value={ln.note || ""} onChange={(e) => setLine(r, it.i, { note: e.target.value })} disabled={b} placeholder="Who paid? (optional)" aria-label="Who paid" style={{ ...small, flex: 1, minWidth: 0 }} />}
+                        </div>
+                      )}
                       {m.map((c) => (
                         <label key={c.key} style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 5, paddingLeft: perItem ? 23 : 0, fontSize: 11, color: theme.primary, cursor: "pointer", minWidth: 0, opacity: off ? 0.5 : 1 }}>
                           <input type="checkbox" checked={!!dr.close[c.key]} onChange={(e) => setDraft(r, { close: { ...dr.close, [c.key]: e.target.checked } })} disabled={b || off} style={{ flexShrink: 0 }} />
@@ -7454,6 +7488,56 @@ function OrdersInboxView({ orders, reload, expenses, purchaseReqs, reloadPurchas
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// Logged and skipped orders as Cost recorded them — readable after the hub has purged item names.
+function OrderHistoryView() {
+  const { theme, supabase } = useTheme();
+  const [rows, setRows] = useState([]);
+  const [open, setOpen] = useState(false);
+  const load = useCallback(async () => {
+    if (!navigator.onLine) return;
+    if (readJSON(ORDER_LINES_PENDING, []).length) await saveOrderLines([]);
+    const { data, error } = await supabase.from(ORDER_LINES_T).select("*").order("ordered_on", { ascending: false }).order("line_index").limit(500);
+    if (!error) setRows(data || []);
+  }, []);
+  useEffect(() => { load(); window.addEventListener(ORDER_LINES_EVT, load); return () => window.removeEventListener(ORDER_LINES_EVT, load); }, []);
+  const orders = useMemo(() => { const m = new Map(); rows.forEach((x) => { const k = x.source + ":" + x.order_id; if (!m.has(k)) m.set(k, []); m.get(k).push(x); }); return [...m.values()]; }, [rows]);
+  if (!orders.length) return null;
+  const chip = (st) => ({ fontSize: 10, fontWeight: 700, borderRadius: 6, padding: "1px 6px", flexShrink: 0, whiteSpace: "nowrap",
+    background: st === "logged" ? "rgba(16,185,129,0.15)" : st === "paid_by_other" ? "rgba(59,130,246,0.15)" : "rgba(160,160,184,0.15)",
+    color: st === "logged" ? "#10b981" : st === "paid_by_other" ? theme.primary : theme.textMuted });
+  return (
+    <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 14, padding: 14 }}>
+      <button onClick={() => setOpen((o) => !o)} aria-expanded={open} style={{ display: "flex", width: "100%", alignItems: "center", justifyContent: "space-between", gap: 8, background: "transparent", border: "none", padding: 0, cursor: "pointer", fontFamily: "inherit", color: "#fff" }}>
+        <span style={{ fontSize: 14, fontWeight: 700 }}>🧾 Past online orders · {orders.length}</span>
+        <span style={{ fontSize: 12, color: theme.textMuted }}>{open ? "Hide" : "Show"}</span>
+      </button>
+      {open && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
+          {orders.map((ls) => {
+            const o = ls[0], own = ls.filter((x) => x.status === "logged").reduce((s, x) => s + (Number(x.price) || 0), 0);
+            return (
+              <div key={o.source + o.order_id} style={{ borderRadius: 12, background: theme.inputBg, padding: "10px 12px", minWidth: 0 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: "#fff" }}>{orderSourceName(o.source)} · {o.ordered_on} · {fmtIn(own, o.currency)} logged</div>
+                <div style={{ fontSize: 10.5, color: theme.textDim, marginBottom: 6 }}>Order {o.order_id}</div>
+                {ls.map((x) => (
+                  <div key={x.id} style={{ padding: "3px 0", minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 6, minWidth: 0 }}>
+                      <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, color: x.status === "logged" ? (theme.text || "#ddd") : theme.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{x.name}{Number(x.qty) > 1 ? ` ×${Number(x.qty)}` : ""}</span>
+                      <span style={{ fontSize: 11.5, color: theme.textMuted, flexShrink: 0 }}>{x.price != null ? fmtIn(x.price, x.currency) : ""}</span>
+                      <span style={chip(x.status)}>{LINE_STATUS[x.status] || x.status}</span>
+                    </div>
+                    {x.note && <div style={{ fontSize: 10.5, color: theme.textDim, paddingLeft: 10 }}>↳ {x.note}</div>}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
