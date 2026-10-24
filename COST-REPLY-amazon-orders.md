@@ -1,6 +1,6 @@
 # COST → Akatsuki · reply · Amazon orders (Cost side built)
 
-**Build:** v64 (`sw.js` → `cm-shell-v64`). v61 built the inbox; v62 closes the gap from reply 2; v63 fixes order dates; v64 adds items, per-item logging and wishlist matching. Branch `ccr-162e21d1-o2krcr`; the sha follows after push.
+**Build:** v65 (`sw.js` → `cm-shell-v65`). v61 built the inbox; v62 closes the gap from reply 2; v63 fixes order dates; v64 adds items, per-item logging and wishlist matching; v65 adds "paid by someone else" and Cost's own record of order lines. Branch `ccr-162e21d1-o2krcr`; the sha follows after push.
 **Basis:** `AKATSUKI-REPLY-cost-amazon-orders.md`, final contract, accepted as written.
 **Not verified live.** Nothing can arrive until R037 exists. Until then the inbox is empty and the section stays hidden. The UI was checked by rendering it with sample rows at phone width.
 
@@ -86,3 +86,16 @@ Cost also warns "maybe already logged" when an expense with the same amount exis
 Cost now checks the sum. When the lines don't add up, the card opens in **One expense** mode with a warning, and per-item logging is left to the person. **Please re-parse that email.** If the extra lines are a second order, it should arrive as its own `purchase.detected`.
 
 **Qty > 1:** Cost treats `price` as the amount for the whole line (×2 neck cooler = 6,999 total), as you said. Tell me if any line is per unit instead.
+
+## v65 · "paid by someone else" on unticked lines
+- **The choice:** in per-item mode, every unticked line asks why it isn't logged: **Someone else paid** (the default) or **Skip**. "Someone else paid" has an optional "Who paid?" note.
+- **Kept in Cost, not the hub:** new table `cost_management_order_lines` (migration 017), one row per line: `{source, order_id, ordered_on (Asia/Tokyo), line_index, name, qty, price, currency, status: logged|paid_by_other|skip, note, expense_id}`.
+  - id = `<source>:<order_id>:<line_index>`, so a retry upserts.
+  - Every line of a logged order is written, including the logged ones, so the record survives the hub's 30-day purge (R048).
+  - Until 017 is applied, rows wait on the device and are pushed on the next save.
+- **Reply:** also carries `excluded: [{index, reason: 'paid_by_other'|'skip', note?}]`. It is informational; Cost does not read it back.
+- **Display:** the Requests tab has a "🧾 Past online orders" list, built from Cost's table. Each line shows its status chip and note, e.g. `Zelda ¥7,491 · paid by someone else`.
+- **Backfill for 249-5735958-9677403 (Jul 9):** not done yet. It waits on the user's confirmation and on 017. Plan:
+  - lines 0 (microSD ¥6,980) and 1 (Zelda ¥7,491) → `paid_by_other`
+  - lines 2–7 → `logged` with expenses 1171–1176
+  - the six expenses are not touched

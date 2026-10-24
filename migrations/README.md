@@ -96,3 +96,7 @@ exist and to pick them up on a later run.
 ## 014 · hub ids + place_id (v49, R018 step 1)
 
 `014_hub_ids_place_id.sql` — **not yet applied.** Drops the FK from `cost_management_shop_locations.area_id` to `cost_management_areas` (areas now live in Akatsuki) and adds `cost_management_shops.place_id`. `area_id` stays uuid. Re-runnable, deletes nothing. Until it runs: links to the copied areas still work; linking a shop to an area *created in the hub* fails on the FK; picked Google place ids are not stored (console warning only). Live ids are **uuid** — 009/010 here say bigint because they were reconstructed; the live schema wins. Phase 15c and Phase 20 move to 015 / 016.
+
+## 017 · order lines (v65)
+
+`017_order_lines.sql` — **not yet applied.** Creates `cost_management_order_lines`: one row per line of an online order (Amazon via Akatsuki), with what happened to it (`logged` with its `expense_id`, `paid_by_other` with an optional note, or `skip`). Akatsuki purges item names from its rows 30 days after an order is resolved, so this table is the long-term record. It sits behind the Requests tab's "Past online orders" list. Owner-scoped RLS, re-runnable. Until it runs, lines are kept on the device (`cm_order_lines_pending`) and pushed on the next save. Numbered 017 because 015/016 are reserved above.
