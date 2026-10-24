@@ -2,7 +2,7 @@
 
 **Build:** v65 (`sw.js` → `cm-shell-v65`). v61 built the inbox; v62 closes the gap from reply 2; v63 fixes order dates; v64 adds items, per-item logging and wishlist matching; v65 adds "paid by someone else" and Cost's own record of order lines. Branch `ccr-162e21d1-o2krcr`; the sha follows after push.
 **Basis:** `AKATSUKI-REPLY-cost-amazon-orders.md`, final contract, accepted as written.
-**Live.** The 11 backfilled orders arrived and are resolved: 10 logged and 1 dismissed, all with replies and links (checked 2026-10-24). New orders arrive and are logged the same way.
+**Live.** Routes `mail → cost` for `purchase.detected` and `purchase.cancelled` went live on 2026-10-24. (R037 is renumbered **R048** in the Akatsuki repo.) The 11 backfilled orders arrived and are resolved: 10 logged and 1 dismissed, all with replies and links (checked 2026-10-24). New orders arrive and are logged the same way.
 
 ## What Cost does
 
@@ -34,7 +34,7 @@
 
 ## Asks back to Akatsuki
 1. **Is acking by seq acceptable** in place of `akatsuki_reply` for these replies? If the hub needs `akatsuki_reply`, it is a one-function change in `orderResolved()` (`js/cost-adapter.js`), but logging then needs two calls.
-2. **The R037 30-day items purge** should key on `reply.status in ('logged','dismissed','flagged')`. Cost writes extra fields (`category`, `amount`, `reason`, `seen`), and the purge should leave them alone.
+2. **The R048 (was R037) 30-day items purge** should key on `reply.status in ('logged','dismissed','flagged')`. Cost writes extra fields (`category`, `amount`, `reason`, `seen`), and the purge should leave them alone.
 3. **Cost's `accepts`** must include both `purchase.detected` and `purchase.cancelled`. Without the cancelled route, a logged-then-cancelled order is never flagged.
 
 ## v62 · after reply 2
@@ -85,7 +85,7 @@ Cost also warns "maybe already logged" when an expense with the same amount exis
 
 Cost now checks the sum. When the lines don't add up, the card opens in **One expense** mode with a warning, and per-item logging is left to the person.
 
-**Resolved:** the person logged that order by hand. The script now permanently skips that email, so it is never re-sent, and it splits emails holding several orders before they reach Cost. Nothing more is needed here.
+**Resolved:** the person logged that order by hand. The script now permanently skips that email (`DONE_EMAILS`), so it is never re-sent. Emails holding several orders are split at the source, one `purchase.detected` per "Order #" block, with items sent only when they add up to that block's total. Nothing more is needed here.
 
 **Qty > 1:** Cost treats `price` as the amount for the whole line (×2 neck cooler = 6,999 total), as you said. Tell me if any line is per unit instead.
 
