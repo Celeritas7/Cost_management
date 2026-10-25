@@ -1,0 +1,604 @@
+{
+ "_about": "Cost Management JR East fare engine data, exported from js/app.jsx for the Akatsuki R052 fare handover. Generated from the source; do not edit by hand.",
+ "source_file": "js/app.jsx",
+ "source_commit": "7ed1cb8",
+ "source_lines": {
+  "bands": 4447,
+  "lines": 4464,
+  "special": 4501,
+  "engine_function": 4635,
+  "lookup_function": 4737
+ },
+ "fare_revision": {
+  "id": "2026-03-14",
+  "operators": [
+   "jr_east"
+  ],
+  "effective_from": "2026-03-14",
+  "table": "A表 幹線 ordinary fares (2026 revision merged 電車特定区間 and 山手線内 into 幹線)"
+ },
+ "rounding": "営業キロ rounded UP to the whole km before reading the band table (Math.ceil(km.toFixed(2)))",
+ "bands": {
+  "columns": [
+   "up_to_km",
+   "fare_ic",
+   "fare_ticket"
+  ],
+  "rows": [
+   [
+    3,
+    155,
+    160
+   ],
+   [
+    6,
+    199,
+    200
+   ],
+   [
+    10,
+    209,
+    210
+   ],
+   [
+    15,
+    253,
+    260
+   ],
+   [
+    20,
+    341,
+    350
+   ],
+   [
+    25,
+    440,
+    440
+   ],
+   [
+    30,
+    528,
+    530
+   ],
+   [
+    35,
+    616,
+    620
+   ],
+   [
+    40,
+    715,
+    720
+   ],
+   [
+    45,
+    803,
+    810
+   ],
+   [
+    50,
+    902,
+    910
+   ],
+   [
+    60,
+    1034,
+    1040
+   ],
+   [
+    70,
+    1221,
+    1230
+   ],
+   [
+    80,
+    1408,
+    1410
+   ],
+   [
+    90,
+    1595,
+    1600
+   ],
+   [
+    100,
+    1782,
+    1790
+   ],
+   [
+    120,
+    2090,
+    2090
+   ],
+   [
+    140,
+    2420,
+    2420
+   ],
+   [
+    160,
+    2750,
+    2750
+   ],
+   [
+    180,
+    3190,
+    3190
+   ],
+   [
+    200,
+    3520,
+    3520
+   ]
+  ],
+  "beyond_last": "refuse (no extrapolation)"
+ },
+ "routing": {
+  "max_transfers": 2,
+  "candidates_returned": 5,
+  "raw_paths_explored": 12,
+  "slack_vs_shortest": 1.25
+ },
+ "lines": [
+  {
+   "id": "musashino",
+   "name": "Musashino Line",
+   "source": "JR timetable 営業キロ · Fuchuhommachi 0.0 – Nishi-Funabashi 71.8",
+   "stations": [
+    {
+     "name_romaji": "Fuchuhommachi",
+     "km": 0
+    },
+    {
+     "name_romaji": "Kita-Fuchu",
+     "km": 1.7
+    },
+    {
+     "name_romaji": "Nishi-Kokubunji",
+     "km": 3.9
+    },
+    {
+     "name_romaji": "Shin-Kodaira",
+     "km": 7.4
+    },
+    {
+     "name_romaji": "Shin-Akitsu",
+     "km": 13
+    },
+    {
+     "name_romaji": "Higashi-Tokorozawa",
+     "km": 15.7
+    },
+    {
+     "name_romaji": "Niiza",
+     "km": 19.7
+    },
+    {
+     "name_romaji": "Kita-Asaka",
+     "km": 22.8
+    },
+    {
+     "name_romaji": "Nishi-Urawa",
+     "km": 27.8
+    },
+    {
+     "name_romaji": "Musashi-Urawa",
+     "km": 29.8
+    },
+    {
+     "name_romaji": "Minami-Urawa",
+     "km": 31.7
+    },
+    {
+     "name_romaji": "Higashi-Urawa",
+     "km": 35.4
+    },
+    {
+     "name_romaji": "Higashi-Kawaguchi",
+     "km": 39.2
+    },
+    {
+     "name_romaji": "Minami-Koshigaya",
+     "km": 43.5
+    },
+    {
+     "name_romaji": "Koshigaya-Laketown",
+     "km": 46.3
+    },
+    {
+     "name_romaji": "Yoshikawa",
+     "km": 48.2
+    },
+    {
+     "name_romaji": "Yoshikawaminami",
+     "km": 49.8
+    },
+    {
+     "name_romaji": "Shin-Misato",
+     "km": 51.3
+    },
+    {
+     "name_romaji": "Misato",
+     "km": 53.4
+    },
+    {
+     "name_romaji": "Minami-Nagareyama",
+     "km": 55.4
+    },
+    {
+     "name_romaji": "Shin-Matsudo",
+     "km": 57.5
+    },
+    {
+     "name_romaji": "Shin-Yahashira",
+     "km": 61.6
+    },
+    {
+     "name_romaji": "Higashi-Matsudo",
+     "km": 64
+    },
+    {
+     "name_romaji": "Ichikawa-Ono",
+     "km": 65.9
+    },
+    {
+     "name_romaji": "Funabashi-Hoten",
+     "km": 68.9
+    },
+    {
+     "name_romaji": "Nishi-Funabashi",
+     "km": 71.8
+    }
+   ]
+  },
+  {
+   "id": "keihin_tohoku",
+   "name": "Keihin-Tohoku Line",
+   "source": "営業キロ 東京起点 (東北本線) · ja.wikipedia 京浜東北線 駅一覧",
+   "stations": [
+    {
+     "name_romaji": "Tokyo",
+     "km": 0
+    },
+    {
+     "name_romaji": "Kanda",
+     "km": 1.3
+    },
+    {
+     "name_romaji": "Akihabara",
+     "km": 2
+    },
+    {
+     "name_romaji": "Okachimachi",
+     "km": 3
+    },
+    {
+     "name_romaji": "Ueno",
+     "km": 3.6
+    },
+    {
+     "name_romaji": "Uguisudani",
+     "km": 4.7
+    },
+    {
+     "name_romaji": "Nippori",
+     "km": 5.8
+    },
+    {
+     "name_romaji": "Nishi-Nippori",
+     "km": 6.3
+    },
+    {
+     "name_romaji": "Tabata",
+     "km": 7.1
+    },
+    {
+     "name_romaji": "Kami-Nakazato",
+     "km": 8.8
+    },
+    {
+     "name_romaji": "Oji",
+     "km": 9.9
+    },
+    {
+     "name_romaji": "Higashi-Jujo",
+     "km": 11.4
+    },
+    {
+     "name_romaji": "Akabane",
+     "km": 13.2
+    },
+    {
+     "name_romaji": "Kawaguchi",
+     "km": 15.8
+    },
+    {
+     "name_romaji": "Nishi-Kawaguchi",
+     "km": 17.8
+    },
+    {
+     "name_romaji": "Warabi",
+     "km": 19.7
+    },
+    {
+     "name_romaji": "Minami-Urawa",
+     "km": 22.5
+    },
+    {
+     "name_romaji": "Urawa",
+     "km": 24.2
+    },
+    {
+     "name_romaji": "Kita-Urawa",
+     "km": 26
+    },
+    {
+     "name_romaji": "Yono",
+     "km": 27.6
+    },
+    {
+     "name_romaji": "Saitama-Shintoshin",
+     "km": 28.7
+    },
+    {
+     "name_romaji": "Omiya",
+     "km": 30.3
+    }
+   ]
+  },
+  {
+   "id": "sobu_local",
+   "name": "Chuo-Sobu Line (local)",
+   "source": "営業キロ 千葉起点 (総武本線 + 錦糸町–御茶ノ水 支線) · ja.wikipedia 中央・総武緩行線 駅一覧",
+   "stations": [
+    {
+     "name_romaji": "Chiba",
+     "km": 0
+    },
+    {
+     "name_romaji": "Nishi-Chiba",
+     "km": 1.4
+    },
+    {
+     "name_romaji": "Inage",
+     "km": 3.3
+    },
+    {
+     "name_romaji": "Shin-Kemigawa",
+     "km": 6
+    },
+    {
+     "name_romaji": "Makuhari",
+     "km": 7.6
+    },
+    {
+     "name_romaji": "Makuhari-Hongo",
+     "km": 9.6
+    },
+    {
+     "name_romaji": "Tsudanuma",
+     "km": 12.5
+    },
+    {
+     "name_romaji": "Higashi-Funabashi",
+     "km": 14.2
+    },
+    {
+     "name_romaji": "Funabashi",
+     "km": 16
+    },
+    {
+     "name_romaji": "Nishi-Funabashi",
+     "km": 18.6
+    },
+    {
+     "name_romaji": "Shimosanakayama",
+     "km": 20.2
+    },
+    {
+     "name_romaji": "Motoyawata",
+     "km": 21.8
+    },
+    {
+     "name_romaji": "Ichikawa",
+     "km": 23.8
+    },
+    {
+     "name_romaji": "Koiwa",
+     "km": 26.4
+    },
+    {
+     "name_romaji": "Shin-Koiwa",
+     "km": 29.2
+    },
+    {
+     "name_romaji": "Hirai",
+     "km": 31
+    },
+    {
+     "name_romaji": "Kameido",
+     "km": 32.9
+    },
+    {
+     "name_romaji": "Kinshicho",
+     "km": 34.4
+    },
+    {
+     "name_romaji": "Ryogoku",
+     "km": 35.8
+    },
+    {
+     "name_romaji": "Asakusabashi",
+     "km": 36.7
+    },
+    {
+     "name_romaji": "Akihabara",
+     "km": 37.8
+    },
+    {
+     "name_romaji": "Ochanomizu",
+     "km": 38.7
+    }
+   ]
+  },
+  {
+   "id": "sobu_rapid",
+   "name": "Sobu Rapid Line",
+   "source": "営業キロ 東京起点 · ja.wikipedia 総武本線 (東京–錦糸町 4.8 km)",
+   "stations": [
+    {
+     "name_romaji": "Tokyo",
+     "km": 0
+    },
+    {
+     "name_romaji": "Kinshicho",
+     "km": 4.8
+    }
+   ]
+  }
+ ],
+ "special": {
+  "note": "Pair overrides where the published fare differs from band x km; symmetric pairs",
+  "columns": [
+   "a",
+   "b",
+   "fare_ic",
+   "fare_ticket"
+  ],
+  "rows": [
+   [
+    "Tokyo",
+    "Nishi-Funabashi",
+    341,
+    350
+   ],
+   [
+    "Shin-Nihombashi",
+    "Nishi-Funabashi",
+    341,
+    350
+   ],
+   [
+    "Shimbashi",
+    "Zushi",
+    902,
+    910
+   ],
+   [
+    "Hamamatsucho",
+    "Zushi",
+    902,
+    910
+   ],
+   [
+    "Tamachi",
+    "Zushi",
+    902,
+    910
+   ],
+   [
+    "Shimbashi",
+    "Kamakura",
+    902,
+    910
+   ],
+   [
+    "Shinagawa",
+    "Zushi",
+    803,
+    810
+   ],
+   [
+    "Yokohama",
+    "Zushi",
+    440,
+    440
+   ],
+   [
+    "Shinagawa",
+    "Yokohama",
+    341,
+    350
+   ],
+   [
+    "Shinagawa",
+    "Higashi-Kanagawa",
+    341,
+    350
+   ],
+   [
+    "Shibuya",
+    "Yokohama",
+    440,
+    440
+   ],
+   [
+    "Shibuya",
+    "Kichijoji",
+    281,
+    290
+   ],
+   [
+    "Yokohama",
+    "Shibuya",
+    440,
+    440
+   ],
+   [
+    "Yokohama",
+    "Ebisu",
+    440,
+    440
+   ],
+   [
+    "Yokohama",
+    "Meguro",
+    440,
+    440
+   ],
+   [
+    "Yokohama",
+    "Nishi-Oi",
+    341,
+    350
+   ],
+   [
+    "Higashi-Kanagawa",
+    "Shibuya",
+    440,
+    440
+   ],
+   [
+    "Higashi-Kanagawa",
+    "Ebisu",
+    440,
+    440
+   ],
+   [
+    "Shinjuku",
+    "Hachioji",
+    616,
+    620
+   ],
+   [
+    "Shinjuku",
+    "Takao",
+    715,
+    720
+   ],
+   [
+    "Shinjuku",
+    "Haijima",
+    528,
+    530
+   ]
+  ]
+ },
+ "counts": {
+  "lines": 4,
+  "station_entries": 72,
+  "unique_stations": 67,
+  "bands": 21,
+  "special_pairs": 21
+ }
+}
