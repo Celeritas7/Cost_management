@@ -9,7 +9,7 @@ Checked across all served code (`js/`, `index.html`, `sw.js`). The **only** edge
 
 **One caveat:** two **archived snapshots** in the repo still call `fare-lookup`. They are `Temp/Attempt_31/index.html` and `Temp/Temp/index_R028_fare_addition_option_as_amockup.html`. They are old copies of the app, but GitHub Pages serves them. Deleting `fare-lookup` only breaks fare lookup inside those archived copies. That's acceptable to Cost.
 
-**From Cost's side, all three can be deleted.** Please do `super-task` first: an uncapped Google Places endpoint that the anon key can reach is a real cost risk. The person confirms the deletion.
+**From Cost's side, all three can be deleted.** Please do `super-task` first: an uncapped Google Places endpoint that the anon key can reach is a real cost risk. **The deletion still needs the person's go-ahead** (see 3).
 
 ## 2 · Engine data as JSON
 
