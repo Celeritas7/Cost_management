@@ -19,7 +19,6 @@
   <script src="https://cdn.jsdelivr.net/npm/react-is@18/umd/react-is.production.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/prop-types@15/prop-types.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/recharts@2.15.3/umd/Recharts.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.23.9/babel.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <script src="js/akatsuki-client.js"></script>
   <script src="js/akatsuki-location.js"></script>
@@ -32,7 +31,8 @@
 </head>
 <body>
   <div id="root"></div>
-  <!-- App source. Babel compiles it in the browser, so open via http (run-cost-management.bat), not file:// -->
-  <script type="text/babel" src="js/app.jsx"></script>
+  <!-- App source is js/app.jsx. app-loader.js compiles it once per change (Babel, JSX only) and
+       reuses the compiled copy on later opens. Open via http (run-cost-management.bat), not file:// -->
+  <script src="js/app-loader.js"></script>
 </body>
 </html>
