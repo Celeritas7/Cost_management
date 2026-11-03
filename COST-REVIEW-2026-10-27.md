@@ -59,8 +59,8 @@ The Ekispert key is on the Free plan (railway data only); route search, the only
 
 | Item | Owner | Status |
 |---|---|---|
-| Delete `fare-lookup` in the Supabase dashboard (nothing live calls it; checked 2026-11-03) | person | open |
-| Remove `supabase/functions/fare-lookup/` from this repo | Cost | after the delete |
+| Delete `fare-lookup` in the Supabase dashboard (nothing live calls it; checked 2026-11-03) | person | **done** (gone from the edge functions, checked 2026-11-03) |
+| Remove `supabase/functions/fare-lookup/` from this repo | Cost | **done** |
 
 ## C · Yahoo order emails (Yahoo!ショッピング)
 **Mailbox:** @yahoo.co.jp. **Set up 2026-11-03:** the person confirmed mangaonkaraniket@gmail.com on the Yahoo! JAPAN ID and made it the メインメールアドレス, so Yahoo! JAPAN email reaches the Gmail that Akatsuki's script reads. The MUFG debit emails were considered and dropped: they miss konbini payments and have no items.
@@ -68,10 +68,13 @@ The Ekispert key is on the Free plan (railway data only); route search, the only
 | Item | Owner | Status |
 |---|---|---|
 | Cost: `yahoo_shopping` source name, store and payment shown on the card | Cost | **done in v70** |
-| Pass `COST-ASK-yahoo-orders.md` to Akatsuki | person | open |
+| Pass `COST-ASK-yahoo-orders.md` to Akatsuki | person | **done** |
 | At the next Yahoo order, check the email on the checkout page (ご注文者情報) shows the Gmail | person | open |
 | First real Yahoo order email in Gmail (or one forwarded from yahoo.co.jp), for Akatsuki to build from | person | open |
-| Akatsuki: parser for order and cancellation emails, `source: "yahoo_shopping"` | Akatsuki | after the ask |
+| Akatsuki feasibility reply: yes; no change to Cost's side | Akatsuki | **done** (2026-11-03) |
+| Hub R060: `yahoo_shopping` in `purchase_source`; `store`, `payment`, `pay_by` on `purchase.detected` | Akatsuki | **live** (vocab checked 2026-11-03) |
+| Akatsuki: parser for order and cancellation emails, dry run first | Akatsuki | waits on the first real email |
+| Unpaid konbini order with no cancellation email: Cost could raise "did you pay?" after `pay_by` | Cost | only if Yahoo sends no cancellation email |
 
 ## D · Housekeeping
 | Item | Status |
