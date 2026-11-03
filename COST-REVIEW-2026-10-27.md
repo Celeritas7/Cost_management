@@ -84,7 +84,10 @@ The Ekispert key is on the Free plan (railway data only); route search, the only
 | Wishlist card says "cap ¥2,036": rename to "wishlist price … (date)" so an old sale price is not read as agreed | **done in v68** |
 
 ## E · Parked ideas
-- Stops: show where a stop falls in the day; reminder right after leaving; auto-save a spot once named.
+- Stops, scoped 2026-11-03 (stops are only detected while the app is open; a web app cannot track in the background):
+  - **Auto-save a spot once named: done in v71.** Logging an unknown stop with a shop shows a ticked "Remember this spot for <shop> (<area>)". On Log it is saved as a confirmed hub spot (`manual`, 100 m) in the shop's one area, so the next visit comes up named. If the shop is in no area or in several, nothing is saved and the card says why. It is also skipped when another spot is within 35 m, because the hub would merge into it.
+  - Where a stop falls in the day: a per-day timeline in the Stops panel (stops in time order, logged ones with shop and amount). Small–medium, no migration. Next, if wanted.
+  - Reminder right after leaving: vibrate plus a card (and a notification if allowed) when an unlogged stop ends. Only works while the app is open; low value.
 - Convert the app to Vite: low priority by the person's choice.
 
 ---
