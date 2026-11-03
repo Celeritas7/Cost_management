@@ -7235,11 +7235,20 @@ function ToLogStrip({ requests, reload, onOpenRequests }) {
 //  PURCHASE REQUESTS INBOX  (buy-requests from companion apps)
 // ╔══ kept under the historical component name ══
 // ═══════════════════════════════════════════
-//  ONLINE ORDERS — purchase.detected from Akatsuki's `mail` app (Amazon order emails).
+//  ONLINE ORDERS — purchase.detected from Akatsuki's `mail` app (Amazon order emails;
+//  Yahoo!ショッピング asked in COST-ASK-yahoo-orders.md, source "yahoo_shopping").
 //  Nothing becomes an expense until confirmed here: the emailed total is the checkout
 //  total, and points, gift cards or split shipments can change what is charged.
 // ═══════════════════════════════════════════
-const ORDER_SOURCES = { amazon: "Amazon" };
+const ORDER_SOURCES = { amazon: "Amazon", yahoo_shopping: "Yahoo!ショッピング" };
+// Marketplace orders name the store that sold it (payload.store) and how it was paid
+// (payload.payment). Both are optional; Amazon sends neither.
+const ORDER_PAYMENTS = { card: "card", konbini: "konbini", paypay: "PayPay", bank: "bank transfer", cod: "cash on delivery" };
+const orderPaymentText = (p) => {
+  if (!p || !p.payment) return "";
+  const t = ORDER_PAYMENTS[p.payment] || String(p.payment);
+  return p.payment === "konbini" && p.pay_by ? `${t}, pay by ${String(p.pay_by).slice(0, 10)}` : t;
+};
 const orderSourceName = (src) => ORDER_SOURCES[src] || (src ? src[0].toUpperCase() + src.slice(1) : "Online order");
 // Open: never answered, or logged-then-cancelled and not yet acknowledged.
 // A cancellation that arrives before any answer settles the row (see cost-adapter).
@@ -7394,7 +7403,7 @@ function OrdersInboxView({ orders, reload, expenses, purchaseReqs, reloadPurchas
   };
 
   const log = async (r) => {
-    const p = r.payload, dr = draftOf(r), items = orderItems(p), day = orderDate(p), shop = dr.shop.trim(), oid = `${orderSourceName(p.source)} order ${p.order_id}`;
+    const p = r.payload, dr = draftOf(r), items = orderItems(p), day = orderDate(p), shop = dr.shop.trim(), oid = `${orderSourceName(p.source)} order ${p.order_id}${p.store ? ` (${p.store})` : ""}`;
     if (busy || !shop) return;
     if (!navigator.onLine) { setMsg("Needs internet — the order list lives in Akatsuki."); return; }
     // What becomes expenses: one row for the order, or one per ticked line at its own price.
@@ -7490,7 +7499,7 @@ function OrdersInboxView({ orders, reload, expenses, purchaseReqs, reloadPurchas
           const head = (
             <div style={{ marginBottom: 8, minWidth: 0 }}>
               <div style={{ fontSize: 13.5, fontWeight: 600, color: "#fff" }}>{orderSourceName(p.source)} · {day} · {fmtIn(p.total, cur(r))}{p.backfill ? <span style={{ fontSize: 10.5, color: theme.textDim, fontWeight: 500 }}> · past order</span> : null}</div>
-              <div style={{ fontSize: 10.5, color: theme.textDim }}>Order {p.order_id}{items.length ? ` · ${items.length} item${items.length === 1 ? "" : "s"}` : ""}</div>
+              <div style={{ fontSize: 10.5, color: theme.textDim }}>Order {p.order_id}{p.store ? ` · ${p.store}` : ""}{items.length ? ` · ${items.length} item${items.length === 1 ? "" : "s"}` : ""}{orderPaymentText(p) ? ` · ${orderPaymentText(p)}` : ""}</div>
             </div>
           );
           if (orderFlagged(r)) return (

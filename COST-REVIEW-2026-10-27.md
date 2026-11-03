@@ -54,19 +54,24 @@
 | Quick "paid by someone else" options Akatsuki proposed ("Rest: someone else paid", editing a line in history) | — | **not planned**: the person chose Skip-asks-why only |
 | Note on the four Jul 15 lines | person | optional |
 
-## B · Train fares handover (Akatsuki R052)
-| Phase | Owner | Status |
-|---|---|---|
-| Ekispert plan: endpoints, monthly limit, terms | **person** | **open, blocks Akatsuki** |
-| Approve deleting `fare-lookup` (`super-task` and `smooth-endpoint` are already gone) | **person** | **open** |
-| Pass `COST-REPLY-fares.md` + `COST-fare-engine-data.json` to Akatsuki | person | open |
-| 1 · Build `akatsuki-fare`, stations table, cap, fare-revision vocab | Akatsuki | waiting on the two items above |
-| 2 · Shadow: Cost shows its own fare, asks the hub in the background, logs both (Cost migration 018) | Cost | after phase 1 |
-| 3 · Hub first, Cost engine as fallback | Cost | after the person confirms "mastered" |
-| 4 · Retire Cost's lookup (offline engine stays) | person's decision | — |
+## B · Train fares (R052): **paused** (2026-11-03)
+The Ekispert key is on the Free plan (railway data only); route search, the only call that returns a fare, needs the company-only Standard plan. The person paused R052. Cost keeps its own stack (fare book → cache → `jrCompute` → typed fare); phases 2–4 are off until a fare source exists. R052 stays reserved at the hub with Cost's engine data on file.
 
-## C · Yahoo order emails (asked 2026-10-28, not started)
-Cost needs no change: it only receives `purchase.detected` from Akatsuki, whichever mailbox the email came from. Routes, simplest first: (1) switch those shops to the Gmail address; (2) forward Yahoo → Gmail (check what the Yahoo plan allows); (3) Akatsuki reads Yahoo over IMAP with an app password. **Waiting on the person:** which shops' emails land in Yahoo, and yahoo.com or Yahoo! Japan. Then a feasibility prompt like the Amazon one.
+| Item | Owner | Status |
+|---|---|---|
+| Delete `fare-lookup` in the Supabase dashboard (nothing live calls it; checked 2026-11-03) | person | open |
+| Remove `supabase/functions/fare-lookup/` from this repo | Cost | after the delete |
+
+## C · Yahoo order emails (Yahoo!ショッピング)
+**Mailbox:** @yahoo.co.jp. **Set up 2026-11-03:** the person confirmed mangaonkaraniket@gmail.com on the Yahoo! JAPAN ID and made it the メインメールアドレス, so Yahoo! JAPAN email reaches the Gmail that Akatsuki's script reads. The MUFG debit emails were considered and dropped: they miss konbini payments and have no items.
+
+| Item | Owner | Status |
+|---|---|---|
+| Cost: `yahoo_shopping` source name, store and payment shown on the card | Cost | **done in v70** |
+| Pass `COST-ASK-yahoo-orders.md` to Akatsuki | person | open |
+| At the next Yahoo order, check the email on the checkout page (ご注文者情報) shows the Gmail | person | open |
+| First real Yahoo order email in Gmail (or one forwarded from yahoo.co.jp), for Akatsuki to build from | person | open |
+| Akatsuki: parser for order and cancellation emails, `source: "yahoo_shopping"` | Akatsuki | after the ask |
 
 ## D · Housekeeping
 | Item | Status |
