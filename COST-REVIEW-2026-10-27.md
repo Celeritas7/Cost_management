@@ -81,6 +81,7 @@ The Ekispert key is on the Free plan (railway data only); route search, the only
 |---|---|
 | Merge the branch (3 note commits + this review; no app change) | open |
 | `migrations/README.md` statuses (005, 011–014, 017 all applied) | **done in v67** |
+| Remove `supabase/functions/places-nearby/` (Cost's old Google Places function: not deployed, nothing calls it; the app uses the hub's `akatsuki-places-nearby`) | **done** (2026-11-03) |
 | Wishlist card says "cap ¥2,036": rename to "wishlist price … (date)" so an old sale price is not read as agreed | **done in v68** |
 
 ## E · Parked ideas
