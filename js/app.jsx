@@ -995,6 +995,10 @@ function App({ session, onSignOut }) {
   const [stopsOpen, setStopsOpen] = useState(false);
   const [stopStatus, setStopStatus] = useState("");
   const [stopPins, setStopPins] = useState([]);
+  // Shop name → the areas (this region) it is linked to. A named stop is remembered as a spot
+  // only when its shop sits in exactly ONE area: hub spots belong to an area.
+  const [shopAreas, setShopAreas] = useState({});
+  const [pinsVer, setPinsVer] = useState(0);
   useEffect(() => { window.cm.pins = stopPins; }, [stopPins]);
   useEffect(() => { const h = () => setStops(getStops()); window.addEventListener(STOPS_EVT, h); return () => window.removeEventListener(STOPS_EVT, h); }, []);
   const openStops = useMemo(() => stops.filter((s) => s.status === "open" && (s.region || "JPY") === currency).sort((a, b) => a.startedAt - b.startedAt), [stops, currency]);
@@ -1018,6 +1022,12 @@ function App({ session, onSignOut }) {
       const shopById = {}, shopByName = {};
       shops.forEach((s) => { shopById[String(s.id)] = s; shopByName[s.name] = s; });
       const inArea = {}; (l.data || []).forEach((x) => { const k = String(x.area_id); (inArea[k] = inArea[k] || []).push(String(x.shop_id)); });
+      const sa = {};
+      Object.entries(inArea).forEach(([aid, ids]) => {
+        const ar = areaById[aid]; if (!ar || (ar.region && ar.region !== currency)) return;
+        ids.forEach((id) => { const sh = shopById[id]; if (sh) (sa[sh.name] = sa[sh.name] || []).push({ id: aid, name: ar.name }); });
+      });
+      setShopAreas(sa);
       const out = [];
       (p.data || []).forEach((pt) => {
         if (pt.lat == null || pt.lng == null || pt.confirmed === false) return;
@@ -1035,7 +1045,7 @@ function App({ session, onSignOut }) {
       setStopPins(out);
     })();
     return () => { dead = true; };
-  }, [currency, shopKey, locTriggers]);
+  }, [currency, shopKey, locTriggers, pinsVer]);
 
   // Dwell evaluator, independent of triggers: it reads the position the trigger
   // watch already keeps in posRef (no second GPS subscription, no extra battery).
@@ -1133,6 +1143,20 @@ function App({ session, onSignOut }) {
   };
   const dismissStop = (s) => { updateStop(s.id, { status: "dismissed" }); vibrate(8); };
   const blockStop = (s) => { addStopBlock(s, s.place || s.near || null); updateStop(s.id, { status: "dismissed", blocked: true }); vibrate(8); };
+  // "Remember this spot": a named stop becomes a confirmed shop spot in the shop's one area
+  // ('manual', so the hub marks it confirmed), and the next visit there comes up named.
+  // 100 m, not the area default 200: a shop spot should not swallow its neighbours.
+  const rememberStop = async (s, shop, area) => {
+    // The hub merges a new spot into any spot within 30 m in the same area, and a merge would
+    // give that spot (an area's own centre, say) this shop. So skip when one is that close.
+    const close = stopPins.find((p) => distanceMeters(s, p) <= 35);
+    if (close) { if (close.shop !== shop) flashDue(`Logged · spot not saved: ${close.shop || close.label || close.areaName || "another spot"} is already here`); return; }
+    try {
+      await hubAnchorAdd(area.id, Number(s.lat), Number(s.lng), shop, shopRef(shop), "manual", 100);
+      setPinsVer((v) => v + 1);
+      flashDue(`Spot saved · ${shop} in ${area.name}`);
+    } catch (e) { flashDue(`Logged, but the spot wasn't saved: ${hubAreaMsg(e)}`); }
+  };
   // Same warning rule as the Add flow: date + shop + amount all matching is a
   // flag, never a block — the panel offers "Log anyway".
   const stopDup = (s, shop, amount) => RAW.find((e) => e.date === ymdLocal(new Date(s.startedAt)) && e.shop === shop && Number(e.amount) === Number(amount));
@@ -1402,7 +1426,7 @@ function App({ session, onSignOut }) {
         )}
 
         {stopsOpen && openStops.length > 0 && (
-          <StopsPanel stops={openStops} pins={stopPins} onLog={logStop} onDismiss={dismissStop} onBlock={blockStop} onCheckDup={stopDup} onClose={() => setStopsOpen(false)} />
+          <StopsPanel stops={openStops} pins={stopPins} shopAreas={shopAreas} onRemember={rememberStop} onLog={logStop} onDismiss={dismissStop} onBlock={blockStop} onCheckDup={stopDup} onClose={() => setStopsOpen(false)} />
         )}
 
         {hubReport && (
@@ -1789,13 +1813,15 @@ const nearestShopPin = (pos, pins) => {
 };
 const stopMapUrl = (s) => "https://www.google.com/maps/search/?api=1&query=" + Number(s.lat).toFixed(6) + "," + Number(s.lng).toFixed(6);
 
-function StopsPanel({ stops, pins, onLog, onDismiss, onBlock, onCheckDup, onClose }) {
+function StopsPanel({ stops, pins, shopAreas = {}, onRemember, onLog, onDismiss, onBlock, onCheckDup, onClose }) {
   const { theme, shops, getCatIcon, getCatColor, inputStyle } = useTheme();
   const [drafts, setDrafts] = useState({});
   const [busyId, setBusyId] = useState(null);
   const [fadingId, setFadingId] = useState(null);
   const [err, setErr] = useState("");
-  const draftOf = (s) => drafts[s.id] || { shop: s.shop || "", amount: "" };
+  const draftOf = (s) => drafts[s.id] || { shop: s.shop || "", amount: "", remember: true };
+  // An unknown stop named with a shop: remember it only when the shop is in exactly one area.
+  const spotFor = (s, shop) => { if (s.pinned || !shop || !onRemember) return null; const a = shopAreas[shop] || []; return { area: a.length === 1 ? a[0] : null, count: a.length }; };
   const setDraft = (s, patch) => setDrafts((p) => ({ ...p, [s.id]: { ...draftOf(s), ...patch } }));
   const catOf = (name) => { const sh = shops.find((x) => x.name === name); return sh ? sh.category : null; };
   const shopList = useMemo(() => [...shops].sort((a, b) => (b.is_favorite ? 1 : 0) - (a.is_favorite ? 1 : 0) || a.name.localeCompare(b.name)), [shops]);
@@ -1806,6 +1832,8 @@ function StopsPanel({ stops, pins, onLog, onDismiss, onBlock, onCheckDup, onClos
     const res = await onLog(s, { shop: dr.shop, amount: amt, category: catOf(dr.shop) || s.category || "Other" });
     setBusyId(null);
     if (!res || !res.ok) { setErr(res && res.msg ? res.msg : "Couldn't save that one."); return; }
+    const sp = spotFor(s, dr.shop);
+    if (sp && sp.area && dr.remember !== false) onRemember(s, dr.shop, sp.area);
     setFadingId(s.id); setTimeout(() => setFadingId(null), 300);
   };
   const logBtn = { flex: 1, padding: "9px 6px", borderRadius: 9, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})` };
@@ -1852,6 +1880,16 @@ function StopsPanel({ stops, pins, onLog, onDismiss, onBlock, onCheckDup, onClos
                 </select>
                 <input type="number" inputMode="numeric" value={dr.amount} onChange={(e) => setDraft(s, { amount: e.target.value })} placeholder={CUR.symbol + " amount"} disabled={busy} style={{ ...inputStyle, width: 118, flexShrink: 0, padding: "9px 10px", fontSize: 13, fontWeight: 600 }} />
               </div>
+              {(() => {
+                const sp = spotFor(s, dr.shop); if (!sp) return null;
+                if (!sp.area) return <div style={{ fontSize: 10.5, color: theme.textDim, marginBottom: 6 }}>Spot not saved: {dr.shop} {sp.count ? `is in ${sp.count} areas` : "isn't in an area"} — add it in Areas to have stops here named.</div>;
+                return (
+                  <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 11.5, color: theme.textMuted, marginBottom: 6, cursor: "pointer" }}>
+                    <input type="checkbox" checked={dr.remember !== false} onChange={(e) => setDraft(s, { remember: e.target.checked })} disabled={busy} style={{ margin: 0 }} />
+                    <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Remember this spot for {dr.shop} ({sp.area.name})</span>
+                  </label>
+                );
+              })()}
               {dup && <div style={{ fontSize: 10.5, fontWeight: 600, color: theme.warning, marginBottom: 6 }}>⚠ possible duplicate — {fmt(dup.amount)} at {dup.shop} already logged on {dup.date}</div>}
               <div style={{ display: "flex", gap: 6 }}>
                 <button onClick={() => doLog(s)} disabled={busy || !ready} style={{ ...logBtn, opacity: ready ? 1 : 0.5, cursor: ready ? "pointer" : "not-allowed", background: dup ? theme.warning : logBtn.background, color: dup ? "#1a1000" : "#fff" }}>{dup ? "Log anyway" : "Log"}{ready && !dup ? " " + fmt(amt) : ""}</button>
