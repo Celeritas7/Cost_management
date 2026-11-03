@@ -116,3 +116,25 @@ Cache bumped to `cm-shell-v67`. Not changed: performance items 6–7 and the sho
 | — | Wishlist cards: "cap ¥X" → "wishlist price ¥X (Oct 12)", the date being when the card was last set (`updated_at`, else `created_at`). Form label "Budget cap" → "Wishlist price"; "Over the cap" → "Above the … wishlist price (date)". The Weekly Focus "sent" list uses the same wording. The DB column stays `budget_cap`. | Parse check. |
 
 Cache bumped to `cm-shell-v68`. **Not run end to end:** this session cannot reach supabase.co over HTTP (proxy 403), so the app was not loaded in a browser and the PostgREST `reply->>status` select was not tried against the live API (it is standard PostgREST syntax). Worth a quick look after deploy: the Requests tab loads and an order card still shows its wishlist match.
+
+---
+
+# v72 · faster opening (2026-11-03)
+
+**Cause:** every open loaded Babel (2.8 MB) and compiled all of `js/app.jsx` (650 KB) in the browser with the `env` + `react` presets. The `env` part, rewriting modern JavaScript for old browsers, was most of the cost, and no browser this app runs on needs it.
+
+**Change:** `js/app-loader.js` replaces `<script type="text/babel">`.
+- It fetches `app.jsx` and hashes it.
+- **Compiled copy found** for that exact source: it runs at once, and Babel is never downloaded or parsed.
+- **Not found** (first open after an update): it loads Babel, compiles with the `react` preset only (JSX), keeps the result in Cache Storage `cm-compiled`, and drops older copies.
+- `sw.js` keeps `cm-compiled` across shell versions, and Babel is no longer a blocking `<script>` in `index.html`.
+- **Editing is unchanged:** edit `app.jsx` as before; a changed file is recompiled once.
+
+**Measured** (headless Chromium, libraries from npm, Supabase blocked, so up to the sign-in screen):
+
+| | Before | First open after an update | Every later open |
+|---|---|---|---|
+| Normal CPU | 6.3–6.6 s | 1.2 s | **0.13 s** |
+| CPU slowed 4× (≈ mid phone) | 27.3 s | 4.5 s | **0.38 s** |
+
+**Not measured:** the data load after sign-in (6 queries in parallel, expenses in 2 pages of 1000, to the Mumbai region). The app shows "Loading…" until all of it arrives. Next step if opening still feels slow: show the last copy at once and refresh it in the background.
