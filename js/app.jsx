@@ -604,8 +604,20 @@ function App({ session, onSignOut }) {
     if (!navigator.onLine) return;
     try { setOrderRows(await costHub.orderInbox()); } catch (e) { console.warn("[akatsuki] order inbox failed", e.message); }
   }, []);
+  // The consume loop calls onOrder once per hub row; a backfill of N orders would be N full
+  // reads. Coalesce: one read after the batch goes quiet, and never two reads at once.
+  const orderReloadRef = useRef({ timer: null, running: false, again: false });
+  const reloadOrdersSoon = useCallback(() => {
+    const st = orderReloadRef.current;
+    clearTimeout(st.timer);
+    st.timer = setTimeout(async () => {
+      if (st.running) { st.again = true; return; }
+      st.running = true;
+      try { do { st.again = false; await reloadOrders(); } while (st.again); } finally { st.running = false; }
+    }, 600);
+  }, [reloadOrders]);
   const openOrders = useMemo(() => orderRows.filter(orderIsOpen), [orderRows]);
-  useEffect(() => { reloadSukkiri(); reloadOrders(); return costHub.listen({ onPurchaseRequest: () => reloadSukkiri(), onOrder: () => reloadOrders() }); }, []); // acks new rows, then re-reads the inboxes
+  useEffect(() => { reloadSukkiri(); reloadOrders(); return costHub.listen({ onPurchaseRequest: () => reloadSukkiri(), onOrder: () => reloadOrdersSoon() }); }, []); // acks new rows, then re-reads the inboxes
   // reminder banner: shows when requests are pending; a dismiss hides it,
   // but it re-surfaces every 30 minutes and on each app load
   const [reqReminderHidden, setReqReminderHidden] = useState(false);
@@ -3614,12 +3626,13 @@ function ShopAreasPanel({ allExpenses = [], onPending }) {
     if (!picker) return [];
     const inArea = new Set(byArea[picker.id] || []);
     const m = {};
-    scopedShops.forEach(s => { (m[s.category] = m[s.category] || []).push(s); });
+    const tickedOut = scopeCat ? shops.filter(s => s.category !== scopeCat && picked.indexOf(sid(s)) >= 0) : [];
+    [...scopedShops, ...tickedOut].forEach(s => { (m[s.category] = m[s.category] || []).push(s); });
     return Object.entries(m).map(([cat, list]) => ({
       cat, weight: list.reduce((n, s) => n + (usage[s.name] || 0), 0),
       list: list.sort((a, b) => (usage[b.name] || 0) - (usage[a.name] || 0)).map(s => ({ ...s, _in: inArea.has(sid(s)) })),
     })).sort((a, b) => b.weight - a.weight);
-  }, [picker, scopedShops, byArea, usage]);
+  }, [picker, scopedShops, shops, scopeCat, picked, byArea, usage]);
 
   const capture = () => new Promise((res) => {
     if (!("geolocation" in navigator)) { res(null); return; }
@@ -3698,8 +3711,18 @@ function ShopAreasPanel({ allExpenses = [], onPending }) {
   // Create a shop from inside the picker and put it straight into this area.
   const addNewShop = async () => {
     const name = newName.trim(); if (!name || busy || !picker || !newIn) return;
+    // A name is unique per region (shops_user_name_region_uniq), so a second "Aeon" under another
+    // category can't be created: tick the existing one, say where it lives, and keep it visible
+    // in the picker even when a category scope would hide it (pickerGroups shows ticked shops).
     const dup = shops.find(s => s.name.trim().toLowerCase() === name.toLowerCase());
-    if (dup) { setPicked(p => p.indexOf(sid(dup)) >= 0 || (byArea[picker.id] || []).indexOf(sid(dup)) >= 0 ? p : [...p, sid(dup)]); setNewName(""); setNewIn(null); flash(`${dup.name} already exists — ticked it`); return; }
+    if (dup) {
+      const inArea = (byArea[picker.id] || []).indexOf(sid(dup)) >= 0;
+      if (!inArea) setPicked(p => p.indexOf(sid(dup)) >= 0 ? p : [...p, sid(dup)]);
+      setNewName(""); setNewIn(null);
+      const where = dup.category !== newIn ? ` under ${dup.category}` : "";
+      flash(inArea ? `${dup.name} is already in ${picker.name}${where}` : `${dup.name} already exists${where} — ticked it${where ? " (change its category in Shops)" : ""}`, where ? 4000 : undefined);
+      return;
+    }
     setBusy(true);
     const { data, error } = await supabase.from("cost_management_shops").insert({ region: CUR.code, name, category: newIn, is_favorite: false }).select("id").single();
     if (error) { setBusy(false); flash(error.message.includes("duplicate") ? "Shop exists" : error.message, 4000); return; }
@@ -6865,6 +6888,9 @@ function RequestInboxView() {
   const qtyText = (r) => `${r.quantity}${r.unit ? " " + r.unit : ""}`;
   const sym = (r) => (r.currency && CURRENCIES[r.currency]) ? CURRENCIES[r.currency].symbol : CUR.symbol;
   const dayText = (iso) => { const d = new Date(iso + "T00:00:00"); return isNaN(d) ? iso : `${MONTHS_SHORT[d.getMonth() + 1]} ${d.getDate()}`; };
+  // The price on a wishlist card is what it cost when it was written down (often a sale price),
+  // not an agreed limit: show it with the day it was last set so an old figure reads as old.
+  const priceAsOf = (r) => { const at = r.updated_at || r.created_at; return at ? ` (${dayText(ymdLocal(new Date(at)))})` : ""; };
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const startNew = () => { setBuyId(null); setForm({ item: "", quantity: "1", unit: "", source: "own", needed_by: "", budget_cap: "", currency: CUR.code, preferred_shop: "", notes: "" }); };
@@ -6923,7 +6949,7 @@ function RequestInboxView() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8 }}>
         <div><label style={lbl}>Needed by</label><input type="date" value={form ? form.needed_by : ""} onChange={(e) => set("needed_by", e.target.value)} style={field} /></div>
         <div>
-          <label style={lbl}>Budget cap</label>
+          <label style={lbl}>Wishlist price</label>
           <div style={{ display: "flex", gap: 6 }}>
             <input inputMode="decimal" value={form ? form.budget_cap : ""} onChange={(e) => set("budget_cap", e.target.value.replace(/[^0-9.]/g, ""))} placeholder="—" style={{ ...field, textAlign: "right" }} />
             <select value={form ? form.currency : CUR.code} onChange={(e) => set("currency", e.target.value)} style={{ ...inputStyle, width: 74 }}>{CURRENCY_KEYS.map((k) => <option key={k} value={k}>{k}</option>)}</select>
@@ -6944,7 +6970,7 @@ function RequestInboxView() {
 
   const reqCard = (r) => {
     const h = hubLine(r), closed = r.status !== "open";
-    const meta = [r.needed_by && `by ${dayText(r.needed_by)}`, r.budget_cap != null && `cap ${sym(r)}${Number(r.budget_cap).toLocaleString()}`, r.preferred_shop].filter(Boolean).join(" · ");
+    const meta = [r.needed_by && `by ${dayText(r.needed_by)}`, r.budget_cap != null && `wishlist price ${sym(r)}${Number(r.budget_cap).toLocaleString()}${priceAsOf(r)}`, r.preferred_shop].filter(Boolean).join(" · ");
     if (form && form.id === r.id) return <div key={r.id}>{reqForm}</div>;
     return (
       <div key={r.id} style={{ background: theme.inputBg, borderRadius: 12, padding: "12px 14px", opacity: closed ? 0.6 : 1 }}>
@@ -6968,7 +6994,7 @@ function RequestInboxView() {
               <div><label style={lbl}>Category</label><select value={buy.category} onChange={(e) => setBuy((b) => ({ ...b, category: e.target.value }))} style={field}>{categories.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}</select></div>
               <div><label style={lbl}>Date</label><input type="date" value={buy.date} max={ymdToday()} onChange={(e) => setBuy((b) => ({ ...b, date: e.target.value }))} style={field} /></div>
             </div>
-            {r.budget_cap != null && Number(buy.amount) > r.budget_cap && <div style={{ fontSize: 11, color: theme.warning }}>Over the {sym(r)}{Number(r.budget_cap).toLocaleString()} cap — logs anyway.</div>}
+            {r.budget_cap != null && Number(buy.amount) > r.budget_cap && <div style={{ fontSize: 11, color: theme.warning }}>Above the {sym(r)}{Number(r.budget_cap).toLocaleString()} wishlist price{priceAsOf(r)} — logs anyway.</div>}
             <div style={{ display: "flex", gap: 8 }}>
               <button disabled={busy} onClick={() => logBuy(r)} style={{ ...miniBtn(theme.primary, "#fff"), flex: 1, padding: 10, opacity: busy ? 0.6 : 1 }}>{busy ? "Logging…" : "Log expense + close"}</button>
               <button onClick={() => setBuyId(null)} style={{ ...miniBtn(theme.inputBg, theme.text), padding: "10px 14px" }}>Back</button>
@@ -7247,7 +7273,19 @@ const orderItemsAddUp = (p, items) => items.length > 0 && items.every((it) => it
 const MATCH_STOP = new Set(("tea the and for with of in on a an to by set pcs pc pieces piece pack packs case cases bottle bottles pet " +
   "ml l fl oz gal g kg cm mm inch inches x type size new model compatible japanese japan from free shipping amazon " +
   "regular color colors includes included only").split(" "));
+// Tokens per name are cached: the inbox re-matches every item against every open card on each
+// render, and a name's tokens never change. Callers only read the returned Set.
+const MATCH_TOKEN_CACHE = new Map();
 const matchTokens = (s) => {
+  const key = String(s || "");
+  const hit = MATCH_TOKEN_CACHE.get(key);
+  if (hit) return hit;
+  if (MATCH_TOKEN_CACHE.size > 2000) MATCH_TOKEN_CACHE.clear();
+  const out = matchTokensRaw(key);
+  MATCH_TOKEN_CACHE.set(key, out);
+  return out;
+};
+const matchTokensRaw = (s) => {
   const t = String(s || "").normalize("NFKC").toLowerCase();
   const out = new Set();
   (t.match(/[a-z]+|[぀-ヿ㐀-鿿]+/g) || []).forEach((w) => {
@@ -7291,10 +7329,17 @@ async function saveOrderLines(recs) {
   return { ok: !error, error: error && error.message };
 }
 // An expense that already looks like this purchase: same amount, a few days around the order.
-const orderDupOf = (expenses, amount, day) => {
+// `byAmount` is expensesByAmount(expenses), built once per expense list rather than scanning
+// every expense for every item on every keystroke.
+const expensesByAmount = (expenses) => {
+  const m = new Map();
+  (expenses || []).forEach((e) => { const k = Number(e.amount); if (!m.has(k)) m.set(k, []); m.get(k).push(e); });
+  return m;
+};
+const orderDupOf = (byAmount, amount, day) => {
   if (!(amount > 0) || !day) return null;
   const t = Date.parse(day);
-  return (expenses || []).find((e) => Number(e.amount) === Number(amount) && Math.abs(Date.parse(e.date) - t) <= 10 * 864e5) || null;
+  return (byAmount.get(Number(amount)) || []).find((e) => Math.abs(Date.parse(e.date) - t) <= 10 * 864e5) || null;
 };
 
 function OrdersInboxView({ orders, reload, expenses, purchaseReqs, reloadPurchases }) {
@@ -7314,7 +7359,13 @@ function OrdersInboxView({ orders, reload, expenses, purchaseReqs, reloadPurchas
     ...ownReqs.filter((q) => q.status === "open").map((q) => ({ key: "own:" + q.id, kind: "own", req: q, name: q.item, label: REQ_SOURCES[q.source] || "Wishlist", cap: q.budget_cap, category: null })),
     ...(purchaseReqs || []).flatMap((q) => (q.items || []).filter((it) => it && it.name).map((it) => ({ key: "hub:" + q.id, kind: "hub", req: q, name: it.name, label: senderLabel(q.from), cap: lineYen(it), category: it.category || null }))),
   ], [ownReqs, purchaseReqs]);
-  const matchesFor = (name) => { const seen = new Set(); return cards.filter((c) => !seen.has(c.key) && isSameProduct(name, c.name) && seen.add(c.key)); };
+  // Matches per item name, recomputed only when the open cards change (not on each keystroke).
+  const matchCache = useMemo(() => new Map(), [cards]);
+  const matchesFor = (name) => {
+    if (!matchCache.has(name)) { const seen = new Set(); matchCache.set(name, cards.filter((c) => !seen.has(c.key) && isSameProduct(name, c.name) && seen.add(c.key))); }
+    return matchCache.get(name);
+  };
+  const expByAmount = useMemo(() => expensesByAmount(expenses), [expenses]);
 
   const draftOf = (r) => {
     if (drafts[r.seq]) return drafts[r.seq];
@@ -7498,7 +7549,7 @@ function OrdersInboxView({ orders, reload, expenses, purchaseReqs, reloadPurchas
                           <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Close {c.label} card: {c.name}{c.cap != null ? ` (was ${fmtIn(c.cap, cur(r))})` : ""}</span>
                         </label>
                       ))}
-                      {(!perItem || !off) && dupNote(orderDupOf(expenses, perItem ? Number(asciiDigits(ln.price)) : it.price, day))}
+                      {(!perItem || !off) && dupNote(orderDupOf(expByAmount, perItem ? Number(asciiDigits(ln.price)) : it.price, day))}
                     </div>
                   );
                 })}
@@ -7508,7 +7559,7 @@ function OrdersInboxView({ orders, reload, expenses, purchaseReqs, reloadPurchas
                 {!perItem && <input type="text" inputMode="numeric" value={dr.amount} onChange={(e) => setDraft(r, { amount: e.target.value })} disabled={b} placeholder="Amount" aria-label="Amount" style={{ ...inputStyle, width: 110, flexShrink: 0, padding: "9px 10px", fontSize: 13, fontWeight: 600 }} />}
               </div>
               {!perItem && catSelect(dr.category, (v) => setDraft(r, { category: v }), b, { width: "100%", padding: "9px 10px", fontSize: 13, marginBottom: 6 })}
-              {!perItem && dupNote(orderDupOf(expenses, Number(asciiDigits(dr.amount)), day))}
+              {!perItem && dupNote(orderDupOf(expByAmount, Number(asciiDigits(dr.amount)), day))}
               {skipping && skipping.seq === r.seq ? (
                 <div style={{ marginTop: 6, background: theme.cardBg, borderRadius: 10, padding: "10px 11px", display: "flex", flexDirection: "column", gap: 7 }}>
                   <div style={{ fontSize: 12, fontWeight: 600, color: "#fff" }}>Why skip this order?</div>
@@ -7902,8 +7953,8 @@ function SentToWFView() {
               <div><label style={lbl}>Category</label><select value={lg.category} onChange={(ev) => setLg((x) => ({ ...x, category: ev.target.value }))} style={field}>{[...new Set([...categories.map((c) => c.name), catFor(p)])].map((n) => <option key={n} value={n}>{n}</option>)}</select></div>
               <div><label style={lbl}>Date</label><input type="date" value={lg.date} max={ymdToday()} onChange={(ev) => setLg((x) => ({ ...x, date: ev.target.value }))} style={field} /></div>
             </div>
-            <div style={{ fontSize: 10.5, color: theme.textDim }}>{p.budget_cap != null ? `Pre-filled with the ${sym(p)}${Number(p.budget_cap).toLocaleString()} cap — change it to what you paid.` : "Enter what you paid."} Notes: {p.item} ×{qtyText(p)}</div>
-            {p.budget_cap != null && Number(lg.amount) > Number(p.budget_cap) && <div style={{ fontSize: 11, color: theme.warning }}>Over the cap — logs anyway.</div>}
+            <div style={{ fontSize: 10.5, color: theme.textDim }}>{p.budget_cap != null ? `Pre-filled with the ${sym(p)}${Number(p.budget_cap).toLocaleString()} wishlist price — change it to what you paid.` : "Enter what you paid."} Notes: {p.item} ×{qtyText(p)}</div>
+            {p.budget_cap != null && Number(lg.amount) > Number(p.budget_cap) && <div style={{ fontSize: 11, color: theme.warning }}>Above the wishlist price — logs anyway.</div>}
             <div style={{ display: "flex", gap: 8 }}>
               <button disabled={busy} onClick={() => logExpense(e)} style={{ ...miniBtn(theme.primary, "#fff"), flex: 1, padding: 10, opacity: busy ? 0.6 : 1 }}>{busy ? "Adding…" : "Confirm — add expense"}</button>
               <button onClick={() => setLogId(null)} style={{ ...miniBtn(theme.inputBg, theme.text), padding: "10px 14px" }}>Back</button>

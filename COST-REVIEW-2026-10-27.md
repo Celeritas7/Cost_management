@@ -1,6 +1,6 @@
 # COST · code review · online orders v61–v66 · 2026-10-27
 
-**Scope:** every app change since the orders inbox was added (`0de9487^..HEAD`): `js/app.jsx`, `js/cost-adapter.js`, `migrations/017_order_lines.sql`. All of it is merged into `main` (PRs #4–#7). **Bugs 1–4 were fixed in v67 (2026-11-03)**; see the end of this file.
+**Scope:** every app change since the orders inbox was added (`0de9487^..HEAD`): `js/app.jsx`, `js/cost-adapter.js`, `migrations/017_order_lines.sql`. All of it is merged into `main` (PRs #4–#7). **Bugs 1–4 were fixed in v67 (2026-11-03); 5–7 in v68**; see the end of this file.
 **Already-logged data is correct.** The 11 orders, their 25 lines and the 19 linked expenses were checked live and match. None of the issues below changed anything that is in the database today.
 
 ## Real bugs
@@ -47,9 +47,9 @@
 ## A · Online orders (Amazon)
 | Item | Owner | Status |
 |---|---|---|
-| Fix review bugs 1–4 above | Cost | **done in v67**, waiting for merge |
-| Performance 6–7 | Cost | open, low |
-| Shop-picker duplicate (5) | person / Cost | open, low |
+| Fix review bugs 1–4 above | Cost | **done in v67**, merged (PR #9) |
+| Performance 6–7 | Cost | **done in v68** |
+| Shop-picker duplicate (5) | Cost | **done in v68** (see below: name-only match kept, on purpose) |
 | Pass `COST-REPLY-amazon-orders.md` (v64–v66 sections) to Akatsuki | person | open |
 | Quick "paid by someone else" options Akatsuki proposed ("Rest: someone else paid", editing a line in history) | — | **not planned**: the person chose Skip-asks-why only |
 | Note on the four Jul 15 lines | person | optional |
@@ -73,7 +73,7 @@ Cost needs no change: it only receives `purchase.detected` from Akatsuki, whiche
 |---|---|
 | Merge the branch (3 note commits + this review; no app change) | open |
 | `migrations/README.md` statuses (005, 011–014, 017 all applied) | **done in v67** |
-| Wishlist card says "cap ¥2,036": rename to "wishlist price … (date)" so an old sale price is not read as agreed | open, small |
+| Wishlist card says "cap ¥2,036": rename to "wishlist price … (date)" so an old sale price is not read as agreed | **done in v68** |
 
 ## E · Parked ideas
 - Stops: show where a stop falls in the day; reminder right after leaving; auto-save a spot once named.
@@ -91,3 +91,16 @@ Cost needs no change: it only receives `purchase.detected` from Akatsuki, whiche
 | 4 | `saveOrderLines` dispatches `ORDER_LINES_EVT` only on success. | Failing upsert with history open → 1 attempt, no loop. |
 
 Cache bumped to `cm-shell-v67`. Not changed: performance items 6–7 and the shop-picker duplicate (5).
+
+---
+
+# v68 · items 5–7 and the wishlist "cap" label (2026-11-03)
+
+| # | Change | Checked |
+|---|---|---|
+| 5 | **The review's fix was wrong.** Live `cost_management_shops` has `shops_user_name_region_uniq (user_id, lower(name), region)`, so a second "Aeon" under Pharmacy cannot exist; matching on name + category would only turn the tick into a "Shop exists" error. The name-only match stays. What changed: the message now says where the shop lives ("Aeon already exists under Supermarket — ticked it (change its category in Shops)"), says "already in <area>" instead of ticking a shop that is already linked, and the picker shows a ticked shop even when the category scope would hide it. | Parse check only; not run in a browser (see below). |
+| 6 | `matchTokens` caches tokens per name; `matchesFor` is cached per name until the open cards change; `orderDupOf` looks up a per-amount index (`expensesByAmount`, memoised on the expense list) instead of scanning every expense. Keystrokes in a price or shop box no longer re-tokenise or re-scan. | Same results by construction (same predicates, cached). |
+| 7 | `orderInbox` reads cancellations plus a **payload-free** list of detected rows (`seq, src_addr, reply->>status, reply->>seen`), then fetches full rows only for candidates: no reply, or not `seen` and `flagged`, or `logged` with a cancellation (keeps the v67 bug-1 fix). The app's `orderIsOpen` still decides. `onOrder` from the consume loop goes through `reloadOrdersSoon`: one read 600 ms after the batch goes quiet, never two at once. | Mock test: rows {unreplied, logged, logged+cancel, flagged, flagged+seen} → returns the unreplied, logged+cancel and flagged rows, 3 reads. Live (SQL): 11 detected rows, 0 candidates, so the inbox is empty as today and the third read is skipped. |
+| — | Wishlist cards: "cap ¥X" → "wishlist price ¥X (Oct 12)", the date being when the card was last set (`updated_at`, else `created_at`). Form label "Budget cap" → "Wishlist price"; "Over the cap" → "Above the … wishlist price (date)". The Weekly Focus "sent" list uses the same wording. The DB column stays `budget_cap`. | Parse check. |
+
+Cache bumped to `cm-shell-v68`. **Not run end to end:** this session cannot reach supabase.co over HTTP (proxy 403), so the app was not loaded in a browser and the PostgREST `reply->>status` select was not tried against the live API (it is standard PostgREST syntax). Worth a quick look after deploy: the Requests tab loads and an order card still shows its wishlist match.
