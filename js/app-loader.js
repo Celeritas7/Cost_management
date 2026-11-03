@@ -5,8 +5,8 @@
  *   1. fetch js/app.jsx (the service worker serves it from its cache);
  *   2. look up the compiled code for exactly this source (FNV-1a hash) in Cache Storage;
  *   3. only on a miss — the first open after an update — load Babel and compile with the
- *      `react` preset alone (JSX → React.createElement; every browser this app runs on
- *      already speaks modern JavaScript), then keep the result;
+ *      `react` preset plus block scoping (JSX → React.createElement, const/let → var as
+ *      before; the rest of env is not needed by any browser this app runs on), then keep it;
  *   4. run it as a classic script, the same global scope text/babel gave it.
  * Edit app.jsx exactly as before: a changed file is a new hash, so it is recompiled once.
  */
@@ -14,6 +14,9 @@
   const BABEL = 'https://cdn.jsdelivr.net/npm/@babel/standalone@7.23.9/babel.min.js';
   const CACHE = 'cm-compiled';           // sw.js keeps this cache across shell versions
   const SRC = 'js/app.jsx';
+  // Bump when the compile options change: it is part of the cache key, so every phone drops a
+  // copy built the old way. v2: block scoping (v72's copies kept `const` and could not start).
+  const COMPILER = 'v2';
 
   const fnv = (s) => {                   // 32-bit FNV-1a over UTF-16 units: fast, no secure context needed
     let h = 0x811c9dc5;
@@ -25,10 +28,14 @@
     el.src = src; el.onload = ok; el.onerror = () => fail(new Error('could not load ' + src));
     document.head.appendChild(el);
   });
+  // An inline script runs synchronously on append, and a SyntaxError or a throw at the top level
+  // stops it before its last line. The flag on that last line tells the loader it really ran.
   const run = (code) => {
+    window.__cmAppRan = false;
     const el = document.createElement('script');
-    el.textContent = code + '\n//# sourceURL=app.jsx.compiled.js';
+    el.textContent = code + '\n;window.__cmAppRan=true;\n//# sourceURL=app.jsx.compiled.js';
     document.body.appendChild(el);
+    return window.__cmAppRan === true;
   };
   const fail = (e) => {
     console.error('[app-loader]', e);
@@ -42,7 +49,7 @@
     const res = await fetch(SRC);
     if (!res.ok) throw new Error(SRC + ' ' + res.status);
     const src = await res.text();
-    const key = new URL('compiled/' + fnv(src) + '.js', location.href).href;
+    const key = new URL('compiled/' + COMPILER + '-' + fnv(src) + '.js', location.href).href;
     let cache = null;
     try { cache = 'caches' in window ? await caches.open(CACHE) : null; } catch (e) { cache = null; }
     let code = null;
@@ -50,7 +57,10 @@
     const fromCache = code != null;
     if (!fromCache) {
       if (!window.Babel) await loadScript(BABEL);
-      code = window.Babel.transform(src, { presets: ['react'], filename: 'app.jsx', compact: true, comments: false }).code;
+      // transform-block-scoping turns const/let into var, as the old env preset did. The app's
+      // top-level names must stay `var`: the Supabase UMD build declares `var supabase`, and a
+      // top-level `const supabase` after it is a SyntaxError that stops the whole app.
+      code = window.Babel.transform(src, { presets: ['react'], plugins: ['transform-block-scoping'], filename: 'app.jsx', compact: true, comments: false }).code;
       if (cache) {
         try {
           // Keep only this build: older compiled copies are dead weight.
@@ -59,7 +69,11 @@
         } catch (e) { console.warn('[app-loader] compiled copy not kept:', e && e.message); }
       }
     }
-    run(code);
+    if (!run(code)) {
+      // Never keep a copy that cannot start: drop it so the next open compiles afresh.
+      try { if (cache) await cache.delete(key); } catch (e) {}
+      throw new Error('the app failed to start (see the console)');
+    }
     window.cmBoot = { fromCache, ms: Math.round(performance.now() - t0) };
     console.log('[app-loader]', fromCache ? 'compiled copy reused' : 'compiled now', window.cmBoot.ms + ' ms');
   }
