@@ -29,7 +29,13 @@
 
 ---
 
-# Pending phases · as of 2026-10-27
+# Pending phases · as of 2026-11-03
+
+## Checked on 2026-11-03
+- Akatsuki has **deleted `super-task` and `smooth-endpoint`** (the uncapped Google Places risk is gone). `fare-lookup` still exists; Cost does not call it.
+- Fares R052 **not started** on the hub: no `akatsuki_stations` table, no `akatsuki_budget_take`.
+- **No new Amazon orders since 2026-10-25.** If anything was ordered since, ask Akatsuki whether the Gmail script is still running.
+- Order lines: 25 rows, unchanged. All 11 orders resolved.
 
 ## Done since the last list
 - Skip asks why (v66): merged, PR #7.
@@ -52,20 +58,23 @@
 | Phase | Owner | Status |
 |---|---|---|
 | Ekispert plan: endpoints, monthly limit, terms | **person** | **open, blocks Akatsuki** |
-| Approve deleting `super-task`, `smooth-endpoint`, `fare-lookup` (`super-task` first: uncapped Google Places, anon-reachable) | **person** | **open** |
+| Approve deleting `fare-lookup` (`super-task` and `smooth-endpoint` are already gone) | **person** | **open** |
 | Pass `COST-REPLY-fares.md` + `COST-fare-engine-data.json` to Akatsuki | person | open |
 | 1 · Build `akatsuki-fare`, stations table, cap, fare-revision vocab | Akatsuki | waiting on the two items above |
 | 2 · Shadow: Cost shows its own fare, asks the hub in the background, logs both (Cost migration 018) | Cost | after phase 1 |
 | 3 · Hub first, Cost engine as fallback | Cost | after the person confirms "mastered" |
 | 4 · Retire Cost's lookup (offline engine stays) | person's decision | — |
 
-## C · Housekeeping
+## C · Yahoo order emails (asked 2026-10-28, not started)
+Cost needs no change: it only receives `purchase.detected` from Akatsuki, whichever mailbox the email came from. Routes, simplest first: (1) switch those shops to the Gmail address; (2) forward Yahoo → Gmail (check what the Yahoo plan allows); (3) Akatsuki reads Yahoo over IMAP with an app password. **Waiting on the person:** which shops' emails land in Yahoo, and yahoo.com or Yahoo! Japan. Then a feasibility prompt like the Amazon one.
+
+## D · Housekeeping
 | Item | Status |
 |---|---|
 | Merge the branch (3 note commits + this review; no app change) | open |
 | `migrations/README.md` still says 013/014/017 "not yet applied": all three are applied | open, small |
 | Wishlist card says "cap ¥2,036": rename to "wishlist price … (date)" so an old sale price is not read as agreed | open, small |
 
-## D · Parked ideas
+## E · Parked ideas
 - Stops: show where a stop falls in the day; reminder right after leaving; auto-save a spot once named.
 - Convert the app to Vite: low priority by the person's choice.
