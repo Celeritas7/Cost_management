@@ -108,18 +108,36 @@
       },
 
       /** Online orders (purchase.detected / purchase.cancelled from `mail`, contract in
-       *  AKATSUKI-REPLY-cost-amazon-orders). Like R013 the list IS the hub rows. Returns
-       *  every detected row, each with the matching cancellation (same addr) or null. */
+       *  AKATSUKI-REPLY-cost-amazon-orders). Like R013 the list IS the hub rows. Returns the
+       *  detected rows that may still be open (the app's orderIsOpen decides), each with the
+       *  matching cancellation (same addr) or null.
+       *  Two light reads first (no payloads), then payloads only for the candidates, so the
+       *  read stays small however many orders have been resolved. A candidate is: no reply
+       *  yet, or a reply not yet `seen` that is `flagged`, or `logged` with a cancellation
+       *  (review bug 1: that counts as flagged even if the flag write never landed). */
       async orderInbox() {
+        const key = (a) => (a && a.source) + ':' + (a && a.order_id);
+        const [cx, dx] = await Promise.all([
+          supabase.from('akatsuki_requests').select('seq,from_app,kind,src_addr,payload,reply,reply_seq,created_at')
+            .eq('to_app', APP).eq('kind', 'purchase.cancelled').order('seq', { ascending: false }).limit(1000),
+          supabase.from('akatsuki_requests').select('seq,src_addr,status:reply->>status,seen:reply->>seen')
+            .eq('to_app', APP).eq('kind', 'purchase.detected').order('seq', { ascending: false }).limit(5000),
+        ]);
+        if (cx.error) throw new Error(cx.error.message);
+        if (dx.error) throw new Error(dx.error.message);
+        const cancelled = {};
+        cx.data.forEach((r) => { if (!cancelled[key(r.src_addr)]) cancelled[key(r.src_addr)] = r; });
+        const seqs = dx.data.filter((r) => {
+          if (!r.status) return true;                       // no reply (or one without a status): let the app decide
+          if (r.seen === 'true') return false;
+          return r.status === 'flagged' || (r.status === 'logged' && !!cancelled[key(r.src_addr)]);
+        }).map((r) => r.seq);
+        if (!seqs.length) return [];
         const { data, error } = await supabase.from('akatsuki_requests')
           .select('seq,from_app,kind,src_addr,payload,reply,reply_seq,created_at')
-          .eq('to_app', APP).in('kind', ['purchase.detected', 'purchase.cancelled'])
-          .order('seq', { ascending: false });
+          .in('seq', seqs).order('seq', { ascending: false });
         if (error) throw new Error(error.message);
-        const key = (a) => (a && a.source) + ':' + (a && a.order_id);
-        const cancelled = {};
-        data.filter((r) => r.kind === 'purchase.cancelled').forEach((r) => { if (!cancelled[key(r.src_addr)]) cancelled[key(r.src_addr)] = r; });
-        return data.filter((r) => r.kind === 'purchase.detected').map((r) => ({ ...r, cancel: cancelled[key(r.src_addr)] || null }));
+        return data.map((r) => ({ ...r, cancel: cancelled[key(r.src_addr)] || null }));
       },
 
       /** Resolve one detected order. Acked by seq so the reply and, when logged, the
