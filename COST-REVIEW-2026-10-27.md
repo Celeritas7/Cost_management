@@ -1,6 +1,6 @@
 # COST · code review · online orders v61–v66 · 2026-10-27
 
-**Scope:** every app change since the orders inbox was added (`0de9487^..HEAD`): `js/app.jsx`, `js/cost-adapter.js`, `migrations/017_order_lines.sql`. All of it is merged into `main` (PRs #4–#7). **Nothing has been fixed yet;** this is the report.
+**Scope:** every app change since the orders inbox was added (`0de9487^..HEAD`): `js/app.jsx`, `js/cost-adapter.js`, `migrations/017_order_lines.sql`. All of it is merged into `main` (PRs #4–#7). **Bugs 1–4 were fixed in v67 (2026-11-03)**; see the end of this file.
 **Already-logged data is correct.** The 11 orders, their 25 lines and the 19 linked expenses were checked live and match. None of the issues below changed anything that is in the database today.
 
 ## Real bugs
@@ -47,7 +47,7 @@
 ## A · Online orders (Amazon)
 | Item | Owner | Status |
 |---|---|---|
-| Fix review bugs 1–4 above | Cost | **open, next** |
+| Fix review bugs 1–4 above | Cost | **done in v67**, waiting for merge |
 | Performance 6–7 | Cost | open, low |
 | Shop-picker duplicate (5) | person / Cost | open, low |
 | Pass `COST-REPLY-amazon-orders.md` (v64–v66 sections) to Akatsuki | person | open |
@@ -72,9 +72,22 @@ Cost needs no change: it only receives `purchase.detected` from Akatsuki, whiche
 | Item | Status |
 |---|---|
 | Merge the branch (3 note commits + this review; no app change) | open |
-| `migrations/README.md` still says 013/014/017 "not yet applied": all three are applied | open, small |
+| `migrations/README.md` statuses (005, 011–014, 017 all applied) | **done in v67** |
 | Wishlist card says "cap ¥2,036": rename to "wishlist price … (date)" so an old sale price is not read as agreed | open, small |
 
 ## E · Parked ideas
 - Stops: show where a stop falls in the day; reminder right after leaving; auto-save a spot once named.
 - Convert the app to Vite: low priority by the person's choice.
+
+---
+
+# v67 · fixes for bugs 1–4 (2026-11-03)
+
+| # | Fix | Checked |
+|---|---|---|
+| 1 | `orderFlagged()`: a `logged` reply **plus a cancel row** counts as flagged, so the warning no longer depends on the flag write landing. `orderIsOpen` and the card use it; "OK, got it" writes `seen` as before. | Logged order + cancel row with no `flagged` reply → warning shown; OK acks `flagged` + `seen`. |
+| 2 | `orderItems()` takes each line's index **before** dropping nameless lines; `expFor` looks lines up by index, not array position; the row divider uses the row number. | `[A, (no name), B]` per item → lines 0 and 2 in the reply and in `order_lines`. |
+| 3 | `log`, `confirmSkip`, `seenFlag` and `dismissPast` reset `busy` in `finally`. A v61 bare-id mark is turned into the `{ids, lines}` shape instead of crashing. | Reply throws → card stays usable, message shown, retry reuses the expense (no second insert). Mark `{seq: 777}` → no insert, reply carries 777. |
+| 4 | `saveOrderLines` dispatches `ORDER_LINES_EVT` only on success. | Failing upsert with history open → 1 attempt, no loop. |
+
+Cache bumped to `cm-shell-v67`. Not changed: performance items 6–7 and the shop-picker duplicate (5).
