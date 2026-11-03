@@ -144,3 +144,6 @@ Cache bumped to `cm-shell-v68`. **Not run end to end:** this session cannot reac
 - **Fix:** the loader compiles with `transform-block-scoping` as well (`const`/`let` → `var`, as before v72); the cache key carries a compiler version (`v2`), so phones drop the broken v72 copy. Compile time is about 1.1 s instead of 0.8 s, once per update.
 - **Safety net:** the compiled code ends by setting a flag. If it did not run to the end, the loader deletes that copy and shows "could not start" instead of a blank page.
 - **Checked:** with supabase-js 2.118, three opens reach the sign-in screen (1.3 s first, then 0.12 s). A negative copy compiled the v72 way reproduces the live error and now shows the message.
+
+## v74 · library versions pinned (2026-11-03)
+`index.html` loads exact versions: React / ReactDOM / react-is **18.3.1**, prop-types **15.8.1**, supabase-js **2.118.0** (what `@18`, `@15` and `@2` resolved to on the live site, and what v73 was tested with). Recharts 2.15.3 and Babel 7.23.9 were already pinned. An update now happens only when someone changes a version and tests the app. Not pinnable from here: `akatsuki-broadcast.js`, served by Akatsuki's own site.
