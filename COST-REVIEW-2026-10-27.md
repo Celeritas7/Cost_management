@@ -138,3 +138,9 @@ Cache bumped to `cm-shell-v68`. **Not run end to end:** this session cannot reac
 | CPU slowed 4× (≈ mid phone) | 27.3 s | 4.5 s | **0.38 s** |
 
 **Not measured:** the data load after sign-in (6 queries in parallel, expenses in 2 pages of 1000, to the Mumbai region). The app shows "Loading…" until all of it arrives. Next step if opening still feels slow: show the last copy at once and refresh it in the background.
+
+## v73 · fix: v72 left the site blank (2026-11-03)
+- **Cause:** the page loads `@supabase/supabase-js@2` unpinned. The current 2.118 UMD build declares `var supabase`, and the app's top-level `const supabase` after it is a SyntaxError (`Identifier 'supabase' has already been declared`), so nothing rendered. The old `env` preset had turned every `const` into `var`, which hid the clash. v72's test used an older supabase-js whose UMD did not declare a `var`.
+- **Fix:** the loader compiles with `transform-block-scoping` as well (`const`/`let` → `var`, as before v72); the cache key carries a compiler version (`v2`), so phones drop the broken v72 copy. Compile time is about 1.1 s instead of 0.8 s, once per update.
+- **Safety net:** the compiled code ends by setting a flag. If it did not run to the end, the loader deletes that copy and shows "could not start" instead of a blank page.
+- **Checked:** with supabase-js 2.118, three opens reach the sign-in screen (1.3 s first, then 0.12 s). A negative copy compiled the v72 way reproduces the live error and now shows the message.
