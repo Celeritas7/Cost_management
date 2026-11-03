@@ -7215,7 +7215,10 @@ const ORDER_SOURCES = { amazon: "Amazon" };
 const orderSourceName = (src) => ORDER_SOURCES[src] || (src ? src[0].toUpperCase() + src.slice(1) : "Online order");
 // Open: never answered, or logged-then-cancelled and not yet acknowledged.
 // A cancellation that arrives before any answer settles the row (see cost-adapter).
-const orderIsOpen = (r) => r.reply ? (r.reply.status === "flagged" && !r.reply.seen) : !r.cancel;
+// "Logged, then cancelled" is read from the cancel row itself, not only from the 'flagged' reply:
+// if writing that reply failed, the cancellation would otherwise vanish without a warning.
+const orderFlagged = (r) => !!r.reply && (r.reply.status === "flagged" || (r.reply.status === "logged" && !!r.cancel));
+const orderIsOpen = (r) => r.reply ? (orderFlagged(r) && !r.reply.seen) : !r.cancel;
 // Hub timestamps (ordered_at, cancelled_at) are UTC ISO strings. The expense date is the
 // calendar day where the order was placed — the shop's zone, not the device's and not the
 // UTC date part (an order at 08:00 JST is still the previous day in UTC).
@@ -7227,8 +7230,11 @@ const orderDay = (iso, currency) => {
 };
 const orderDate = (p) => (p && orderDay(p.ordered_at, p.currency || "JPY")) || ymdToday();
 // Lines as sent by the hub: [{name, qty, price}], price = the JPY amount for the whole line.
-const orderItems = (p) => (Array.isArray(p && p.items) ? p.items : []).filter((it) => it && it.name)
-  .map((it, i) => ({ i, name: String(it.name), qty: Number(it.qty) || 1, price: it.price == null ? null : Number(it.price) }));
+// i is the line's position in payload.items (what the hub reply and order_lines refer to), so it is
+// taken before nameless lines are dropped.
+const orderItems = (p) => (Array.isArray(p && p.items) ? p.items : [])
+  .map((it, i) => (it && it.name ? { i, name: String(it.name), qty: Number(it.qty) || 1, price: it.price == null ? null : Number(it.price) } : null))
+  .filter(Boolean);
 // Per-item logging is only trusted when the lines add up to the order total. One live order
 // (249-5735958) carries lines from elsewhere in the email; those must not become expenses silently.
 const orderItemsSum = (items) => items.reduce((s, it) => s + (Number(it.price) || 0), 0);
@@ -7278,7 +7284,9 @@ async function saveOrderLines(recs) {
   if (!all.length) return { ok: true };
   const { error } = await supabase.from(ORDER_LINES_T).upsert(all.map((r) => ({ ...r, updated_at: new Date().toISOString() })), { onConflict: "id" });
   try { localStorage.setItem(ORDER_LINES_PENDING, JSON.stringify(error ? all.slice(-500) : [])); } catch (e) {}
-  window.dispatchEvent(new Event(ORDER_LINES_EVT));
+  // Only a successful save is announced: the history view reloads on this event and retries
+  // pending rows, so announcing a failure would loop for as long as the save keeps failing.
+  if (!error) window.dispatchEvent(new Event(ORDER_LINES_EVT));
   if (error) console.warn("[orders] lines kept on this device:", error.message, missingTable(error.message) ? "— run migrations/017_order_lines.sql" : "");
   return { ok: !error, error: error && error.message };
 }
@@ -7343,17 +7351,21 @@ function OrdersInboxView({ orders, reload, expenses, purchaseReqs, reloadPurchas
       : [{ i: null, name: null, amount: Number(asciiDigits(dr.amount)), category: dr.category || "Other", notes: [oid, items.map((it) => it.name + (it.qty > 1 ? " ×" + it.qty : "")).join(", ")].filter(Boolean).join(" — ").slice(0, 500) }];
     if (!rows.length || rows.some((x) => !(x.amount > 0))) { setMsg(rows.length ? "Every ticked item needs a price above zero." : "Tick at least one item."); return; }
     setBusy(r.seq); setMsg("");
+    try {
     let mark = orderMark(r.seq);
+    // v61 stored a bare expense id for a whole-order log; give it the lines shape used since v64.
+    if (mark && !Array.isArray(mark.lines)) mark = { ids: mark.ids, lines: [{ index: null, expense_id: mark.ids[0], amount: rows[0].amount, category: rows[0].category }] };
     if (!mark) {
       const recs = rows.map((x) => ({ region: cur(r), date: day, category: x.category, shop, amount: x.amount, notes: x.notes, expense_type: "normal", tags: "" }));
       const { data, error } = await supabase.from("cost_management_expenses").insert(recs).select("id");
-      if (error || !data || data.length !== recs.length) { setBusy(null); setMsg(error ? error.message : "Couldn't save the expenses."); return; }
+      if (error || !data || data.length !== recs.length) { setMsg(error ? error.message : "Couldn't save the expenses."); return; }
       mark = { ids: data.map((d) => d.id), lines: rows.map((x, k) => ({ index: x.i, expense_id: data[k].id, amount: x.amount, category: x.category })) };
       setOrderMark(r.seq, mark);
     }
     // Close the ticked wishlist / purchase cards with the expense that paid for them — so the
     // purchase is counted once, at the real price. Whole-order mode closes them with the one expense.
-    const expFor = (name) => { const ln = mark.lines.find((l) => l.index != null && items[l.index] && isSameProduct(items[l.index].name, name)); return ln || mark.lines[0]; };
+    const itemAt = (idx) => items.find((it) => it.i === idx);
+    const expFor = (name) => { const ln = mark.lines.find((l) => l.index != null && itemAt(l.index) && isSameProduct(itemAt(l.index).name, name)); return ln || mark.lines[0]; };
     const closed = [], problems = [];
     for (const c of cards.filter((c) => dr.close[c.key] && items.some((it) => (dr.mode === "order" || (dr.lines[it.i] && dr.lines[it.i].on)) && isSameProduct(it.name, c.name)))) {
       const ln = expFor(c.name);
@@ -7375,24 +7387,28 @@ function OrdersInboxView({ orders, reload, expenses, purchaseReqs, reloadPurchas
     if (ok && !problems.length) setOrderMark(r.seq, null);
     if (problems.length) setMsg("Expenses saved, but " + problems.join("; ") + " — tap Log again to retry.");
     else if (!ok) setMsg((m) => m + " — the expenses are saved; tap Log again to retry.");
-    setBusy(null); await fetchData(); reload(); if (closed.some((c) => c.app !== "cost") && reloadPurchases) reloadPurchases();
+    await fetchData(); reload(); if (closed.some((c) => c.app !== "cost") && reloadPurchases) reloadPurchases();
+    } catch (e) { console.error("[orders] log failed", e); setMsg("Something went wrong: " + (e && e.message || e) + " — tap Log again; nothing is saved twice."); }
+    finally { setBusy(null); }
   };
   // Skip asks why: someone else paid (who, optional) or not mine. Every line is kept in Cost either way.
   const confirmSkip = async (r) => {
     if (busy || !skipping || skipping.seq !== r.seq) return;
     const why = skipping.why, note = (skipping.note || "").trim() || null;
     setBusy(r.seq); setMsg("");
-    await saveOrderLines(lineRecords(r, () => ({ status: why, note: why === "paid_by_other" ? note : null })));
-    const ok = await resolve(r, "dismissed", { extra: { reason: why, ...(why === "paid_by_other" && note ? { note } : {}) } });
-    setBusy(null); if (ok) setSkipping(null); reload();
+    try {
+      await saveOrderLines(lineRecords(r, () => ({ status: why, note: why === "paid_by_other" ? note : null })));
+      const ok = await resolve(r, "dismissed", { extra: { reason: why, ...(why === "paid_by_other" && note ? { note } : {}) } });
+      if (ok) setSkipping(null); reload();
+    } catch (e) { setMsg("Couldn't skip: " + (e && e.message || e)); } finally { setBusy(null); }
   };
-  const seenFlag = async (r) => { if (busy) return; setBusy(r.seq); await resolve(r, "flagged", { expenseIds: r.reply.expense_ids, extra: { ...r.reply, seen: true } }); setBusy(null); reload(); };
+  const seenFlag = async (r) => { if (busy) return; setBusy(r.seq); try { await resolve(r, "flagged", { expenseIds: r.reply.expense_ids, extra: { ...r.reply, seen: true } }); reload(); } finally { setBusy(null); } };
   const past = orders.filter((r) => !r.reply && r.payload.backfill);
   const dismissPast = async () => {
     if (busy || !confirm(`Dismiss all ${past.length} past orders without logging them?`)) return;
     setBusy("all");
-    for (const r of past) { await saveOrderLines(lineRecords(r, () => ({ status: "skip" }))); await resolve(r, "dismissed", { extra: { reason: "backfill" } }); }
-    setBusy(null); reload();
+    try { for (const r of past) { await saveOrderLines(lineRecords(r, () => ({ status: "skip" }))); await resolve(r, "dismissed", { extra: { reason: "backfill" } }); } reload(); }
+    catch (e) { setMsg("Stopped part-way: " + (e && e.message || e)); } finally { setBusy(null); }
   };
 
   const btn = { padding: "8px 11px", borderRadius: 9, cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit", border: `1px solid ${theme.cardBorder}`, background: "transparent", color: theme.textMuted };
@@ -7424,7 +7440,7 @@ function OrdersInboxView({ orders, reload, expenses, purchaseReqs, reloadPurchas
               <div style={{ fontSize: 10.5, color: theme.textDim }}>Order {p.order_id}{items.length ? ` · ${items.length} item${items.length === 1 ? "" : "s"}` : ""}</div>
             </div>
           );
-          if (r.reply && r.reply.status === "flagged") return (
+          if (orderFlagged(r)) return (
             <div key={r.seq} style={{ borderRadius: 12, background: theme.inputBg, boxShadow: "inset 0 0 0 1px rgba(239,68,68,0.45)", padding: "11px 12px", opacity: b ? 0.6 : 1 }}>
               {head}
               <div style={{ fontSize: 12, color: theme.warning, marginBottom: 8 }}>⚠ Logged as an expense, but this order was cancelled{r.cancel && r.cancel.payload && r.cancel.payload.refund_total != null ? ` (refund ${fmtIn(r.cancel.payload.refund_total, cur(r))})` : ""}. The expense is still there — delete or edit it in History if needed.</div>
@@ -7449,10 +7465,10 @@ function OrdersInboxView({ orders, reload, expenses, purchaseReqs, reloadPurchas
                 <div style={{ fontSize: 11, color: theme.warning, marginBottom: 8 }}>⚠ The items add up to {fmtIn(orderItemsSum(items), cur(r))}, but the order total is {fmtIn(p.total, cur(r))} — some lines may belong to another order. Untick those before logging per item.</div>
               )}
               <div style={{ display: "flex", flexDirection: "column", gap: 7, marginBottom: 8 }}>
-                {items.map((it) => {
+                {items.map((it, row) => {
                   const ln = dr.lines[it.i] || {}, m = matchesFor(it.name), off = perItem && !ln.on;
                   return (
-                    <div key={it.i} style={{ borderTop: it.i ? `1px solid ${theme.cardBorder}` : "none", paddingTop: it.i ? 7 : 0, minWidth: 0 }}>
+                    <div key={it.i} style={{ borderTop: row ? `1px solid ${theme.cardBorder}` : "none", paddingTop: row ? 7 : 0, minWidth: 0 }}>
                       <div style={{ display: "flex", alignItems: "flex-start", gap: 7, minWidth: 0 }}>
                         {perItem && <input type="checkbox" checked={!!ln.on} onChange={(e) => setLine(r, it.i, { on: e.target.checked })} disabled={b} style={{ marginTop: 2, flexShrink: 0, width: 16, height: 16 }} aria-label={"Log " + it.name} />}
                         <div style={{ flex: 1, minWidth: 0, opacity: off ? 0.5 : 1 }}>

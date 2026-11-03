@@ -60,14 +60,17 @@ order by ordinal_position;
 | `001_rules_and_pending.sql` | yes |
 | `002_region.sql` | yes |
 | `003_triggers.sql` | yes |
-| `005_fare_lookup_cache.sql` | **no** — 008 skips the table; safe to run any time |
+| `005_fare_lookup_cache.sql` | yes (table exists, checked 2026-11-03; currently empty) |
 | `006_fare_book.sql` | yes |
 | `007_tokyo_fare_seed.sql` | yes |
 | `008_auth_ownership.sql` | yes |
 | `009_areas.sql` | yes (file reconstructed after the fact) |
 | `010_area_points.sql` | yes (file reconstructed after the fact) |
-| `011_stops.sql` | **no — run it** |
-| `012_places_budget.sql` | **no — run it** |
+| `011_stops.sql` | yes (tables exist, checked 2026-11-03; file not in this repo) |
+| `012_places_budget.sql` | yes (tables exist, checked 2026-11-03; file not in this repo; no longer read — places moved to Akatsuki) |
+| `013_requests.sql` | yes (checked 2026-11-03) |
+| `014_hub_ids_place_id.sql` | yes (checked 2026-11-03) |
+| `017_order_lines.sql` | yes (applied by the owner 2026-10-24) |
 
 ## Why 000 fails if you run it now
 
@@ -91,12 +94,12 @@ exist and to pick them up on a later run.
 
 ## 013 · requests (v30)
 
-`013_requests.sql` — **not yet applied.** Run it once in the Supabase SQL editor. Until then the inbox keeps requests on the device and still publishes to the hub; they are pushed up on the first launch after 013 exists.
+`013_requests.sql` — **applied** (checked 2026-11-03). Before it ran, the inbox keeps requests on the device and still publishes to the hub; they are pushed up on the first launch after 013 exists.
 
 ## 014 · hub ids + place_id (v49, R018 step 1)
 
-`014_hub_ids_place_id.sql` — **not yet applied.** Drops the FK from `cost_management_shop_locations.area_id` to `cost_management_areas` (areas now live in Akatsuki) and adds `cost_management_shops.place_id`. `area_id` stays uuid. Re-runnable, deletes nothing. Until it runs: links to the copied areas still work; linking a shop to an area *created in the hub* fails on the FK; picked Google place ids are not stored (console warning only). Live ids are **uuid** — 009/010 here say bigint because they were reconstructed; the live schema wins. Phase 15c and Phase 20 move to 015 / 016.
+`014_hub_ids_place_id.sql` — **applied** (checked 2026-11-03: FK dropped, `place_id` present). Drops the FK from `cost_management_shop_locations.area_id` to `cost_management_areas` (areas now live in Akatsuki) and adds `cost_management_shops.place_id`. `area_id` stays uuid. Re-runnable, deletes nothing. Before it ran: links to the copied areas still work; linking a shop to an area *created in the hub* fails on the FK; picked Google place ids are not stored (console warning only). Live ids are **uuid** — 009/010 here say bigint because they were reconstructed; the live schema wins. Phase 15c and Phase 20 move to 015 / 016.
 
 ## 017 · order lines (v65)
 
-`017_order_lines.sql` — **not yet applied.** Creates `cost_management_order_lines`: one row per line of an online order (Amazon via Akatsuki), with what happened to it (`logged` with its `expense_id`, `paid_by_other` with an optional note, or `skip`). Akatsuki purges item names from its rows 30 days after an order is resolved, so this table is the long-term record. It sits behind the Requests tab's "Past online orders" list. Owner-scoped RLS, re-runnable. Until it runs, lines are kept on the device (`cm_order_lines_pending`) and pushed on the next save. Numbered 017 because 015/016 are reserved above.
+`017_order_lines.sql` — **applied** (2026-10-24). Creates `cost_management_order_lines`: one row per line of an online order (Amazon via Akatsuki), with what happened to it (`logged` with its `expense_id`, `paid_by_other` with an optional note, or `skip`). Akatsuki purges item names from its rows 30 days after an order is resolved, so this table is the long-term record. It sits behind the Requests tab's "Past online orders" list. Owner-scoped RLS, re-runnable. Had it been missing, lines would have waited on the device (`cm_order_lines_pending`) and pushed on the next save. Numbered 017 because 015/016 are reserved above.
