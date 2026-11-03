@@ -1,5 +1,5 @@
 const SUPABASE_URL = "https://wylxvmkcrexwfpjpbhyy.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind5bHh2bWtjcmV4d2ZwanBiaHl5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg2MzkxMDYsImV4cCI6MjA4NDIxNTEwNn0.6Bxo42hx4jwlJGWnfjiTpiDUsYfc1QLTN3YtrU1efak";
+const SUPABASE_KEY = "sb_publishable_e3pDOuxIdstaC7s0a680kQ_R10TrAyv";
 // persistSession keeps you signed in across launches; autoRefreshToken
 // rotates the access token silently so a 30-day session never expires
 // mid-session. detectSessionInUrl handles the Google OAuth redirect back.
@@ -7,6 +7,8 @@ const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: "pkce" },
   global: { headers: { "x-akatsuki-app": "cost" } }, // Akatsuki hub: identifies this app on every request
 });
+// Akatsuki hub: shows any due broadcast over the app (reads only the signed-in user's rows).
+if (window.AkatsukiBroadcast) window.AkatsukiBroadcast(supabase, 'cost').start();
 // Redirect back to WHEREVER the app is being used, not a hardcoded host.
 // A fixed URL breaks PKCE: the code verifier is written to localStorage on
 // the origin that started the sign-in, so sending localhost's callback to
