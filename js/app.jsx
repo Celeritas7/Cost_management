@@ -2277,6 +2277,7 @@ function CalendarView({ allExpenses = [], shopFilter = null, setShopFilter = () 
   const [picked, setPicked] = useState([]);
   const [batchOpen, setBatchOpen] = useState(false);
   const [batchAmts, setBatchAmts] = useState({});
+  const [batchHomeCooked, setBatchHomeCooked] = useState([]);
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchMsg, setBatchMsg] = useState("");
   const batchRefs = useRef({});
@@ -2409,7 +2410,7 @@ function CalendarView({ allExpenses = [], shopFilter = null, setShopFilter = () 
     setHomeCookedDates((data || []).map(row => row.lunch_date));
   }, [supabase]);
   useEffect(() => { loadHomeCooked(); }, [loadHomeCooked]);
-  const saveHomeCooked = async (dates) => {
+  const saveHomeCooked = async (dates, { quiet = false } = {}) => {
     const uniqueDates = [...new Set(dates)].filter(Boolean);
     if (!uniqueDates.length || homeCookedBusy) return false;
     setHomeCookedBusy(true); setHomeCookedError("");
@@ -2427,7 +2428,7 @@ function CalendarView({ allExpenses = [], shopFilter = null, setShopFilter = () 
       return false;
     }
     setHomeCookedDates(current => [...new Set([...current, ...uniqueDates])].sort());
-    notify("success", uniqueDates.length === 1 ? "Home-cooked lunch saved" : uniqueDates.length + " home-cooked lunches saved");
+    if (!quiet) notify("success", uniqueDates.length === 1 ? "Home-cooked lunch saved" : uniqueDates.length + " home-cooked lunches saved");
     return true;
   };
   const removeHomeCooked = async (date) => {
@@ -2456,27 +2457,79 @@ function CalendarView({ allExpenses = [], shopFilter = null, setShopFilter = () 
   const toggleDay = (iso) => setPicked(p => p.indexOf(iso) >= 0 ? p.filter(d => d !== iso) : [...p, iso]);
   const pickedSorted = useMemo(() => [...picked].sort(), [picked]);
   const pickedOffMonth = picked.filter(d => d.slice(0,7) !== `${viewDate.year}-${String(viewDate.month+1).padStart(2,"0")}`).length;
-  const exitMulti = () => { setMultiMode(false); setPicked([]); setBatchOpen(false); setBatchAmts({}); setBatchMsg(""); };
+  const exitMulti = () => { setMultiMode(false); setPicked([]); setBatchOpen(false); setBatchAmts({}); setBatchHomeCooked([]); setBatchMsg(""); };
   // Changing or clearing the shop mid-pick would write the old picks against a new shop — drop them.
   useEffect(() => { if (multiMode) exitMulti(); }, [shopFilter]);
   const pickEmptyThisMonth = () => { const out = []; for (let d = 1; d <= daysInMonth; d++) { const iso = isoOf(d); if (!matchedByDate[iso]) out.push(iso); } setPicked(out); };
-  const batchTotal = pickedSorted.reduce((s, d) => s + (Number(batchAmts[d]) || 0), 0);
-  const batchCount = pickedSorted.filter(d => Number(batchAmts[d]) > 0).length;
-  const fillAll = (v) => { const next = {}; pickedSorted.forEach(d => { next[d] = String(v); }); setBatchAmts(next); };
-  const focusNext = (iso) => { const i = pickedSorted.indexOf(iso); const nx = pickedSorted[i + 1]; if (nx && batchRefs.current[nx]) batchRefs.current[nx].focus(); };
+  const batchLunchDates = pickedSorted.filter(date => batchHomeCooked.includes(date));
+  const batchPaidDates = pickedSorted.filter(date => !batchHomeCooked.includes(date));
+  const batchExpenseDates = batchPaidDates.filter(date => Number(batchAmts[date]) > 0);
+  const batchTotal = batchExpenseDates.reduce((sum, date) => sum + Number(batchAmts[date]), 0);
+  const batchCount = batchExpenseDates.length + batchLunchDates.length;
+  const batchSaving = batchBusy || homeCookedBusy;
+  const toggleBatchLunch = (date) => {
+    setBatchHomeCooked(dates => dates.includes(date) ? dates.filter(day => day !== date) : [...dates, date]);
+  };
+  const fillAll = (value) => {
+    setBatchAmts(amounts => {
+      const next = { ...amounts };
+      batchPaidDates.forEach(date => { next[date] = String(value); });
+      return next;
+    });
+  };
+  const focusNext = (date) => {
+    const next = batchPaidDates[batchPaidDates.indexOf(date) + 1];
+    if (next) batchRefs.current[next]?.focus();
+  };
   const saveBatch = async () => {
-    if (!batchCount || batchBusy) return;
-    setBatchBusy(true); setBatchMsg("");
-    let ok = 0; const failed = []; let lastErr = "";
-    for (const d of pickedSorted) {
-      const n = Number(batchAmts[d]); if (!(n > 0)) continue;
-      const res = await insertExpense({ region: currency, date: d, category: quickCat, shop: quickShop, amount: n, notes: "", expense_type: "normal", tags: "" }, { quiet: true });
-      if (res && res.ok) ok++; else { failed.push(d); lastErr = (res && res.error) || ""; }
+    if (!batchCount || batchSaving) return;
+    setBatchBusy(true);
+    setBatchMsg("");
+    const failedExpenses = [];
+    let expenseError = "";
+    let failedLunches = batchLunchDates;
+    try {
+      for (const date of batchExpenseDates) {
+        try {
+          const result = await insertExpense({
+            region: currency, date, category: quickCat, shop: quickShop,
+            amount: Number(batchAmts[date]), notes: "", expense_type: "normal", tags: "",
+          }, { quiet: true });
+          if (result?.ok) continue;
+          expenseError = result?.error || "";
+        } catch (error) {
+          expenseError = error.message;
+        }
+        failedExpenses.push(date);
+      }
+      if (batchLunchDates.length) {
+        try {
+          if (await saveHomeCooked(batchLunchDates, { quiet: true })) failedLunches = [];
+        } catch {
+          setHomeCookedBusy(false);
+          setHomeCookedError("Couldn’t save home-cooked lunches. Try again.");
+        }
+      }
+      const expensesSaved = batchExpenseDates.length - failedExpenses.length;
+      const lunchesSaved = batchLunchDates.length - failedLunches.length;
+      const failed = [...failedExpenses, ...failedLunches];
+      const saved = expensesSaved + lunchesSaved;
+      if (!failed.length) {
+        const summary = [];
+        if (expensesSaved) summary.push(expensesSaved + (expensesSaved === 1 ? " expense" : " expenses"));
+        if (lunchesSaved) summary.push(lunchesSaved + (lunchesSaved === 1 ? " home-cooked lunch" : " home-cooked lunches"));
+        notify("success", "Saved " + summary.join(" and "));
+        exitMulti();
+      } else {
+        setBatchAmts(Object.fromEntries(failedExpenses.map(date => [date, batchAmts[date]])));
+        setBatchHomeCooked(failedLunches);
+        setPicked(failed);
+        setBatchMsg(saved + " saved · " + failed.length + " still to save. Try again." + (expenseError ? " " + expenseError : ""));
+      }
+      if (expensesSaved) fetchData();
+    } finally {
+      setBatchBusy(false);
     }
-    setBatchBusy(false);
-    if (ok) fetchData();
-    if (!failed.length) { notify("success", ok + " " + (ok === 1 ? "entry" : "entries") + " added to " + quickShop); exitMulti(); }
-    else { setBatchAmts(a => { const keep = {}; failed.forEach(d => { keep[d] = a[d]; }); return keep; }); setPicked(failed); setBatchMsg(ok + " saved · " + failed.length + " didn't save, still listed — try again." + (lastErr ? " (" + lastErr + ")" : "")); }
   };
 
   return (
@@ -2515,7 +2568,7 @@ function CalendarView({ allExpenses = [], shopFilter = null, setShopFilter = () 
               <button onClick={pickEmptyThisMonth} style={{...fpill(false),fontSize:11}}>All empty days this month</button>
               {picked.length > 0 && <button onClick={() => setPicked([])} style={{...fpill(false),fontSize:11,color:theme.textDim}}>Clear</button>}
               <button onClick={exitMulti} style={{...fpill(false),fontSize:11,color:theme.textDim}}>Cancel</button>
-              <button onClick={() => { setBatchMsg(""); setBatchOpen(true); }} disabled={!picked.length} style={{marginLeft:"auto",padding:"8px 14px",borderRadius:9,border:"none",background:"#22c55e",color:"#06210f",fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"inherit",opacity:picked.length?1:0.4}}>Enter amounts →</button>
+              <button onClick={() => { setBatchMsg(""); setBatchOpen(true); }} disabled={!picked.length} style={{marginLeft:"auto",padding:"8px 14px",borderRadius:9,border:"none",background:"#22c55e",color:"#06210f",fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"inherit",opacity:picked.length?1:0.4}}>Review selected days →</button>
             </div>
           </div>
         )}
@@ -2549,55 +2602,66 @@ function CalendarView({ allExpenses = [], shopFilter = null, setShopFilter = () 
         )}
         {/* Multi-day fill — kept above the grid so it is reachable without scrolling */}
 
-        {/* Legend */}
-        {!filtering && <div style={{display:"flex",gap:12,justifyContent:"center",marginBottom:10,fontSize:10,color:theme.textDim}}>
-          <span><span style={{color:"#22c55e"}}>●</span> Normal</span>
-          <span>📌 Fixed</span>
-          <span>⚡ Outlier</span>
-        </div>}
-        <div style={{display:"grid",gridTemplateColumns:"repeat(7, 1fr)",gap:4,marginBottom:8}}>
-          {["Mo","Tu","We","Th","Fr","Sa","Su"].map(d => <div key={d} style={{textAlign:"center",fontSize:10,color:theme.textDim,fontWeight:600,padding:4}}>{d}</div>)}
+        <div className="cm-calendar-legend">
+          <span className="cm-calendar-lunch">🍳 Home-cooked</span>
+          {filtering ? <span className="cm-calendar-amount">Blue · {shopFilter ? "shop" : "category"} expense</span> : (
+            <><span><span style={{color:"#4ade80"}}>●</span> Normal</span><span>📌 Fixed</span><span>⚡ Outlier</span></>
+          )}
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(7, 1fr)",gap:4}}>
-          {Array.from({length:firstDayOfWeek}).map((_,i) => <div key={`e-${i}`}/>)}
-          {Array.from({length:daysInMonth}).map((_,i) => {
-            const day = i+1;
-            const tod = isToday(day);
-            const indicators = getDateIndicators(day);
-            const dayTasks = showTasks ? (tasksByDate[isoOf(day)] || []) : [];
-            const dayOpen = dayTasks.filter(t => !t.done).length;
-            const hit = filtering ? matchedByDate[isoOf(day)] : null;
-            const faded = filtering && !hit;
-            const iso = isoOf(day);
-            const on = multiMode && picked.indexOf(iso) >= 0;
-            const homeOn = homeCookedMode && homeCookedPicked.includes(iso);
-            const cooked = homeCookedSet.has(iso);
-            return (
-              <button key={day} aria-label={`${iso}${cooked ? ", home-cooked lunch saved" : ""}`} onClick={() => homeCookedMode ? toggleHomeCookedPicked(iso) : multiMode ? toggleDay(iso) : openPanel(iso)} style={{
-                aspectRatio:"1",borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:(hit||on||homeOn)?700:400,
-                border:homeOn?"2px solid #f59e0b":on?"2px solid #22c55e":"1px solid "+(hit?"rgba(96,165,250,0.45)":"transparent"),
-                background:homeOn?"rgba(245,158,11,0.2)":on?"rgba(34,197,94,0.2)":hit?"rgba(96,165,250,0.16)":tod?theme.inputBg:"transparent",
-                color:(on||homeOn)?"#fff":tod?theme.primary:faded?theme.textDim:theme.text,opacity:(faded&&!on&&!homeOn)?((multiMode||homeCookedMode)?0.6:0.35):1,transition:"opacity .18s,background .18s",
-                position:"relative",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
-              }}>
-                <span>{day}</span>
-                {cooked && <span title="Home-cooked lunch" style={{position:"absolute",left:2,bottom:2,fontSize:10,lineHeight:1}}>🍳</span>}
-                {hit && <span style={{fontSize:8,fontWeight:700,color:theme.primary,lineHeight:1,marginTop:1}}>{hit.n>1?hit.n+"×":fmt(hit.sum)}</span>}
-                {!filtering && indicators && (
-                  <span style={{fontSize:7,lineHeight:1,marginTop:1,display:"flex",gap:1}}>
-                    {indicators.map((ind, idx) => (
-                      <span key={idx} style={{color: ind === "●" ? "#22c55e" : undefined}}>{ind}</span>
-                    ))}
+        <div className="cm-calendar-month">
+          <div className="cm-calendar-grid cm-calendar-weekdays">
+            {["Mo","Tu","We","Th","Fr","Sa","Su"].map(day => <span key={day}>{day}</span>)}
+          </div>
+          <div className="cm-calendar-grid">
+            {Array.from({length:firstDayOfWeek}).map((_,i) => <div key={`e-${i}`}/>)}
+            {Array.from({length:daysInMonth}).map((_,i) => {
+              const day = i + 1;
+              const iso = isoOf(day);
+              const today = isToday(day);
+              const indicators = filtering ? null : getDateIndicators(day);
+              const dayTasks = showTasks ? (tasksByDate[iso] || []) : [];
+              const dayOpen = dayTasks.filter(task => !task.done).length;
+              const hit = filtering ? matchedByDate[iso] : null;
+              const cooked = homeCookedSet.has(iso);
+              const selected = homeCookedMode ? homeCookedPicked.includes(iso) : multiMode && picked.includes(iso);
+              return (
+                <button
+                  key={day}
+                  className="cm-calendar-day"
+                  data-cooked={cooked || undefined}
+                  data-expense={!!hit || undefined}
+                  data-selected={selected ? (homeCookedMode ? "lunch" : "expense") : undefined}
+                  aria-current={today ? "date" : undefined}
+                  aria-pressed={homeCookedMode || multiMode ? selected : undefined}
+                  aria-label={`${iso}${cooked ? ", home-cooked lunch saved" : ""}${hit ? ", " + fmt(hit.sum) : ""}`}
+                  onClick={() => homeCookedMode ? toggleHomeCookedPicked(iso) : multiMode ? toggleDay(iso) : openPanel(iso)}
+                >
+                  <span className="cm-calendar-day-top">
+                    <span className="cm-calendar-day-number">{day}</span>
+                    {dayTasks.length > 0 && (
+                      <span className="cm-calendar-task" title={dayTasks.map(task => task.title).join(", ")}>{dayOpen || "✓"}</span>
+                    )}
                   </span>
-                )}
-                {dayTasks.length > 0 && (
-                  <span title={dayTasks.map(t => t.title).join(", ")} style={{position:"absolute",top:3,right:4,fontSize:8,fontWeight:700,lineHeight:1,padding:"1px 4px",borderRadius:5,background:dayOpen?"rgba(96,165,250,0.18)":"transparent",color:dayOpen?"#60a5fa":theme.textDim}}>{dayOpen || "✓"}</span>
-                )}
-              </button>
-            );
-          })}
+                  {cooked && (
+                    <span className="cm-calendar-lunch" aria-hidden="true">
+                      <span className="cm-calendar-lunch-icon">🍳</span>
+                      <span className="cm-calendar-lunch-full">Home-cooked</span>
+                      <span className="cm-calendar-lunch-short">Home</span>
+                    </span>
+                  )}
+                  {hit && <span className="cm-calendar-amount">{hit.n > 1 ? hit.n + "×" : fmt(hit.sum)}</span>}
+                  {indicators && (
+                    <span className="cm-calendar-indicators">
+                      {indicators.map((indicator, idx) => (
+                        <span key={idx} style={{color:indicator === "●" ? "#4ade80" : undefined}}>{indicator}</span>
+                      ))}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
-        {filtering && !multiMode && <div style={{fontSize:10.5,color:theme.textDim,textAlign:"center",marginTop:10}}>Dimmed days have entries, just none matching this filter.</div>}
         {filtering && (
           <button onClick={() => setAuditOpen(o => !o)} style={{marginTop:10,width:"100%",padding:"10px",borderRadius:10,border:`1px solid ${theme.cardBorder}`,background:theme.inputBg,color:"#fff",cursor:"pointer",fontWeight:600,fontSize:12.5,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
             {auditOpen ? "Hide entries" : "Check entries"}
@@ -2665,39 +2729,84 @@ function CalendarView({ allExpenses = [], shopFilter = null, setShopFilter = () 
           </div>
         </Modal>
       )}
-      {/* Batch amount window: one row per picked day, shop + category fixed by the filter */}
+      {/* Batch form: each selected day can be a paid expense or a home-cooked lunch. */}
       {batchOpen && (
-        <Modal sheet onClose={() => !batchBusy && setBatchOpen(false)}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+        <Modal sheet onClose={() => !batchSaving && setBatchOpen(false)}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
             <div>
               <div style={{fontSize:15,fontWeight:700,color:"#fff"}}>{getCatIcon(quickCat)} {quickShop}</div>
               <div style={{fontSize:11,color:theme.textMuted}}>{pickedSorted.length} days · {quickCat}</div>
             </div>
-            <button onClick={() => !batchBusy && setBatchOpen(false)} style={{background:theme.inputBg,border:"none",borderRadius:8,width:30,height:30,cursor:"pointer",color:theme.textMuted,fontSize:16,lineHeight:1}}>×</button>
+            <button disabled={batchSaving} onClick={() => setBatchOpen(false)} aria-label="Close batch" style={{background:theme.inputBg,border:"none",borderRadius:8,width:30,height:30,cursor:"pointer",color:theme.textMuted,fontSize:16}}>×</button>
           </div>
-          {lastAmt != null && <button onClick={() => fillAll(lastAmt)} style={{...fpill(false),fontSize:11,marginBottom:8}}>Fill every day with {fmt(lastAmt)}</button>}
-          <div style={{display:"flex",flexDirection:"column",gap:5,paddingRight:2}}>
-            {pickedSorted.map(d => {
-              const dupe = (matchedByDate[d] || {}).n || 0;
+          <div className="cm-calendar-batch-actions">
+            <button
+              className="cm-calendar-lunch-toggle"
+              aria-pressed={batchLunchDates.length > 0 && !batchPaidDates.length}
+              disabled={batchSaving || !pickedSorted.length}
+              onClick={() => setBatchHomeCooked(batchPaidDates.length ? pickedSorted : [])}
+            >{batchPaidDates.length ? "🍳 Mark all home-cooked" : "Use amounts for all"}</button>
+            {lastAmt != null && batchPaidDates.length > 0 && (
+              <button disabled={batchSaving} onClick={() => fillAll(lastAmt)} style={{...fpill(false),fontSize:11}}>Fill amounts with {fmt(lastAmt)}</button>
+            )}
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:6,paddingRight:2}}>
+            {pickedSorted.map(date => {
+              const cooked = batchHomeCooked.includes(date);
+              const dupe = matchedByDate[date]?.n || 0;
               return (
-                <div key={d} style={{display:"flex",alignItems:"center",gap:9,background:theme.inputBg,borderRadius:10,padding:"7px 10px",border:`1px solid ${dupe?"rgba(245,158,11,0.4)":"transparent"}`}}>
-                  <span style={{minWidth:52}}>
-                    <span style={{display:"block",fontSize:13,fontWeight:700,color:"#fff",lineHeight:1.1}}>{Number(d.slice(8))} {MONTHS_SHORT[Number(d.slice(5,7))]}</span>
-                    <span style={{display:"block",fontSize:9,color:dupe?"#f59e0b":theme.textDim}}>{dupe ? "already " + dupe : WEEKDAYS_SHORT[dateOfIso(d).getDay()]}</span>
+                <div key={date} className="cm-calendar-batch-row" style={{background:theme.inputBg,borderColor:dupe ? "rgba(245,158,11,0.4)" : theme.cardBorder}}>
+                  <span className="cm-calendar-batch-date">
+                    <strong>{Number(date.slice(8))} {MONTHS_SHORT[Number(date.slice(5,7))]}</strong>
+                    <span>{dupe ? "Already " + dupe : WEEKDAYS_SHORT[dateOfIso(date).getDay()]}</span>
                   </span>
-                  <input ref={el => { batchRefs.current[d] = el; }} type="number" inputMode="decimal" min="0" autoFocus={d === pickedSorted[0]} value={batchAmts[d] || ""} onChange={e => setBatchAmts(a => ({ ...a, [d]: e.target.value }))} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); focusNext(d); } }} placeholder={lastAmt != null ? fmt(lastAmt) : "Amount"} style={{flex:1,minWidth:0,background:theme.cardBg,border:`1px solid ${theme.inputBorder}`,borderRadius:9,padding:"9px 11px",fontSize:15,fontWeight:600,color:theme.text,outline:"none",fontFamily:"inherit"}}/>
-                  <button onClick={() => { setPicked(p => p.filter(x => x !== d)); setBatchAmts(a => { const n = { ...a }; delete n[d]; return n; }); }} title="Drop this day" style={{background:"transparent",border:"none",color:theme.textDim,fontSize:16,cursor:"pointer",lineHeight:1,padding:"0 2px"}}>×</button>
+                  {cooked ? (
+                    <span className="cm-calendar-batch-no-expense">No expense</span>
+                  ) : (
+                    <input
+                      ref={el => { batchRefs.current[date] = el; }}
+                      type="number" inputMode="decimal" min="0"
+                      aria-label={`Amount for ${date}`}
+                      disabled={batchSaving}
+                      value={batchAmts[date] || ""}
+                      onChange={e => setBatchAmts(amounts => ({ ...amounts, [date]: e.target.value }))}
+                      onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); focusNext(date); } }}
+                      placeholder={lastAmt != null ? fmt(lastAmt) : "Amount"}
+                      style={{minWidth:0,width:"100%",background:theme.cardBg,border:`1px solid ${theme.inputBorder}`,borderRadius:9,padding:"8px 10px",fontSize:15,color:theme.text,fontFamily:"inherit"}}
+                    />
+                  )}
+                  <button
+                    className="cm-calendar-lunch-toggle"
+                    aria-pressed={cooked}
+                    aria-label={`Home-cooked on ${date}`}
+                    disabled={batchSaving}
+                    onClick={() => toggleBatchLunch(date)}
+                  >{cooked ? "🍳 Home-cooked ✓" : "🍳 Home-cooked"}</button>
+                  <button
+                    className="cm-calendar-batch-drop"
+                    disabled={batchSaving}
+                    onClick={() => {
+                      setPicked(days => days.filter(day => day !== date));
+                      setBatchHomeCooked(days => days.filter(day => day !== date));
+                      setBatchAmts(amounts => { const next = { ...amounts }; delete next[date]; return next; });
+                    }}
+                    aria-label={`Drop ${date} from batch`}
+                  >×</button>
                 </div>
               );
             })}
           </div>
-          {batchMsg && <div style={{fontSize:11,color:"#f59e0b",marginTop:8}}>{batchMsg}</div>}
+          {(batchMsg || (batchLunchDates.length > 0 && homeCookedError)) && (
+            <div role="alert" style={{fontSize:11,color:"#fbbf24",marginTop:8}}>
+              {batchMsg} {batchLunchDates.length > 0 && homeCookedError}
+            </div>
+          )}
           <div style={{display:"flex",alignItems:"center",gap:10,marginTop:12,position:"sticky",bottom:-16,background:"#1a1a2e",padding:"10px 0 4px",borderTop:`1px solid ${theme.cardBorder}`}}>
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontSize:16,fontWeight:700,color:"#fff"}}>{fmt(batchTotal)}</div>
-              <div style={{fontSize:10.5,color:theme.textDim}}>{batchCount} of {pickedSorted.length} days filled{pickedSorted.length - batchCount > 0 ? " · blanks are skipped" : ""}</div>
+              <div style={{fontSize:11,color:"#cbd5e1"}}>{batchExpenseDates.length} paid · {batchLunchDates.length} home-cooked</div>
             </div>
-            <button onClick={saveBatch} disabled={batchBusy || !batchCount} style={{padding:"12px 18px",borderRadius:11,border:"none",background:"#22c55e",color:"#06210f",fontWeight:700,fontSize:13.5,cursor:"pointer",fontFamily:"inherit",opacity:(batchBusy||!batchCount)?0.45:1}}>{batchBusy ? "Saving…" : "Save " + batchCount + " " + (batchCount === 1 ? "entry" : "entries")}</button>
+            <button onClick={saveBatch} disabled={batchSaving || !batchCount} style={{padding:"12px 16px",borderRadius:11,border:"none",background:"#22c55e",color:"#06210f",fontWeight:700,fontSize:13.5,cursor:"pointer",fontFamily:"inherit",opacity:(batchSaving||!batchCount)?0.45:1}}>{batchSaving ? "Saving…" : "Save " + batchCount}</button>
           </div>
         </Modal>
       )}
