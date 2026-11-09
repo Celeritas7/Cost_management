@@ -71,6 +71,7 @@ order by ordinal_position;
 | `013_requests.sql` | yes (checked 2026-11-03) |
 | `014_hub_ids_place_id.sql` | yes (checked 2026-11-03) |
 | `017_order_lines.sql` | yes (applied by the owner 2026-10-24) |
+| `018_home_cooked_lunches.sql` | **no — review-only; required for home-cooked calendar marks** |
 
 ## Why 000 fails if you run it now
 
@@ -99,6 +100,12 @@ exist and to pick them up on a later run.
 ## 014 · hub ids + place_id (v49, R018 step 1)
 
 `014_hub_ids_place_id.sql` — **applied** (checked 2026-11-03: FK dropped, `place_id` present). Drops the FK from `cost_management_shop_locations.area_id` to `cost_management_areas` (areas now live in Akatsuki) and adds `cost_management_shops.place_id`. `area_id` stays uuid. Re-runnable, deletes nothing. Before it ran: links to the copied areas still work; linking a shop to an area *created in the hub* fails on the FK; picked Google place ids are not stored (console warning only). Live ids are **uuid** — 009/010 here say bigint because they were reconstructed; the live schema wins. Phase 15c and Phase 20 move to 015 / 016.
+
+## 018 · home-cooked lunches (pending review)
+
+`018_home_cooked_lunches.sql` is **not applied**. Review it before running it against the existing Cost Supabase project. It adds one owner-scoped table with a unique `(user_id, lunch_date)` constraint and authenticated-only RLS policies; it does not modify expenses or existing data. Until it is applied, the Calendar shows a clear migration-required message and disables home-cooked writes.
+
+After approval, run only `018_home_cooked_lunches.sql` in the existing project's SQL runner, then verify marking, duplicate prevention, removal, reload persistence, and isolation with two signed-in accounts. Do not rerun the older migrations.
 
 ## 017 · order lines (v65)
 

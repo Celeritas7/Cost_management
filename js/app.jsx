@@ -2267,7 +2267,7 @@ function PrintSheet({ tasks = [], anchorDate, onClose }) {
 }
 
 function CalendarView({ allExpenses = [], shopFilter = null, setShopFilter = () => {}, catFilter = "All", setCatFilter = () => {}, categories = [] }) {
-  const { theme, fetchData, getCatIcon, getTagIcon, setView, setPresetDate, currency } = useTheme();
+  const { theme, supabase, fetchData, getCatIcon, getTagIcon, setView, setPresetDate, currency } = useTheme();
   const { openEdit, requestDelete, insertExpense, notify, modals } = useExpenseMutations({ onChange: fetchData });
   // Quick add: with a shop filtered, the day panel only needs an amount.
   const [quickAmt, setQuickAmt] = useState("");
@@ -2280,6 +2280,13 @@ function CalendarView({ allExpenses = [], shopFilter = null, setShopFilter = () 
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchMsg, setBatchMsg] = useState("");
   const batchRefs = useRef({});
+  // Home-cooked lunches are deliberately separate from expenses: they never enter totals.
+  const [homeCookedDates, setHomeCookedDates] = useState([]);
+  const [homeCookedLoading, setHomeCookedLoading] = useState(true);
+  const [homeCookedError, setHomeCookedError] = useState("");
+  const [homeCookedBusy, setHomeCookedBusy] = useState(false);
+  const [homeCookedMode, setHomeCookedMode] = useState(false);
+  const [homeCookedPicked, setHomeCookedPicked] = useState([]);
   // ── Shop + category filter (shared with History via App state) ──
   const cat = catFilter && catFilter !== "All" ? catFilter : null;
   const filtering = !!(cat || shopFilter);
@@ -2388,6 +2395,62 @@ function CalendarView({ allExpenses = [], shopFilter = null, setShopFilter = () 
     if (res.ok) setQuickAmt("");
   };
   const openPanel = (iso) => { setPanelDate(iso); setQuickAmt(""); };
+  const homeCookedSet = useMemo(() => new Set(homeCookedDates), [homeCookedDates]);
+  const loadHomeCooked = useCallback(async () => {
+    setHomeCookedLoading(true);
+    const { data, error } = await supabase.from("cost_management_home_cooked_lunches").select("lunch_date").order("lunch_date");
+    setHomeCookedLoading(false);
+    if (error) {
+      const missingTable = error.code === "42P01" || error.code === "PGRST205" || /does not exist|schema cache/i.test(error.message || "");
+      setHomeCookedError(missingTable ? "Home-cooked marking needs migration 018 before it can save." : "Couldn't load home-cooked lunches: " + error.message);
+      return;
+    }
+    setHomeCookedError("");
+    setHomeCookedDates((data || []).map(row => row.lunch_date));
+  }, [supabase]);
+  useEffect(() => { loadHomeCooked(); }, [loadHomeCooked]);
+  const saveHomeCooked = async (dates) => {
+    const uniqueDates = [...new Set(dates)].filter(Boolean);
+    if (!uniqueDates.length || homeCookedBusy) return false;
+    setHomeCookedBusy(true); setHomeCookedError("");
+    const { data: authData, error: authError } = await supabase.auth.getUser();
+    if (authError || !authData.user) {
+      setHomeCookedBusy(false);
+      setHomeCookedError("Sign in again before saving a home-cooked lunch.");
+      return false;
+    }
+    const rows = uniqueDates.map(lunch_date => ({ user_id: authData.user.id, lunch_date }));
+    const { error } = await supabase.from("cost_management_home_cooked_lunches").upsert(rows, { onConflict: "user_id,lunch_date", ignoreDuplicates: true });
+    setHomeCookedBusy(false);
+    if (error) {
+      setHomeCookedError(error.code === "42P01" ? "Home-cooked marking needs migration 018 before it can save." : "Couldn't save home-cooked lunch: " + error.message);
+      return false;
+    }
+    setHomeCookedDates(current => [...new Set([...current, ...uniqueDates])].sort());
+    notify("success", uniqueDates.length === 1 ? "Home-cooked lunch saved" : uniqueDates.length + " home-cooked lunches saved");
+    return true;
+  };
+  const removeHomeCooked = async (date) => {
+    if (!date || homeCookedBusy) return;
+    setHomeCookedBusy(true); setHomeCookedError("");
+    const { data: authData, error: authError } = await supabase.auth.getUser();
+    if (authError || !authData.user) {
+      setHomeCookedBusy(false);
+      setHomeCookedError("Sign in again before removing a home-cooked lunch.");
+      return;
+    }
+    const { error } = await supabase.from("cost_management_home_cooked_lunches").delete().eq("user_id", authData.user.id).eq("lunch_date", date);
+    setHomeCookedBusy(false);
+    if (error) {
+      setHomeCookedError("Couldn't remove home-cooked lunch: " + error.message);
+      return;
+    }
+    setHomeCookedDates(current => current.filter(item => item !== date));
+    notify("success", "Home-cooked lunch removed");
+  };
+  const toggleHomeCookedPicked = (iso) => setHomeCookedPicked(current => current.includes(iso) ? current.filter(date => date !== iso) : [...current, iso]);
+  const exitHomeCookedMode = () => { setHomeCookedMode(false); setHomeCookedPicked([]); };
+  const savePickedHomeCooked = async () => { if (await saveHomeCooked(homeCookedPicked)) exitHomeCookedMode(); };
   // ── Multi-day fill ──
   const canMulti = !!(quickShop && quickCat);
   const toggleDay = (iso) => setPicked(p => p.indexOf(iso) >= 0 ? p.filter(d => d !== iso) : [...p, iso]);
@@ -2419,8 +2482,26 @@ function CalendarView({ allExpenses = [], shopFilter = null, setShopFilter = () 
   return (
     <div>
       <div style={{background:theme.cardBg,borderRadius:12,padding:16,border:`1px solid ${theme.cardBorder}`}}>
+        {/* Home-cooked lunch markers stay separate from the expense-entry workflow. */}
+        {!homeCookedMode ? (
+          <button onClick={() => { exitMulti(); setHomeCookedMode(true); setHomeCookedPicked([]); }} disabled={!!homeCookedError || homeCookedLoading} style={{width:"100%",marginBottom:12,padding:"12px",borderRadius:11,border:"1px solid rgba(245,158,11,0.4)",background:"rgba(245,158,11,0.1)",color:"#f59e0b",cursor:"pointer",fontWeight:700,fontSize:13.5,fontFamily:"inherit",textAlign:"left",opacity:(homeCookedError||homeCookedLoading)?0.55:1}}>
+            🍳 Mark home-cooked lunches
+            <span style={{display:"block",fontWeight:500,fontSize:10.5,color:theme.textMuted,marginTop:2}}>Pick one or more dates without creating an expense</span>
+          </button>
+        ) : (
+          <div style={{marginBottom:12,background:"rgba(245,158,11,0.1)",border:"1px solid rgba(245,158,11,0.35)",borderRadius:11,padding:"11px 12px"}}>
+            <div style={{fontSize:13.5,fontWeight:700,color:"#f59e0b",marginBottom:2}}>🍳 Home-cooked lunches</div>
+            <div style={{fontSize:11.5,color:"#fff",fontWeight:600,marginBottom:9}}>Tap every date you cooked lunch at home · {homeCookedPicked.length} selected</div>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+              {homeCookedPicked.length > 0 && <button onClick={() => setHomeCookedPicked([])} style={{...fpill(false),fontSize:11,color:theme.textDim}}>Clear</button>}
+              <button onClick={exitHomeCookedMode} style={{...fpill(false),fontSize:11,color:theme.textDim}}>Cancel</button>
+              <button onClick={savePickedHomeCooked} disabled={!homeCookedPicked.length || homeCookedBusy} style={{marginLeft:"auto",padding:"8px 14px",borderRadius:9,border:"none",background:"#f59e0b",color:"#261500",fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"inherit",opacity:(homeCookedPicked.length&&!homeCookedBusy)?1:0.4}}>{homeCookedBusy ? "Saving…" : "Save " + homeCookedPicked.length}</button>
+            </div>
+          </div>
+        )}
+        {homeCookedError && <div role="alert" style={{fontSize:11.5,color:theme.danger,background:`${theme.danger}12`,border:`1px solid ${theme.danger}55`,borderRadius:9,padding:"8px 10px",marginBottom:12}}>{homeCookedError}</div>}
         {/* Add missing entries — first thing in the card, above the month nav */}
-        {canMulti && !multiMode && (
+        {canMulti && !multiMode && !homeCookedMode && (
           <button onClick={() => { setMultiMode(true); setPicked([]); }} style={{width:"100%",marginBottom:12,padding:"12px",borderRadius:11,border:"1px solid rgba(34,197,94,0.4)",background:"rgba(34,197,94,0.1)",color:"#22c55e",cursor:"pointer",fontWeight:700,fontSize:13.5,fontFamily:"inherit",textAlign:"left"}}>
             + Add missing entries
             <span style={{display:"block",fontWeight:500,fontSize:10.5,color:theme.textMuted,marginTop:2}}>Pick the days you visited {quickShop}, then type the amounts</span>
@@ -2487,16 +2568,20 @@ function CalendarView({ allExpenses = [], shopFilter = null, setShopFilter = () 
             const dayOpen = dayTasks.filter(t => !t.done).length;
             const hit = filtering ? matchedByDate[isoOf(day)] : null;
             const faded = filtering && !hit;
-            const on = multiMode && picked.indexOf(isoOf(day)) >= 0;
+            const iso = isoOf(day);
+            const on = multiMode && picked.indexOf(iso) >= 0;
+            const homeOn = homeCookedMode && homeCookedPicked.includes(iso);
+            const cooked = homeCookedSet.has(iso);
             return (
-              <button key={day} onClick={() => multiMode ? toggleDay(isoOf(day)) : openPanel(isoOf(day))} style={{
-                aspectRatio:"1",borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:(hit||on)?700:400,
-                border:on?"2px solid #22c55e":"1px solid "+(hit?"rgba(96,165,250,0.45)":"transparent"),
-                background:on?"rgba(34,197,94,0.2)":hit?"rgba(96,165,250,0.16)":tod?theme.inputBg:"transparent",
-                color:on?"#fff":tod?theme.primary:faded?theme.textDim:theme.text,opacity:(faded&&!on)?(multiMode?0.6:0.35):1,transition:"opacity .18s,background .18s",
+              <button key={day} aria-label={`${iso}${cooked ? ", home-cooked lunch saved" : ""}`} onClick={() => homeCookedMode ? toggleHomeCookedPicked(iso) : multiMode ? toggleDay(iso) : openPanel(iso)} style={{
+                aspectRatio:"1",borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:(hit||on||homeOn)?700:400,
+                border:homeOn?"2px solid #f59e0b":on?"2px solid #22c55e":"1px solid "+(hit?"rgba(96,165,250,0.45)":"transparent"),
+                background:homeOn?"rgba(245,158,11,0.2)":on?"rgba(34,197,94,0.2)":hit?"rgba(96,165,250,0.16)":tod?theme.inputBg:"transparent",
+                color:(on||homeOn)?"#fff":tod?theme.primary:faded?theme.textDim:theme.text,opacity:(faded&&!on&&!homeOn)?((multiMode||homeCookedMode)?0.6:0.35):1,transition:"opacity .18s,background .18s",
                 position:"relative",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
               }}>
                 <span>{day}</span>
+                {cooked && <span title="Home-cooked lunch" style={{position:"absolute",left:2,bottom:2,fontSize:10,lineHeight:1}}>🍳</span>}
                 {hit && <span style={{fontSize:8,fontWeight:700,color:theme.primary,lineHeight:1,marginTop:1}}>{hit.n>1?hit.n+"×":fmt(hit.sum)}</span>}
                 {!filtering && indicators && (
                   <span style={{fontSize:7,lineHeight:1,marginTop:1,display:"flex",gap:1}}>
@@ -2624,6 +2709,16 @@ function CalendarView({ allExpenses = [], shopFilter = null, setShopFilter = () 
               <div style={{fontSize:11,color:theme.textMuted}}>{panelExpenses.length} {panelExpenses.length===1?"entry":"entries"} · {fmt(panelTotal)}{filtering && panelExpenses.length < panelAllCount ? ` · filtered, ${panelAllCount - panelExpenses.length} hidden` : ""}</div>
             </div>
             <button onClick={() => setPanelDate(null)} style={{background:theme.inputBg,border:"none",borderRadius:8,width:30,height:30,cursor:"pointer",color:theme.textMuted,fontSize:16,lineHeight:1}}>×</button>
+          </div>
+          <div style={{marginBottom:14,background:"rgba(245,158,11,0.09)",border:"1px solid rgba(245,158,11,0.3)",borderRadius:11,padding:"10px 12px",display:"flex",alignItems:"center",gap:10}}>
+            <span aria-hidden="true" style={{fontSize:20}}>🍳</span>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:12.5,fontWeight:700,color:"#fff"}}>Home-cooked lunch</div>
+              <div style={{fontSize:10.5,color:theme.textMuted}}>{homeCookedSet.has(panelDate) ? "Saved · does not affect spending" : "Account for lunch without adding an expense"}</div>
+            </div>
+            {homeCookedSet.has(panelDate) ?
+              <button onClick={() => removeHomeCooked(panelDate)} disabled={homeCookedBusy} style={{...fpill(false),color:theme.danger,opacity:homeCookedBusy?0.5:1}}>Remove</button> :
+              <button onClick={() => saveHomeCooked([panelDate])} disabled={homeCookedBusy || !!homeCookedError} style={{...fpill(true),borderColor:"rgba(245,158,11,0.45)",background:"rgba(245,158,11,0.18)",color:"#f59e0b",opacity:(homeCookedBusy||homeCookedError)?0.5:1}}>{homeCookedBusy ? "Saving…" : "Mark"}</button>}
           </div>
           {(tasksByDate[panelDate] || []).length > 0 && (
             <div style={{marginBottom:14}}>
