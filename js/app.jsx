@@ -6685,6 +6685,15 @@ function RecurringView() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
+  const taskPanel=useRef(null);
+  useEffect(()=>()=>{taskPanel.current?.unmount();},[]);
+  const openTaskReminder=async(item)=>{
+    try{
+      if(!window.AkatsukiBroadcastPanel)throw new Error('Reminder editor did not load. Reopen online.');
+      if(!taskPanel.current)taskPanel.current=window.AkatsukiBroadcastPanel(supabase,{app:'cost',hideLauncher:true}).mount();
+      await taskPanel.current.openTask({sourceTaskId:'recurring:'+item.id,title:('Review expense: '+item.name).slice(0,120),type:'check',category:'expenses',url:location.origin+location.pathname,body:'Review this recurring expense in Cost. Completing the reminder does not create an expense entry.'});
+    }catch(e){setToast(e.message||String(e));}
+  };
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState(null);
   const [deleting, setDeleting] = useState(null);
@@ -6854,6 +6863,7 @@ function RecurringView() {
           <div style={{ fontSize: 11, color: theme.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {item.shop} · {freqSummary(item)}
           </div>
+          <button onClick={(e)=>{e.stopPropagation();openTaskReminder(item);}} style={{marginTop:6,padding:'7px 10px',borderRadius:8,border:`1px solid ${theme.cardBorder}`,background:theme.cardBg,color:theme.text,fontSize:11,cursor:'pointer'}}>Akatsuki reminder · schedule / status</button>
         </div>
       </div>
       <span onClick={() => openEdit(item)} style={{ fontSize: 14, fontWeight: 700, color: "#fff", whiteSpace: "nowrap", cursor: "pointer" }}>{fmt(item.amount)}</span>
@@ -8707,3 +8717,4 @@ function AuthGate() {
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<AuthGate />);
+
