@@ -546,9 +546,64 @@ function applyGraphFilters(rows, f) {
   });
 }
 
+// Round trips are one stored record. Only reporting expands them into dated legs.
+const expenseRecord = (row) => row._record || row;
+const hasReturnJourney = (row) => { const r = expenseRecord(row); return r.return_date != null && r.return_amount != null; };
+const journeyStops = (shop) => String(shop || "").split("→").map(s => s.trim()).filter(Boolean);
+const reverseJourney = (shop) => journeyStops(shop).reverse().join(" → ");
+const canAddReturnJourney = (row) => {
+  const r = expenseRecord(row), stops = journeyStops(r.shop);
+  return r.category === "Transportation" && !hasReturnJourney(r) && stops.length >= 2 && stops[0] !== stops[stops.length - 1];
+};
+function expenseLegs(row) {
+  if (!hasReturnJourney(row)) return [row];
+  const r = expenseRecord(row), base = { ...r, _record: r };
+  return [
+    enrichRow({ ...base, amount: Number(r.amount) - Number(r.return_amount), _leg: "outward" }),
+    enrichRow({ ...base, id: `return_${r.id}`, amount: Number(r.return_amount), date: r.return_date, shop: reverseJourney(r.shop), _leg: "return" })
+  ];
+}
+function groupJourneyHistory(rows) {
+  const trips = new Map(), result = [];
+  rows.forEach(row => {
+    if (!row._record) { result.push(row); return; }
+    const key = String(row._record.id);
+    let group = trips.get(key);
+    if (!group) {
+      group = { ...row, id: row._record.id, _tripSummary: true, _leg: null, _visibleLegs: [], amount: 0 };
+      trips.set(key, group); result.push(group);
+    }
+    group._visibleLegs.push(row); group.amount += Number(row.amount);
+    if (row.date > group.date) group.date = row.date;
+  });
+  return result;
+}
+function roundTripLabel(row) {
+  const r = expenseRecord(row), stops = journeyStops(r.shop);
+  return stops.length === 2 ? stops.join(" ↔ ") : `${r.shop} · Round trip`;
+}
+function journeyFormError(form) {
+  const positiveFare = n => n !== "" && n != null && Number.isInteger(Number(n)) && Number(n) > 0 && Number(n) <= 2147483647;
+  const validDate = d => /^\d{4}-\d{2}-\d{2}$/.test(d || "") && !isNaN(new Date(d + "T12:00:00Z")) && new Date(d + "T12:00:00Z").toISOString().slice(0, 10) === d;
+  if (!validDate(form.date)) return "Enter a valid outward date.";
+  if (!positiveFare(form.amount)) return "Enter a positive whole-number fare.";
+  if (!form.has_return) return "";
+  const stops = journeyStops(form.shop);
+  if (form.category !== "Transportation" || stops.length < 2 || stops[0] === stops[stops.length - 1]) return "Use a one-way transportation route, such as A → B, for the outward journey.";
+  if (!validDate(form.return_date) || form.return_date < form.date) return "Return date must be on or after the outward date.";
+  if (!positiveFare(form.return_amount)) return "Enter a positive whole-number return fare.";
+  if (Number(form.amount) + Number(form.return_amount) > 2147483647) return "The journey total is too large.";
+  return "";
+}
+function journeyFields(form) {
+  const back = form.has_return ? Number(form.return_amount) : null;
+  return { amount: Number(form.amount) + (back || 0), return_date: form.has_return ? form.return_date : null, return_amount: back };
+}
+
 // Keep the shop key stable for totals; a place belongs to this particular purchase.
 function expenseShopLabel(row) {
-  const shop = (row.shop || "").trim(), place = (row.place_name || "").trim();
+  if (row._tripSummary) return roundTripLabel(row);
+  const shop = (row.shop || "").trim() + (row._leg ? ` · ${row._leg === "return" ? "Return" : "Outward"}` : ""), place = (row.place_name || "").trim();
   return place && place.toLowerCase() !== shop.toLowerCase() ? `${shop} · ${place}` : shop;
 }
 function capturePlace(candidate, expenses = []) {
@@ -725,6 +780,7 @@ function App({ session, onSignOut }) {
     setData(overlayExpenses(serverExpRef.current).map(r => enrichRow({
       id: r.id, amount: r.amount, date: r.date, category: r.category,
       shop: r.shop, place_name: r.place_name || null, place_id: r.place_id || null, notes: r.notes || "", expense_type: r.expense_type || "normal", region: r.region,
+      return_date: r.return_date || null, return_amount: r.return_amount ?? null,
       tags: r.tags || "", _pending: !!r._pending, _ts: r._ts, created_at: r.created_at || null
     })));
   }, []);
@@ -746,7 +802,7 @@ function App({ session, onSignOut }) {
       // including the one fired right after a save — snapped the filter back to the
       // newest year, hiding a just-saved entry dated in any other year.
       if (!yearSeededRef.current) {
-        const years = [...new Set(expRes.data.map(r => Number(String(r.date).slice(0, 4))))].filter(Number.isFinite);
+        const years = [...new Set(expRes.data.flatMap(r => [r.date, r.return_date].filter(Boolean)).map(d => Number(String(d).slice(0, 4))))].filter(Number.isFinite);
         if (years.length) { setYearFilter(String(Math.max(...years))); yearSeededRef.current = true; }
       }
     }
@@ -785,7 +841,7 @@ function App({ session, onSignOut }) {
         if (!r.is_active || !r.frequency) return;
         const cap = (r.frequency === "daily" || r.frequency === "weekdays") ? 14 : 95;
         enumerateDue(r, today, cap).forEach((due) => {
-          const matched = data.some((e) => e.category === r.category && e.shop === r.shop && periodMatch(r.frequency, e.date, due));
+          const matched = data.flatMap(expenseLegs).some((e) => e.category === r.category && e.shop === r.shop && periodMatch(r.frequency, e.date, due));
           if (!matched) rows.push({ rule_id: r.id, due_date: due, amount: r.amount ?? null });
         });
       });
@@ -1195,7 +1251,7 @@ function App({ session, onSignOut }) {
     return () => { dead = true; window.removeEventListener("online", onOnline); clearInterval(iv); };
   }, [loading]);
 
-  const RAW = useMemo(() => data.filter((r) => regionOf(r) === currency), [data, currency]);
+  const RAW = useMemo(() => data.filter((r) => regionOf(r) === currency).flatMap(expenseLegs), [data, currency]);
   const catList = useMemo(() => [...new Set(RAW.map(r => r.category))].sort(), [RAW]);
   const years = useMemo(() => [...new Set(RAW.map(r => String(r.year)))].sort(), [RAW]);
 
@@ -1231,7 +1287,7 @@ function App({ session, onSignOut }) {
     return Object.entries(map).map(([name,value]) => ({name,value})).sort((a,b) => b.value-a.value).slice(0,6);
   }, [filtered]);
 
-  const txSource = useMemo(() => allRegions ? data.filter(r => {
+  const txSource = useMemo(() => allRegions ? data.flatMap(expenseLegs).filter(r => {
     if (yearFilter !== "All" && String(r.year) !== yearFilter) return false;
     if (catFilter !== "All" && r.category !== catFilter) return false;
     if (typeFilter !== "All" && r.expense_type !== typeFilter) return false;
@@ -1239,7 +1295,7 @@ function App({ session, onSignOut }) {
     return true;
   }) : filtered, [data, filtered, allRegions, yearFilter, catFilter, typeFilter, tagFilter]);
   const txShopSource = useMemo(() => shopFilter ? txSource.filter(r => r.shop === shopFilter) : txSource, [txSource, shopFilter]);
-  const sortedTx = useMemo(() => [...txShopSource].sort((a,b) => b.date.localeCompare(a.date) || idOrd(b) - idOrd(a)), [txShopSource]);
+  const sortedTx = useMemo(() => groupJourneyHistory(txShopSource).sort((a,b) => b.date.localeCompare(a.date) || idOrd(b) - idOrd(a)), [txShopSource]);
   const txPerPage = 15;
   const txPages = Math.ceil(sortedTx.length / txPerPage);
   const pageTx = sortedTx.slice(txPage * txPerPage, (txPage+1) * txPerPage);
@@ -1589,7 +1645,7 @@ const overlayExpenses = (rows) => {
   });
   return out;
 };
-const idOrd = (r) => (r._pending ? 8e15 + (r._ts || 0) : Number(r.id) || 0);
+const idOrd = (r) => (r._pending ? 8e15 + (r._ts || 0) : Number(expenseRecord(r).id) || 0);
 
 // ═══════════════════════════════════════════
 //  REQUEST INBOX → WEEKLY FOCUS  (Akatsuki R010)
@@ -2287,7 +2343,7 @@ function PrintSheet({ tasks = [], anchorDate, onClose }) {
 
 function CalendarView({ allExpenses = [], shopFilter = null, setShopFilter = () => {}, catFilter = "All", setCatFilter = () => {}, categories = [] }) {
   const { theme, supabase, fetchData, getCatIcon, getTagIcon, setView, setPresetDate, currency } = useTheme();
-  const { openEdit, requestDelete, insertExpense, notify, modals } = useExpenseMutations({ onChange: fetchData });
+  const { openEdit, addReturnJourney, requestDelete, insertExpense, notify, modals } = useExpenseMutations({ onChange: fetchData });
   // Quick add: with a shop filtered, the day panel only needs an amount.
   const [quickAmt, setQuickAmt] = useState("");
   const [quickSaving, setQuickSaving] = useState(false);
@@ -2886,7 +2942,8 @@ function CalendarView({ allExpenses = [], shopFilter = null, setShopFilter = () 
                   </div>
                   <span style={{fontSize:14,fontWeight:700,color:"#fff",whiteSpace:"nowrap"}}>{fmt(e.amount)}</span>
                   <div style={{display:"flex",alignItems:"center",flexShrink:0}}>
-                    <button title="Edit" onClick={() => openEdit(e)} style={{background:"none",border:"none",cursor:"pointer",opacity:0.85,padding:"3px 5px",color:theme.textMuted,display:"inline-flex"}}><Icon name="pencil" size={15}/></button>
+                    {canAddReturnJourney(e) && <button onClick={() => addReturnJourney(e)} style={{background:theme.primaryGlow,border:`1px solid ${theme.cardBorder}`,borderRadius:7,color:theme.text,padding:"6px 8px",fontSize:11,cursor:"pointer"}}>Add return</button>}
+                    <button title={hasReturnJourney(e) ? "Edit round trip" : "Edit"} onClick={() => openEdit(e)} style={{background:"none",border:"none",cursor:"pointer",opacity:0.85,padding:"3px 5px",color:theme.textMuted,display:"inline-flex"}}><Icon name="pencil" size={15}/></button>
                     <button title="Delete" onClick={() => requestDelete(e)} style={{background:"none",border:"none",cursor:"pointer",opacity:0.85,padding:"3px 5px",color:theme.danger,display:"inline-flex"}}><Icon name="trash" size={15}/></button>
                   </div>
                 </div>
@@ -4626,8 +4683,19 @@ function useExpenseMutations({ onChange }) {
   const [deletingTx, setDeletingTx] = useState(null);
   const [toast, setToast] = useState(null);
 
-  const openEdit = (tx) => { setEditForm({ ...tx, tagsArray: (tx.tags||"").split(",").filter(Boolean) }); setEditingTx(tx); };
-  const requestDelete = (tx) => setDeletingTx(tx);
+  const [editingBusy, setEditingBusy] = useState(false);
+  const editingBusyRef = useRef(false);
+  const openEdit = (tx, addReturn = false) => {
+    const record = expenseRecord(tx), has = hasReturnJourney(record);
+    const outward = Number(record.amount) - (has ? Number(record.return_amount) : 0);
+    setEditForm({ ...record, amount: outward, has_return: has || addReturn,
+      return_date: record.return_date || (record.date > ymdToday() ? record.date : ymdToday()),
+      return_amount: has ? record.return_amount : outward,
+      tagsArray: (record.tags || "").split(",").filter(Boolean) });
+    setEditingTx(record);
+  };
+  const addReturnJourney = (tx) => { if (canAddReturnJourney(tx)) openEdit(tx, true); };
+  const requestDelete = (tx) => setDeletingTx(expenseRecord(tx));
 
   // Canonical INSERT path for one-off entries (Fare Calc, Shop Capture) —
   // funnels every new-feature insert through this hook so there is exactly
@@ -4640,12 +4708,19 @@ function useExpenseMutations({ onChange }) {
   };
   const notify = (type, msg) => { setToast({ type, msg }); setTimeout(() => setToast(null), 3000); };
 
+  const editError = editForm.has_return || hasReturnJourney(editingTx || {}) ? journeyFormError(editForm) : "";
   const handleUpdate = async () => {
+    if (editingBusyRef.current) return;
+    const validation = editError;
+    if (validation) { notify("error", validation); return; }
+    editingBusyRef.current = true; setEditingBusy(true);
+    try {
     const res = await writeThrough({ table: "cost_management_expenses", op: "update", match: { id: editForm.id },
-      row: { amount: Number(editForm.amount), date: editForm.date, category: editForm.category, shop: editForm.shop, place_name: (editForm.place_name || "").trim() || null, place_id: editForm.place_id || null, notes: editForm.notes, expense_type: editForm.expense_type, tags: (editForm.tagsArray||[]).join(",") } });
+      row: { ...journeyFields(editForm), date: editForm.date, category: editForm.category, shop: editForm.shop, place_name: (editForm.place_name || "").trim() || null, place_id: editForm.place_id || null, notes: editForm.notes, expense_type: editForm.expense_type, tags: (editForm.tagsArray||[]).join(",") } });
     if (!res.ok) { setToast({ type: "error", msg: res.error }); }
     else { setToast({ type: "success", msg: res.queued ? "Updated · will sync" : "Updated" }); setEditingTx(null); onChange(); }
     setTimeout(() => setToast(null), 3000);
+    } finally { editingBusyRef.current = false; setEditingBusy(false); }
   };
 
   const handleDelete = async () => {
@@ -4665,16 +4740,35 @@ function useExpenseMutations({ onChange }) {
 
       {/* Edit Modal */}
       {editingTx && (
-        <Modal onClose={() => setEditingTx(null)}>
-          <h4 style={{color:"#fff",fontSize:14,margin:"0 0 12px 0"}}>Edit Entry</h4>
+        <Modal onClose={() => { if (!editingBusy) setEditingTx(null); }}>
+          <fieldset disabled={editingBusy} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+          <h4 style={{color:"#fff",fontSize:14,margin:"0 0 12px 0"}}>{editForm.has_return ? "Edit round trip" : "Edit Entry"}</h4>
+          <div style={{fontSize:11,color:theme.textMuted,marginBottom:6}}>{editForm.has_return ? "Outward date and fare" : "Date and amount"}</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-            <input type="date" value={editForm.date} onChange={e => setEditForm({...editForm, date: e.target.value})} style={{...inputStyle,fontSize:11,colorScheme:"dark"}}/>
-            <input type="number" value={editForm.amount} onChange={e => setEditForm({...editForm, amount: e.target.value})} style={{...inputStyle,fontSize:11}}/>
+            <input aria-label="Outward date" type="date" value={editForm.date} onChange={e => setEditForm({...editForm, date: e.target.value})} style={{...inputStyle,fontSize:11,colorScheme:"dark"}}/>
+            <input aria-label="Outward fare" type="number" value={editForm.amount} onChange={e => setEditForm({...editForm, amount: e.target.value})} style={{...inputStyle,fontSize:11}}/>
           </div>
           <select value={editForm.category} onChange={e => setEditForm({...editForm, category: e.target.value})} style={{...inputStyle,marginBottom:8,fontSize:11,cursor:"pointer"}}>
             {categories.map(c => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
           </select>
           <input type="text" value={editForm.shop} onChange={e => setEditForm({...editForm, shop: e.target.value, place_name: null, place_id: null})} style={{...inputStyle,marginBottom:8,fontSize:11}}/>
+          {(canAddReturnJourney({ ...editForm, return_date: null, return_amount: null }) || editForm.has_return) && (
+            <div style={{background:theme.inputBg,border:`1px solid ${theme.cardBorder}`,borderRadius:10,padding:12,marginBottom:10}}>
+              <label style={{display:"flex",gap:8,alignItems:"center",color:theme.text,fontSize:13,fontWeight:600}}>
+                <input type="checkbox" checked={!!editForm.has_return} onChange={e => setEditForm({...editForm,has_return:e.target.checked})}/> Include return journey
+              </label>
+              {editForm.has_return && <>
+                <div style={{fontSize:12,color:theme.textMuted,margin:"8px 0"}}>{reverseJourney(editForm.shop)}</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                  <label style={{fontSize:11,color:theme.textMuted}}>Return date<input aria-label="Return date" type="date" min={editForm.date} value={editForm.return_date} onChange={e => setEditForm({...editForm,return_date:e.target.value})} style={{...inputStyle,colorScheme:"dark"}}/></label>
+                  <label style={{fontSize:11,color:theme.textMuted}}>Return fare<input aria-label="Return fare" type="number" min="1" step="1" value={editForm.return_amount} onChange={e => setEditForm({...editForm,return_amount:e.target.value})} style={inputStyle}/></label>
+                </div>
+                <div style={{fontSize:12,color:theme.text,marginTop:8}}>Trip total · {fmt(Number(editForm.amount) + Number(editForm.return_amount))}</div>
+                <div style={{fontSize:11,color:theme.textMuted,marginTop:4}}>One saved entry. Each fare counts on its own travel date.</div>
+              </>}
+              {!editForm.has_return && hasReturnJourney(editingTx) && <div style={{color:theme.warning,fontSize:11,marginTop:8}}>Saving removes the return fare and keeps the outward journey.</div>}
+            </div>
+          )}
           <label style={{fontSize:11,color:theme.textMuted}}>Place / branch (optional)</label>
           <input aria-label="Place / branch" value={editForm.place_name || ""} onChange={e => setEditForm({...editForm, place_name: e.target.value, place_id: null})} placeholder="e.g. Ageo Station East Exit" style={{...inputStyle,marginBottom:8,fontSize:11}}/>
           <select value={editForm.expense_type||"normal"} onChange={e => setEditForm({...editForm, expense_type: e.target.value})} style={{...inputStyle,marginBottom:8,fontSize:11,cursor:"pointer"}}>
@@ -4689,15 +4783,18 @@ function useExpenseMutations({ onChange }) {
           <input type="text" value={editForm.notes||""} onChange={e => setEditForm({...editForm, notes: e.target.value})} placeholder="Notes" style={{...inputStyle,marginBottom:10,fontSize:11}}/>
           <div style={{display:"flex",gap:6}}>
             <button onClick={() => setEditingTx(null)} style={{flex:1,padding:"8px",borderRadius:6,border:`1px solid ${theme.cardBorder}`,background:"transparent",color:theme.textMuted,cursor:"pointer",fontSize:11}}>Cancel</button>
-            <button onClick={handleUpdate} style={{flex:1,padding:"8px",borderRadius:6,border:"none",background:theme.primary,color:"#fff",cursor:"pointer",fontWeight:600,fontSize:11}}>Save</button>
+            <button onClick={handleUpdate} disabled={editingBusy || !!editError} style={{flex:1,padding:"8px",borderRadius:6,border:"none",background:theme.primary,color:"#fff",cursor:"pointer",fontWeight:600,fontSize:11}}>{editingBusy ? "Saving…" : "Save"}</button>
           </div>
+          {editError && <div role="alert" style={{fontSize:11,color:theme.warning,marginTop:8}}>{editError}</div>}
+          </fieldset>
         </Modal>
       )}
 
       {/* Delete Modal */}
       {deletingTx && (
         <Modal onClose={() => setDeletingTx(null)}>
-          <h4 style={{color:theme.danger,fontSize:14,margin:"0 0 8px 0"}}>Delete?</h4>
+          <h4 style={{color:theme.danger,fontSize:14,margin:"0 0 8px 0"}}>{hasReturnJourney(deletingTx) ? "Delete the entire round trip?" : "Delete?"}</h4>
+          {hasReturnJourney(deletingTx) && <p style={{fontSize:12,color:theme.textMuted}}>Both the outward fare on {deletingTx.date} and return fare on {deletingTx.return_date} will be removed. To remove only the return, edit the journey and uncheck Include return journey.</p>}
           <div style={{background:theme.inputBg,borderRadius:6,padding:10,marginBottom:10}}>
             <div style={{display:"flex",justifyContent:"space-between"}}>
               <span style={{color:theme.text,fontSize:12}}>{getCatIcon(deletingTx.category)} {deletingTx.shop}</span>
@@ -4713,7 +4810,7 @@ function useExpenseMutations({ onChange }) {
     </>
   );
 
-  return { openEdit, requestDelete, insertExpense, notify, modals };
+  return { openEdit, addReturnJourney, requestDelete, insertExpense, notify, modals };
 }
 
 // ═══════════════════════════════════════════
@@ -5202,7 +5299,11 @@ function FareCalcView({ allExpenses, dueAdd }) {
   const [busy, setBusy] = useState(false);
   const [date, setDate] = useState(ymdToday());
   const [card, setCard] = useState(null);
-  const [round, setRound] = useState(false); // return trip: same legs priced again in reverse
+  const [round, setRound] = useState(false);
+  const [returnDate, setReturnDate] = useState("");
+  const [returnFareInput, setReturnFareInput] = useState("");
+  const [savingTrip, setSavingTrip] = useState(false);
+  const savingTripRef = useRef(false);
   const [direct, setDirect] = useState(null); // book row for the two endpoints, if any
   const [useDirect, setUseDirect] = useState(false);
   const [bookMsg, setBookMsg] = useState(null); // fare-book write feedback after saving
@@ -5228,7 +5329,7 @@ function FareCalcView({ allExpenses, dueAdd }) {
     return out;
   }, [allExpenses]);
 
-  const reset = () => { setLegs([]); setManual({}); setSugg(null); setCorrecting({}); setDirect(null); setUseDirect(false); setBookMsg(null); setRoutePick({}); setRouteOpen({}); };
+  const reset = () => { setLegs([]); setReturnFareInput(""); setManual({}); setSugg(null); setCorrecting({}); setDirect(null); setUseDirect(false); setBookMsg(null); setRoutePick({}); setRouteOpen({}); };
   const setStop = (i, v) => { setStops((s) => s.map((x, j) => (j === i ? v : x))); reset(); };
   const addStop = () => { setStops((s) => [...s, ""]); reset(); };
   const removeStop = (i) => { setStops((s) => (s.length <= 2 ? s : s.filter((_, j) => j !== i))); reset(); };
@@ -5307,14 +5408,18 @@ function FareCalcView({ allExpenses, dueAdd }) {
   // A→C than fare(A,B)+fare(B,C). If the book holds a direct endpoint fare
   // that differs from the sum, offer it instead of guessing.
   const oneWay = useDirect && direct ? direct.fare_ic : legSum;
-  const total = oneWay == null ? null : round ? oneWay * 2 : oneWay;
+  const returnFare = returnFareInput === "" ? oneWay : Number(returnFareInput);
+  const total = oneWay == null ? null : Number(oneWay) + (round ? Number(returnFare) : 0);
+  const tripError = journeyFormError({ date, amount: oneWay, category: "Transportation", shop: clean.join(" → "), has_return: round, return_date: returnDate || date, return_amount: returnFare });
 
   const save = async () => {
-    if (!allPriced || busy) return;
-    const route = round ? clean.join(" → ") + " → " + clean[0] : clean.join(" → ");
+    if (!allPriced || busy || savingTripRef.current || tripError) return;
+    savingTripRef.current = true; setSavingTrip(true);
+    try {
+    const route = clean.join(" → ");
     const legNotes = legs.map((r, i) => { const c = routePick[i] != null ? pickedRoute(i) : null; return `${legPairs[i][0]}→${legPairs[i][1]} ${fmt(amounts[i])}${r && !r.error ? "" : " (manual)"}${c ? ` [route: ${routeLabel(c)} · ${c.km} km · chosen]` : ""}`; }).join(" · ");
-    const notes = round ? `Round trip · out ${legNotes} · return same fares` : legNotes;
-    const res = await insertExpense({ region: currency, date, category: "Transportation", shop: route, amount: total, notes, expense_type: "normal", tags: "" });
+    const notes = legNotes;
+    const res = await insertExpense({ region: currency, date, category: "Transportation", shop: route, amount: total, return_date: round ? (returnDate || date) : null, return_amount: round ? returnFare : null, notes, expense_type: "normal", tags: "" });
     // Feed the fare book so the next occurrence of these legs autofills.
     if (res.ok) {
       const clashes = [], failures = [];
@@ -5339,10 +5444,11 @@ function FareCalcView({ allExpenses, dueAdd }) {
       setBookMsg(failures.length ? { kind: "error", lines: failures } : clashes.length ? { kind: "clash", lines: clashes } : { kind: "ok" });
     }
     const out = legs.map((r, i) => ({ from: legPairs[i][0], to: legPairs[i][1], amount: amounts[i], source: r && !r.error ? r.source : "manual", km: r && !r.error ? r.distance_km : null }));
-    const back = round ? [...out].reverse().map((l) => ({ ...l, from: l.to, to: l.from })) : [];
-    if (res.ok) setCard({ route, legs: out, back, oneWay, total, date, round });
+    const back = round ? [{ from: clean[clean.length - 1], to: clean[0], amount: returnFare, source: "confirmed" }] : [];
+    if (res.ok) setCard({ route, legs: useDirect ? [{from: clean[0], to: clean[clean.length - 1], amount: oneWay, source: "confirmed"}] : out, back, oneWay, total, date, round, returnDate: returnDate || date, returnFare });
+    } finally { savingTripRef.current = false; setSavingTrip(false); }
   };
-  const startNew = () => { setCard(null); setStops(["", ""]); reset(); };
+  const startNew = () => { setCard(null); setStops(["", ""]); setRound(false); setReturnDate(""); setReturnFareInput(""); reset(); };
 
   if (card) return (
     <div className="cm-fade" style={{ maxWidth: 560, margin: "0 auto" }}>
@@ -5368,7 +5474,7 @@ function FareCalcView({ allExpenses, dueAdd }) {
         ))}
         <div style={{ background: theme.inputBg, borderRadius: 10, padding: "11px 13px" }}>
           {card.round && (
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: theme.textMuted, marginBottom: 6 }}><span>Each way</span><span>{fmt(card.oneWay)} × 2</span></div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: theme.textMuted, marginBottom: 6 }}><span>Outward · {card.date}<br/>Return · {card.returnDate}</span><span>{fmt(card.oneWay)}<br/>{fmt(card.returnFare)}</span></div>
           )}
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
             <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600, color: theme.textMuted }}>Total · {card.legs.length + (card.back ? card.back.length : 0)} leg{card.legs.length + (card.back ? card.back.length : 0) === 1 ? "" : "s"}</span>
@@ -5404,7 +5510,7 @@ function FareCalcView({ allExpenses, dueAdd }) {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
           <span style={{ fontSize: 13.5, fontWeight: 700, color: "#fff", display: "inline-flex", alignItems: "center", gap: 8, whiteSpace: "nowrap" }}><Icon name="train" size={15}/>Transit journey</span>
           <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-          <button onClick={() => setRound((r) => !r)} title="Price the trip back as well" style={{ border: `1px solid ${round ? theme.primary : theme.cardBorder}`, background: round ? theme.primaryGlow : theme.inputBg, color: round ? "#fff" : theme.textMuted, borderRadius: 9, padding: "5px 9px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "inherit", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0 }}><Icon name="repeat" size={13}/>Round trip</button>
+          <button onClick={() => setRound((r) => !r)} aria-pressed={round} title="Include a return journey with its own date and fare" style={{ border: `1px solid ${round ? theme.primary : theme.cardBorder}`, background: round ? theme.primaryGlow : theme.inputBg, color: round ? "#fff" : theme.textMuted, borderRadius: 9, padding: "5px 9px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "inherit", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0 }}><Icon name="repeat" size={13}/>Round trip</button>
           <button onClick={reverse} title="Reverse the whole journey" style={{ border: `1px solid ${theme.cardBorder}`, background: theme.inputBg, color: theme.textMuted, borderRadius: 9, padding: "5px 9px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "inherit", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0 }}><Icon name="swap" size={13}/>Reverse</button>
           </div>
         </div>
@@ -5515,12 +5621,22 @@ function FareCalcView({ allExpenses, dueAdd }) {
             )}
             <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", padding: "4px 2px" }}>
               <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600, color: theme.textMuted }}>Journey total{round ? " · round trip" : ""}{useDirect ? " · direct" : ""}</span>
-              <span style={{ fontSize: 20, fontWeight: 700, color: total != null ? "#fff" : theme.textDim }}>{total != null ? fmt(total) : "—"}{round && oneWay != null ? <span style={{ fontSize: 11, fontWeight: 600, color: theme.textMuted }}> ({fmt(oneWay)} × 2)</span> : null}</span>
+              <span style={{ fontSize: 20, fontWeight: 700, color: total != null ? "#fff" : theme.textDim }}>{total != null ? fmt(total) : "—"}{round && oneWay != null ? <span style={{ fontSize: 11, fontWeight: 600, color: theme.textMuted }}> ({fmt(oneWay)} + {fmt(returnFare)})</span> : null}</span>
             </div>
             <div>
               <label style={labelStyle}>Date</label>
               <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ ...inputStyle, colorScheme: "dark", marginBottom: 8 }}/>
-              <button onClick={save} disabled={!allPriced} style={{ width: "100%", padding: "11px", borderRadius: 10, border: "none", cursor: allPriced ? "pointer" : "not-allowed", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})`, opacity: allPriced ? 1 : 0.5 }}>Add {round ? "round trip" : "journey"} as expense{total != null ? ` · ${fmt(total)}` : ""}</button>
+              {round && <div style={{background:theme.inputBg,borderRadius:10,padding:12,marginBottom:10}}>
+                <div style={{fontSize:12,fontWeight:600,color:theme.text,marginBottom:8}}>Return journey · {reverseJourney(clean.join(" → "))}</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                  <label style={labelStyle}>Return date<input aria-label="Return date" type="date" min={date} value={returnDate || date} onChange={e => setReturnDate(e.target.value)} style={{...inputStyle,colorScheme:"dark"}}/></label>
+                  <label style={labelStyle}>Return fare<input aria-label="Return fare" type="number" min="1" step="1" value={returnFareInput} placeholder={oneWay == null ? "" : String(oneWay)} onChange={e => setReturnFareInput(e.target.value)} style={inputStyle}/></label>
+                </div>
+                <div style={{fontSize:11,color:theme.textMuted,marginTop:7}}>Leave the fare blank to use the outward fare. You can return on a later date.</div>
+              </div>}
+              {!round && <div style={{fontSize:11,color:theme.textMuted,marginBottom:8}}>Returning later? Save this journey now, then choose Add return journey in History.</div>}
+              {tripError && <div role="alert" style={{fontSize:11,color:theme.warning,marginBottom:8}}>{tripError}</div>}
+              <button onClick={save} disabled={!allPriced || !!tripError || savingTrip} style={{ width: "100%", padding: "11px", borderRadius: 10, border: "none", cursor: allPriced ? "pointer" : "not-allowed", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})`, opacity: allPriced ? 1 : 0.5 }}>{savingTrip ? "Saving" : "Add"} {round ? "round trip" : "journey"} as expense{total != null ? ` · ${fmt(total)}` : ""}</button>
             </div>
           </div>
         )}
@@ -5947,7 +6063,7 @@ function ShopCaptureView({ allExpenses }) {
 // ═══════════════════════════════════════════
 function TransactionsView({ pageTx, txPage, setTxPage, txPages }) {
   const { theme, fetchData, getCatIcon, getTagIcon } = useTheme();
-  const { openEdit, requestDelete, modals } = useExpenseMutations({ onChange: fetchData });
+  const { openEdit, addReturnJourney, requestDelete, modals } = useExpenseMutations({ onChange: fetchData });
 
   return (
     <div style={{background:theme.cardBg,border:`1px solid ${theme.cardBorder}`,borderRadius:12,overflow:"hidden"}}>
@@ -5964,8 +6080,8 @@ function TransactionsView({ pageTx, txPage, setTxPage, txPages }) {
             {pageTx.map(tx => (
               <tr key={tx.id} style={{borderBottom:`1px solid ${theme.cardBorder}`}}>
                 <td style={{padding:"8px 6px",width:20}}>{EXPENSE_TYPES[tx.expense_type]?.icon}</td>
-                <td style={{padding:"8px 6px",color:theme.textMuted,whiteSpace:"nowrap"}}>{tx.date}</td>
-                <td style={{padding:"8px 6px",color:theme.text,fontWeight:500,minWidth:140,maxWidth:260,whiteSpace:"normal",overflowWrap:"anywhere"}} title={expenseShopLabel(tx)}>{expenseShopLabel(tx)}{tx._pending && <span title="Saved on this device · waiting to sync" style={{color:theme.warning,fontWeight:700}}> ·</span>}</td>
+                <td style={{padding:"8px 6px",color:theme.textMuted,whiteSpace:"nowrap"}}>{tx._tripSummary ? tx._visibleLegs.map(l => <div key={l._leg}>{l._leg === "return" ? "Return" : "Outward"} · {l.date}<span style={{display:"block",fontSize:10}}>{fmtIn(l.amount, regionOf(l))}</span></div>) : tx.date}</td>
+                <td style={{padding:"8px 6px",color:theme.text,fontWeight:500,minWidth:140,maxWidth:260,whiteSpace:"normal",overflowWrap:"anywhere"}} title={expenseShopLabel(tx)}>{expenseShopLabel(tx)}{tx._tripSummary && tx._visibleLegs.length === 1 && <div style={{fontSize:10,color:theme.textMuted}}>Only the {tx._visibleLegs[0]._leg} fare matches this filter</div>}{tx._pending && <span title="Saved on this device · waiting to sync" style={{color:theme.warning,fontWeight:700}}> ·</span>}</td>
                 <td style={{padding:"8px 6px"}}><span style={{fontSize:14,cursor:"default"}} title={tx.category}>{getCatIcon(tx.category)}</span></td>
                 <td style={{padding:"8px 6px"}}>
                   {(tx.tags||"").split(",").filter(Boolean).slice(0,2).map(t => (
@@ -5974,6 +6090,7 @@ function TransactionsView({ pageTx, txPage, setTxPage, txPages }) {
                 </td>
                 <td style={{padding:"8px 6px",color:"#fff",fontWeight:600}}>{fmtIn(tx.amount, regionOf(tx))}</td>
                 <td style={{padding:"8px 6px"}}>
+                  {canAddReturnJourney(tx) && <button onClick={() => addReturnJourney(tx)} style={{background:theme.primaryGlow,border:`1px solid ${theme.cardBorder}`,borderRadius:7,color:theme.text,padding:"6px 8px",fontSize:11,cursor:"pointer",whiteSpace:"nowrap"}}>Add return journey</button>}
                   <button title="Edit" onClick={() => openEdit(tx)} style={{background:"none",border:"none",cursor:"pointer",opacity:0.85,padding:"3px 5px",color:theme.textMuted,display:"inline-flex"}}><Icon name="pencil" size={15}/></button>
                   <button title="Delete" onClick={() => requestDelete(tx)} style={{background:"none",border:"none",cursor:"pointer",opacity:0.85,padding:"3px 5px",color:theme.danger,display:"inline-flex"}}><Icon name="trash" size={15}/></button>
                 </td>
