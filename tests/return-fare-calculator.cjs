@@ -8,7 +8,7 @@ const ctx={console,Date,Number,Map,Set,require:()=>({jsx:(type,props)=>({type,pr
  useTheme:()=>({theme,inputStyle:{},labelStyle:{},supabase:{},fetchData(){},currency:'JPY'}),
  useExpenseMutations:()=>({insertExpense:async row=>{rows.push(row);await Promise.resolve();return {ok:true};},modals:null}),
  ymdToday:()=> '2026-12-30',canonStation:s=>s.trim(),SEED_STATIONS:[],jrRoutes:()=>[],fareLookup:async()=>({fare_ic:199,source:'book',verified:true}),
- fareBookSave:async()=>({status:'ok'}),fareTone:()=> '#888888',fareSourceLabel:()=> 'Saved fare',overridden:x=>x!=null&&x!=='',fmt:x=>'¥'+x,CUR:{symbol:'¥'},Icon:()=>null};
+ fareBookSave:async()=>({status:'ok'}),fareTone:()=> '#888888',fareSourceLabel:()=> 'Saved fare',overridden:x=>x!=null&&x!=='',fmt:x=>'¥'+x,CUR:{symbol:'¥'},Icon:()=>null,StationPicker:()=>null,stnKey:s=>String(s||'').toLowerCase().replace(/[\s-]/g,'')};
 vm.createContext(ctx);vm.runInContext(src.slice(src.indexOf('// Round trips are one'),src.indexOf('function App(')),ctx);
 vm.runInContext(babel.babelTransform(src.slice(src.indexOf('function FareCalcView'),src.indexOf('function FareBookView')),'fare.jsx',false,[],[]).code,ctx);
 const render=()=>{cursor=0;return ctx.FareCalcView({allExpenses:[],dueAdd(){}});};
@@ -17,7 +17,13 @@ const find=fn=>{const n=nodes(render()).find(fn);assert.ok(n,'control exists');r
 const text=n=>n==null?'':typeof n==='object'?(Array.isArray(n)?n.map(text).join(''):text(n.props?.children)):String(n);
 const button=t=>find(n=>n.type==='button'&&text(n).startsWith(t));
 const field=name=>find(n=>n.type==='input'&&n.props['aria-label']===name);
-async function plan(){find(n=>n.type==='input'&&n.props.placeholder==='Nishi-Funabashi').props.onChange({target:{value:'A'}});find(n=>n.type==='input'&&n.props.placeholder==='Shinjuku').props.onChange({target:{value:'B'}});await button('Calculate 1 leg').props.onClick();}
+async function plan(){
+ find(n=>n.type==='button'&&n.props['aria-label']==='Choose from station').props.onClick();
+ find(n=>n.type===ctx.StationPicker).props.onChoose('A','');
+ find(n=>n.type==='button'&&n.props['aria-label']==='Choose to station').props.onClick();
+ find(n=>n.type===ctx.StationPicker).props.onChoose('B','');
+ await button('Calculate 1 leg').props.onClick();
+}
 (async()=>{
  await plan();button('Round trip').props.onClick();
  field('Return date').props.onChange({target:{value:'2027-01-02'}});field('Return fare').props.onChange({target:{value:'209'}});
