@@ -5284,6 +5284,74 @@ function SmartEntryView({ allExpenses, dueAdd }) {
   );
 }
 
+// Station selection is separate from fare routing: these filters never alter the graph.
+function stationPickerOptions(stations, lineId = "", query = "", recent = []) {
+  const line = JR_LINES.find(l => l.id === lineId);
+  const pool = line ? line.stations.map(([name]) => name) : stations;
+  const known = new Map();
+  pool.forEach(name => { const key = stnKey(name); if (key && !known.has(key)) known.set(key, name); });
+  const needle = stnKey(query.trim()), ranked = new Map(recent.map((name, i) => [stnKey(name), i]));
+  return [...known.values()].filter(name => !needle || stnKey(name).includes(needle)).sort((a, b) => {
+    if (needle) { const exact = Number(stnKey(b) === needle) - Number(stnKey(a) === needle); if (exact) return exact; }
+    if (!line) { const rank = (ranked.get(stnKey(a)) ?? 1e6) - (ranked.get(stnKey(b)) ?? 1e6); if (rank) return rank; }
+    return line ? 0 : a.localeCompare(b);
+  });
+}
+function StationPicker({ title, value, stations, recent = [], initialLine = "", onChoose, onClose }) {
+  const { theme, inputStyle } = useTheme();
+  const [lineId, setLineId] = useState(() => {
+    const line = JR_LINES.find(l => l.id === initialLine);
+    return line && (!value || line.stations.some(([name]) => stnKey(name) === stnKey(value))) ? initialLine : "";
+  });
+  const [query, setQuery] = useState("");
+  const closeRef = useRef(null), dialogRef = useRef(null);
+  useEffect(() => { const previous = document.activeElement; closeRef.current?.focus(); return () => { if (previous?.isConnected) previous.focus(); }; }, []);
+  const line = JR_LINES.find(l => l.id === lineId);
+  const options = useMemo(() => stationPickerOptions(stations, lineId, query, recent), [stations, lineId, query, recent]);
+  const exact = stations.some(name => stnKey(name) === stnKey(query.trim()));
+  const choose = name => onChoose(name, lineId);
+  const keyDown = e => {
+    if (e.key === "Escape") { e.preventDefault(); onClose(); }
+    if (e.key !== "Tab") return;
+    const fields = [...(dialogRef.current?.querySelectorAll('button:not([disabled]), input, select') || [])];
+    const first = fields[0], last = fields[fields.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
+  };
+  return <Modal sheet onClose={onClose}>
+    <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="station-picker-title" onKeyDown={keyDown}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,marginBottom:12}}>
+        <h3 id="station-picker-title" style={{margin:0,fontSize:17,color:theme.text}}>Choose {title.toLowerCase()} station</h3>
+        <button ref={closeRef} type="button" onClick={onClose} aria-label="Close station picker" style={{minWidth:44,minHeight:44,borderRadius:10,border:`1px solid ${theme.cardBorder}`,background:theme.inputBg,color:theme.text,cursor:"pointer",fontSize:20}}>×</button>
+      </div>
+      <label style={{display:"block",fontSize:12,color:theme.textMuted,marginBottom:10}}>Railway line
+        <select aria-label="Railway line" value={lineId} onChange={e => setLineId(e.target.value)} style={{...inputStyle,minHeight:46,marginTop:5}}>
+          <option value="">All lines / other stations</option>
+          {JR_LINES.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+        </select>
+      </label>
+      <input type="search" aria-label="Search stations" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.nativeEvent?.isComposing && options.length === 1) { e.preventDefault(); choose(options[0]); } }} placeholder="Search station name…" autoComplete="off" autoCorrect="off" spellCheck={false} style={{...inputStyle,minHeight:46,fontSize:16,marginBottom:8}}/>
+      {value && <div style={{fontSize:11,color:theme.textMuted,marginBottom:6}}>Current station · {value}</div>}
+      <div aria-live="polite" style={{fontSize:11,color:theme.textMuted,marginBottom:8,lineHeight:1.5}}>
+        {line ? `${options.length} matches · saved section ${line.stations[0][0]} – ${line.stations[line.stations.length - 1][0]}` : `${options.length} stations · recent stations first`}
+      </div>
+      <div style={{maxHeight:"min(38vh, 320px)",overflowY:"auto",overscrollBehavior:"contain",display:"flex",flexDirection:"column",gap:6}}>
+        {options.map(name => {
+          const selected = stnKey(name) === stnKey(value), used = recent.some(n => stnKey(n) === stnKey(name));
+          const lines = JR_LINES.filter(l => l.stations.some(([n]) => stnKey(n) === stnKey(name))).map(l => l.name);
+          return <button type="button" key={stnKey(name)} aria-label={`Select ${name}`} aria-pressed={selected} onClick={() => choose(name)} style={{display:"flex",alignItems:"center",gap:10,minHeight:56,width:"100%",padding:"10px 12px",textAlign:"left",borderRadius:10,border:`1px solid ${selected ? theme.primary : theme.cardBorder}`,background:selected ? theme.primaryGlow : theme.inputBg,color:theme.text,cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>
+            <span style={{flex:1,minWidth:0}}><span style={{display:"block",fontSize:15,fontWeight:600,overflowWrap:"anywhere"}}>{name}</span><span style={{display:"block",fontSize:10.5,color:theme.textMuted,marginTop:3}}>{lines.join(" · ") || "Other station"}</span></span>
+            <span style={{fontSize:11,color:selected ? theme.primary : theme.textMuted}}>{selected ? "Selected" : used ? "Recent" : ""}</span>
+          </button>;
+        })}
+        {options.length === 0 && <div style={{padding:"18px 8px",color:theme.textMuted,fontSize:13}}>No stations match{line ? " on this saved line section" : " your search"}.</div>}
+      </div>
+      {line && <button type="button" onClick={() => setLineId("")} style={{width:"100%",minHeight:44,marginTop:8,border:0,background:"transparent",color:theme.primary,fontSize:12,fontWeight:600,cursor:"pointer"}}>Station missing? Show all lines</button>}
+      {!line && query.trim() && !exact && <button type="button" onClick={() => choose(canonStation(query))} style={{width:"100%",minHeight:46,marginTop:10,borderRadius:10,border:`1px dashed ${theme.cardBorder}`,background:theme.inputBg,color:theme.text,fontSize:13,cursor:"pointer",overflowWrap:"anywhere"}}>Use “{query.trim()}” as typed</button>}
+    </div>
+  </Modal>;
+}
+
 // ═══ PHASE A — Transit fare: multi-leg journey builder ═══
 // A trip is a sequence of stops (A → B → C …); each consecutive pair is a leg
 // looked up separately, because transfers are priced per operator, not end-to-end.
@@ -5291,6 +5359,15 @@ function FareCalcView({ allExpenses, dueAdd }) {
   const { theme, inputStyle, labelStyle, supabase, fetchData, currency } = useTheme();
   const { insertExpense, modals } = useExpenseMutations({ onChange: fetchData });
   const [stops, setStops] = useState(["", ""]);
+  const [stationPicker, setStationPicker] = useState(null);
+  const [stationLine, setStationLine] = useState("");
+  const recentStations = useMemo(() => {
+    const seen = new Set(), names = [];
+    [...allExpenses].filter(e => e.category === "Transportation").sort((a, b) => b.date.localeCompare(a.date)).forEach(e => {
+      journeyStops(e.shop).forEach(name => { const key = stnKey(name); if (!seen.has(key)) { seen.add(key); names.push(name); } });
+    });
+    return names.slice(0, 8);
+  }, [allExpenses]);
   const [legs, setLegs] = useState([]);
   const [routePick, setRoutePick] = useState({}); // legIndex → candidate index the user chose (15b)
   const [routeOpen, setRouteOpen] = useState({});
@@ -5505,7 +5582,7 @@ function FareCalcView({ allExpenses, dueAdd }) {
 
   return (
     <div className="cm-fade" style={{ maxWidth: 560, margin: "0 auto" }}>
-      <datalist id="cm-stations">{stations.map((s) => <option key={s} value={s}/>)}</datalist>
+
       <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 12, padding: 16 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
           <span style={{ fontSize: 13.5, fontWeight: 700, color: "#fff", display: "inline-flex", alignItems: "center", gap: 8, whiteSpace: "nowrap" }}><Icon name="train" size={15}/>Transit journey</span>
@@ -5517,9 +5594,12 @@ function FareCalcView({ allExpenses, dueAdd }) {
         <div style={{ fontSize: 11, color: theme.textDim, marginBottom: 12 }}>Add every station you change at — each hop is priced separately and summed.</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
           {stops.map((s, i) => (
-            <div key={i} style={{ display: "grid", gridTemplateColumns: "58px 1fr auto", gap: 8, alignItems: "center" }}>
+            <div key={i} style={{ display: "grid", gridTemplateColumns: "42px minmax(0,1fr) auto", gap: 8, alignItems: "center" }}>
               <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: i === 0 ? theme.primary : i === stops.length - 1 ? theme.accent : theme.textMuted }}>{i === 0 ? "From" : i === stops.length - 1 ? "To" : "Via " + i}</span>
-              <input list="cm-stations" value={s} onChange={(e) => setStop(i, e.target.value)} placeholder={i === 0 ? "Nishi-Funabashi" : i === stops.length - 1 ? "Shinjuku" : "Transfer station"} style={inputStyle}/>
+              <button type="button" aria-label={`Choose ${i === 0 ? "from" : i === stops.length - 1 ? "to" : "transfer"} station`} aria-haspopup="dialog" onClick={() => setStationPicker(i)} style={{...inputStyle,display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,minHeight:58,textAlign:"left",cursor:"pointer",fontFamily:"inherit",padding:"10px 12px"}}>
+                <span style={{minWidth:0}}><span style={{display:"block",fontSize:15,fontWeight:600,color:s ? theme.text : theme.textMuted,overflowWrap:"anywhere"}}>{s || "Choose station"}</span><span style={{display:"block",fontSize:10.5,color:theme.textMuted,marginTop:3}}>Choose line or search station</span></span>
+                <span aria-hidden="true" style={{color:theme.primary,fontSize:18}}>⌄</span>
+              </button>
               <button onClick={() => removeStop(i)} disabled={stops.length <= 2} title="Remove stop" style={{ border: `1px solid ${theme.cardBorder}`, background: theme.inputBg, color: theme.textMuted, width: 36, height: 41, borderRadius: 10, cursor: stops.length <= 2 ? "not-allowed" : "pointer", opacity: stops.length <= 2 ? 0.35 : 1, fontFamily: "inherit", fontSize: 16, lineHeight: 1 }}>×</button>
             </div>
           ))}
@@ -5656,6 +5736,7 @@ function FareCalcView({ allExpenses, dueAdd }) {
           </div>
         </div>
       )}
+      {stationPicker != null && <StationPicker key={stationPicker} title={stationPicker === 0 ? "From" : stationPicker === stops.length - 1 ? "To" : "Transfer"} value={stops[stationPicker]} stations={stations} recent={recentStations} initialLine={stationLine} onClose={() => setStationPicker(null)} onChoose={(name, lineId) => { setStop(stationPicker, name); setStationLine(lineId); setStationPicker(null); }}/>}
       {modals}
     </div>
   );
