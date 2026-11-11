@@ -546,6 +546,25 @@ function applyGraphFilters(rows, f) {
   });
 }
 
+// Keep the shop key stable for totals; a place belongs to this particular purchase.
+function expenseShopLabel(row) {
+  const shop = (row.shop || "").trim(), place = (row.place_name || "").trim();
+  return place && place.toLowerCase() !== shop.toLowerCase() ? `${shop} · ${place}` : shop;
+}
+function capturePlace(candidate, expenses = []) {
+  const name = (candidate.name || "").trim();
+  const known = [...new Set(expenses.map(e => e.shop).filter(Boolean))];
+  // Only explicit aliases or a delimited prefix identify an existing shop.
+  const family = /^(?:family\s*mart|ファミリーマート)(?=$|[\s・·—–-]|[^\x00-\x7f])/i.exec(name);
+  const familyShop = family && known.find(n => /^(?:family\s*mart|ファミリーマート)$/i.test(n.trim()));
+  const prefix = known.sort((a, b) => b.length - a.length).find(n =>
+    name.toLowerCase() === n.toLowerCase() || (name.toLowerCase().startsWith(n.toLowerCase()) && /^[\s・·—–-]/.test(name.slice(n.length))));
+  const shop = familyShop || prefix || name;
+  const remainder = familyShop ? name.slice(family[0].length) : prefix ? name.slice(prefix.length) : "";
+  const branch = remainder.replace(/^[\s・·—–-]+/, "").trim();
+  return { shop, place_name: candidate.place_name || branch || candidate.address || "", place_id: candidate.place_id || null };
+}
+
 function enrichRow(r) {
   // YYYY-MM-DD must be read as a LOCAL date: new Date("2026-01-01") parses as UTC
   // midnight, which reports the previous month/year west of Greenwich.
@@ -705,7 +724,7 @@ function App({ session, onSignOut }) {
     if (!serverExpRef.current) return;
     setData(overlayExpenses(serverExpRef.current).map(r => enrichRow({
       id: r.id, amount: r.amount, date: r.date, category: r.category,
-      shop: r.shop, notes: r.notes || "", expense_type: r.expense_type || "normal", region: r.region,
+      shop: r.shop, place_name: r.place_name || null, place_id: r.place_id || null, notes: r.notes || "", expense_type: r.expense_type || "normal", region: r.region,
       tags: r.tags || "", _pending: !!r._pending, _ts: r._ts, created_at: r.created_at || null
     })));
   }, []);
@@ -2853,7 +2872,7 @@ function CalendarView({ allExpenses = [], shopFilter = null, setShopFilter = () 
                   <span style={{fontSize:18}} title={e.category}>{getCatIcon(e.category)}</span>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{display:"flex",alignItems:"center",gap:6}}>
-                      <span style={{fontSize:13,fontWeight:600,color:"#fff",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.shop}</span>
+                      <span style={{fontSize:13,fontWeight:600,color:"#fff",whiteSpace:"normal",overflowWrap:"anywhere"}} title={expenseShopLabel(e)}>{expenseShopLabel(e)}</span>
                       {e._pending && <span title="Saved on this device · waiting to sync" style={{fontSize:9.5,fontWeight:700,color:theme.warning,border:`1px solid ${theme.warning}66`,borderRadius:5,padding:"0 5px",flexShrink:0}}>waiting</span>}
                       {EXPENSE_TYPES[e.expense_type]?.icon && <span style={{fontSize:11}}>{EXPENSE_TYPES[e.expense_type].icon}</span>}
                     </div>
@@ -3588,7 +3607,7 @@ function AddEntryView({ recentEntries, allExpenses }) {
             <button key={e.id} onClick={() => repeat(e)} style={{ display: "flex", alignItems: "center", gap: 11, padding: "10px 4px", background: "none", border: "none", borderBottom: `1px solid ${C.border}`, cursor: "pointer", textAlign: "left", width: "100%" }}>
               <span style={{ width: 30, height: 30, borderRadius: 9, background: `${ec ? ec.color : "#888"}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0 }}>{ec ? ec.icon : "📦"}</span>
               <span style={{ flex: 1, minWidth: 0 }}>
-                <span style={{ display: "block", fontSize: 13.5, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.shop}</span>
+                <span style={{ display: "block", fontSize: 13.5, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={expenseShopLabel(e)}>{expenseShopLabel(e)}</span>
                 <span style={{ display: "block", fontSize: 10.5, color: C.dim }}>{e.category} · {whenLabel(e.date)}{e._pending && <span style={{ color: theme.warning, fontWeight: 700 }}> · waiting to sync</span>}</span>
               </span>
               <span style={{ fontSize: 13.5, fontWeight: 700, color: "#fff" }}>{fmt(e.amount)}</span>
@@ -4623,7 +4642,7 @@ function useExpenseMutations({ onChange }) {
 
   const handleUpdate = async () => {
     const res = await writeThrough({ table: "cost_management_expenses", op: "update", match: { id: editForm.id },
-      row: { amount: Number(editForm.amount), date: editForm.date, category: editForm.category, shop: editForm.shop, notes: editForm.notes, expense_type: editForm.expense_type, tags: (editForm.tagsArray||[]).join(",") } });
+      row: { amount: Number(editForm.amount), date: editForm.date, category: editForm.category, shop: editForm.shop, place_name: (editForm.place_name || "").trim() || null, place_id: editForm.place_id || null, notes: editForm.notes, expense_type: editForm.expense_type, tags: (editForm.tagsArray||[]).join(",") } });
     if (!res.ok) { setToast({ type: "error", msg: res.error }); }
     else { setToast({ type: "success", msg: res.queued ? "Updated · will sync" : "Updated" }); setEditingTx(null); onChange(); }
     setTimeout(() => setToast(null), 3000);
@@ -4655,7 +4674,9 @@ function useExpenseMutations({ onChange }) {
           <select value={editForm.category} onChange={e => setEditForm({...editForm, category: e.target.value})} style={{...inputStyle,marginBottom:8,fontSize:11,cursor:"pointer"}}>
             {categories.map(c => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
           </select>
-          <input type="text" value={editForm.shop} onChange={e => setEditForm({...editForm, shop: e.target.value})} style={{...inputStyle,marginBottom:8,fontSize:11}}/>
+          <input type="text" value={editForm.shop} onChange={e => setEditForm({...editForm, shop: e.target.value, place_name: null, place_id: null})} style={{...inputStyle,marginBottom:8,fontSize:11}}/>
+          <label style={{fontSize:11,color:theme.textMuted}}>Place / branch (optional)</label>
+          <input aria-label="Place / branch" value={editForm.place_name || ""} onChange={e => setEditForm({...editForm, place_name: e.target.value, place_id: null})} placeholder="e.g. Ageo Station East Exit" style={{...inputStyle,marginBottom:8,fontSize:11}}/>
           <select value={editForm.expense_type||"normal"} onChange={e => setEditForm({...editForm, expense_type: e.target.value})} style={{...inputStyle,marginBottom:8,fontSize:11,cursor:"pointer"}}>
             <option value="normal">Normal</option>
             <option value="fixed">📌 Fixed</option>
@@ -5785,13 +5806,16 @@ function ShopCaptureView({ allExpenses }) {
   const [form, setForm] = useState(null);
   const [infer, setInfer] = useState(null);
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const validCats = useMemo(() => categories.map((c) => c.name), [categories]);
-  const startForm = (name, placeTypes, placeId = null) => {
-    const inf = inferCategory(name, allExpenses, placeTypes, validCats);
+  const startForm = (name, placeTypes, candidate = {}) => {
+    const place = capturePlace({ ...candidate, name }, allExpenses);
+    const inf = inferCategory(place.shop, allExpenses, placeTypes, validCats);
     // instrument the cascade: which step produced this suggestion
     console.log(`[capture] cascade step ${inf.step} (${CASCADE_LABELS[inf.step]})`, { shop: name, ...inf });
     setInfer(inf); setSaved(false);
-    setForm({ shop: name, category: inf.category, amount: "", date: ymdToday(), notes: "", place_id: placeId, place_name: placeId ? name : null });
+    setForm({ ...place, category: inf.category, amount: "", date: ymdToday(), notes: "" });
   };
   // Order: your pinned shops (free, local maths) → the hub. The hub answers from its own corner
   // cache ("hit") or asks Google ("fetched"); `force` skips both caches and costs one call.
@@ -5809,7 +5833,7 @@ function ShopCaptureView({ allExpenses }) {
     if (!res || st === "error" || !Array.isArray(res.candidates)) { setLocErr((res && res.reason) || (err && err.message) || "Shop lookup failed — type the name instead."); return; }
     if (st === "empty" || !res.candidates.length) { setLocErr("No shops found nearby — type the name instead."); return; }
     const src2 = st === "hit" || res.cached ? "cache" : "google";
-    setCands(res.candidates.map((c) => ({ name: c.name, place_types: c.types || [], distance_m: c.distance_m, place_id: c.place_id || null, source: src2 }))); setCandSource(src2); // pick-list, never auto-select (GPS drift indoors)
+    setCands(res.candidates.map((c) => ({ name: c.name, place_types: c.types || [], distance_m: c.distance_m, place_id: c.place_id || null, address: c.address || c.formatted_address || c.formattedAddress || "", source: src2 }))); setCandSource(src2); // pick-list, never auto-select (GPS drift indoors)
   };
   const locate = (force = false) => {
     setLocErr(""); setCands(null); setCandSource(null); setForm(null);
@@ -5822,29 +5846,28 @@ function ShopCaptureView({ allExpenses }) {
       if (force) { await askGoogle(pos, true); return; }
       // 1. Pinned shops within reach — pure maths, free.
       const pinned = stopPins.filter((x) => x.shop && x.category)
-        .map((x) => ({ name: x.shop, place_types: [], distance_m: Math.round(distanceMeters(pos, x)), radius: x.radius, source: "pin" }))
+        .map((x) => ({ name: x.shop, place_name: x.areaName || (x.label !== x.shop ? x.label : "") || "", pin_key: `${x.lat},${x.lng}`, place_types: [], distance_m: Math.round(distanceMeters(pos, x)), radius: x.radius, source: "pin" }))
         .filter((x) => x.distance_m <= Math.max(150, x.radius || 0)).sort((a, b) => a.distance_m - b.distance_m);
-      const seen = new Set(); const uniq = pinned.filter((x) => (seen.has(x.name) ? false : (seen.add(x.name), true)));
+      const seen = new Set(); const uniq = pinned.filter((x) => (seen.has(x.name + "|" + x.pin_key) ? false : (seen.add(x.name + "|" + x.pin_key), true)));
       if (uniq.length) { setLocState("idle"); setCands(uniq.slice(0, 6)); setCandSource("pins"); return; }
       // 2. The hub (its cache first, then Google under its cap).
       await askGoogle(pos);
     }, (e) => { setLocState("idle"); setLocErr(e.code === 1 ? "Location permission denied — type the shop name instead." : "Couldn't get your location — type the shop name instead."); }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 });
   };
   const confirm = async () => {
-    const amt = parseInt(form.amount, 10);
-    if (!(amt > 0) || !form.shop.trim() || !form.category) return;
-    // Whatever I confirm is written back, so cascade step 1 covers this shop next time.
-    const res = await insertExpense({ region: currency, date: form.date, category: form.category, shop: form.shop.trim(), amount: amt, notes: form.notes || "", expense_type: "normal", tags: "" });
-    // The Google place the user picked is stored on the shop (014). First pick wins; a renamed
-    // entry doesn't carry it, since the id belongs to the name Google gave.
-    if (res.ok && form.place_id && form.place_name === form.shop.trim()) {
-      const { error } = await supabase.from("cost_management_shops").update({ place_id: form.place_id }).eq("region", currency).eq("name", form.shop.trim()).eq("category", form.category).is("place_id", null);
-      if (error) console.warn("[capture] place_id not stored — run migrations/014_hub_ids_place_id.sql:", error.message);
-    }
-    if (res.ok) { setSaved(true); setForm(null); setCands(null); setInfer(null); setManualName(""); }
+    if (savingRef.current || !form) return;
+    const amt = Number(form.amount);
+    if (!Number.isInteger(amt) || amt <= 0 || amt > 2147483647 || !form.shop.trim() || !form.category || !form.date) return;
+    savingRef.current = true; setSaving(true);
+    try {
+      const res = await insertExpense({ region: currency, date: form.date, category: form.category,
+        shop: form.shop.trim(), place_name: (form.place_name || "").trim() || null, place_id: form.place_id || null,
+        amount: amt, notes: form.notes || "", expense_type: "normal", tags: "" });
+      if (res.ok) { setSaved(true); setForm(null); setCands(null); setInfer(null); setManualName(""); }
+    } finally { savingRef.current = false; setSaving(false); }
   };
-  const amtNum = form ? parseInt(form.amount, 10) : NaN;
-  const canConfirm = form && amtNum > 0 && form.shop.trim() && form.category;
+  const amtNum = form ? Number(form.amount) : NaN;
+  const canConfirm = !saving && form && Number.isInteger(amtNum) && amtNum > 0 && amtNum <= 2147483647 && form.shop.trim() && form.category && form.date;
   const stepBadge = infer && (
     <span style={{ fontSize: 10, fontWeight: 700, color: infer.step === 4 ? theme.warning : theme.success, background: `${infer.step === 4 ? theme.warning : theme.success}16`, border: `1px solid ${infer.step === 4 ? theme.warning : theme.success}44`, borderRadius: 8, padding: "2px 7px", whiteSpace: "nowrap" }}>
       step {infer.step} · {infer.step === 3 ? `like “${infer.matchedShop}”` : CASCADE_LABELS[infer.step]}
@@ -5852,6 +5875,7 @@ function ShopCaptureView({ allExpenses }) {
   );
   return (
     <div className="cm-fade" style={{ maxWidth: 560, margin: "0 auto" }}>
+      <fieldset disabled={saving} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
       <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 12, padding: 16 }}>
         <div style={{ fontSize: 13.5, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}><Icon name="crosshair" size={15}/>Capture this shop</div>
         <div style={{ fontSize: 11, color: theme.textDim, marginBottom: 12 }}>One tap resolves where you are, infers the category, and pre-fills the entry for you to confirm.</div>
@@ -5869,8 +5893,8 @@ function ShopCaptureView({ allExpenses }) {
               <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 6, padding: "2px 7px", whiteSpace: "nowrap", color: candSource === "google" ? theme.warning : theme.success, background: `${candSource === "google" ? theme.warning : theme.success}16`, border: `1px solid ${candSource === "google" ? theme.warning : theme.success}44` }}>{candSource === "pins" ? "your pins · free" : candSource === "cache" ? "remembered · free" : "Google · 1 lookup"}</span>
             </div>
             {cands.map((c, i) => (
-              <button key={i} onClick={() => startForm(c.name, c.place_types || [], c.place_id || null)} style={{ display: "flex", alignItems: "center", gap: 10, textAlign: "left", width: "100%", padding: "10px 12px", borderRadius: 10, border: `1px solid ${theme.cardBorder}`, background: theme.inputBg, cursor: "pointer", fontFamily: "inherit" }}>
-                <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
+              <button key={i} onClick={() => startForm(c.name, c.place_types || [], c)} style={{ display: "flex", alignItems: "center", gap: 10, textAlign: "left", width: "100%", padding: "10px 12px", borderRadius: 10, border: `1px solid ${theme.cardBorder}`, background: theme.inputBg, cursor: "pointer", fontFamily: "inherit" }}>
+                <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}{(c.place_name || c.address) && <span style={{ display: "block", fontSize: 11, fontWeight: 400, color: theme.textMuted, whiteSpace: "normal" }}>{c.place_name || c.address}</span>}</span>
                 {c.distance_m != null && <span style={{ fontSize: 10.5, color: theme.textMuted, whiteSpace: "nowrap" }}>{c.distance_m} m</span>}
               </button>
             ))}
@@ -5891,7 +5915,11 @@ function ShopCaptureView({ allExpenses }) {
             {stepBadge}
           </div>
           <label style={labelStyle}>Shop</label>
-          <input value={form.shop} onChange={(e) => setForm({ ...form, shop: e.target.value })} style={{ ...inputStyle, marginBottom: 8 }}/>
+          <input value={form.shop} onChange={(e) => setForm({ ...form, shop: e.target.value, place_name: "", place_id: null })} style={{ ...inputStyle, marginBottom: 8 }}/>
+          <label style={labelStyle}>Place / branch (optional)</label>
+          <input aria-label="Place / branch" value={form.place_name || ""} onChange={(e) => setForm({ ...form, place_name: e.target.value, place_id: null })} placeholder="e.g. Ageo Station East Exit" style={{ ...inputStyle, marginBottom: 8 }}/>
+          <div style={{ fontSize: 11, color: theme.textMuted, marginBottom: 10 }}>Confirm the place for this purchase. If it is missing, you can enter it here.</div>
+          <div style={{ padding: 10, borderRadius: 8, background: theme.inputBg, color: theme.text, overflowWrap: "anywhere", marginBottom: 12 }}>📍 {expenseShopLabel(form)}</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
             <div><label style={labelStyle}>Amount</label><input type="number" inputMode="numeric" autoFocus value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder={CUR.symbol} style={inputStyle}/></div>
             <div><label style={labelStyle}>Date</label><input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} style={{ ...inputStyle, colorScheme: "dark" }}/></div>
@@ -5904,10 +5932,11 @@ function ShopCaptureView({ allExpenses }) {
           <input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Notes" style={{ ...inputStyle, marginBottom: 10 }}/>
           <div style={{ display: "flex", gap: 6 }}>
             <button onClick={() => { setForm(null); setInfer(null); }} style={{ flex: 1, padding: "10px", borderRadius: 10, border: `1px solid ${theme.cardBorder}`, background: "transparent", color: theme.textMuted, cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}>Cancel</button>
-            <button onClick={confirm} disabled={!canConfirm} style={{ flex: 2, padding: "10px", borderRadius: 10, border: "none", background: `linear-gradient(135deg,${theme.primary},${theme.accent})`, color: "#fff", cursor: canConfirm ? "pointer" : "not-allowed", fontWeight: 700, fontSize: 12.5, fontFamily: "inherit", opacity: canConfirm ? 1 : 0.5 }}>Add expense</button>
+            <button onClick={confirm} disabled={!canConfirm} style={{ flex: 2, padding: "10px", borderRadius: 10, border: "none", background: `linear-gradient(135deg,${theme.primary},${theme.accent})`, color: "#fff", cursor: canConfirm ? "pointer" : "not-allowed", fontWeight: 700, fontSize: 12.5, fontFamily: "inherit", opacity: canConfirm ? 1 : 0.5 }}>{saving ? "Saving…" : "Add expense"}</button>
           </div>
         </div>
       )}
+      </fieldset>
       {modals}
     </div>
   );
@@ -5936,7 +5965,7 @@ function TransactionsView({ pageTx, txPage, setTxPage, txPages }) {
               <tr key={tx.id} style={{borderBottom:`1px solid ${theme.cardBorder}`}}>
                 <td style={{padding:"8px 6px",width:20}}>{EXPENSE_TYPES[tx.expense_type]?.icon}</td>
                 <td style={{padding:"8px 6px",color:theme.textMuted,whiteSpace:"nowrap"}}>{tx.date}</td>
-                <td style={{padding:"8px 6px",color:theme.text,fontWeight:500,maxWidth:100,overflow:"hidden",textOverflow:"ellipsis"}}>{tx.shop}{tx._pending && <span title="Saved on this device · waiting to sync" style={{color:theme.warning,fontWeight:700}}> ·</span>}</td>
+                <td style={{padding:"8px 6px",color:theme.text,fontWeight:500,minWidth:140,maxWidth:260,whiteSpace:"normal",overflowWrap:"anywhere"}} title={expenseShopLabel(tx)}>{expenseShopLabel(tx)}{tx._pending && <span title="Saved on this device · waiting to sync" style={{color:theme.warning,fontWeight:700}}> ·</span>}</td>
                 <td style={{padding:"8px 6px"}}><span style={{fontSize:14,cursor:"default"}} title={tx.category}>{getCatIcon(tx.category)}</span></td>
                 <td style={{padding:"8px 6px"}}>
                   {(tx.tags||"").split(",").filter(Boolean).slice(0,2).map(t => (
@@ -6439,7 +6468,7 @@ function OverviewView({ filtered, totalSpend, monthlyAvg, dailyAvg, monthlyData,
                 <div style={{fontSize:12,fontWeight:700,color:theme.warning,fontVariantNumeric:"tabular-nums"}}>{bySpent ? `${fmt(playCur.spend || 0)} this ${perWord} · ${playCur.count} entries` : `${playCur.count} filed this ${perWord}`}</div>
                 <div style={{fontSize:10.5,color:theme.textMuted,fontVariantNumeric:"tabular-nums"}}>so far: {playCur.cum} entries · {fmt(playCur.cumSpend || 0)}</div>
                 {playFeed.map((e, i) => (
-                  <div key={(e.id || "") + ":" + i} style={{fontSize:10.5,color:theme.textMuted,opacity:1 - i * 0.2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>+ {e.shop} {fmt(e.amount)} <span style={{color:theme.textDim}}>{bySpent ? (e.created_at ? `· filed ${String(e.created_at).slice(0, 10)}` : "") : `· spent ${e.date}`}</span></div>
+                  <div key={(e.id || "") + ":" + i} style={{fontSize:10.5,color:theme.textMuted,opacity:1 - i * 0.2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>+ {expenseShopLabel(e)} {fmt(e.amount)} <span style={{color:theme.textDim}}>{bySpent ? (e.created_at ? `· filed ${String(e.created_at).slice(0, 10)}` : "") : `· spent ${e.date}`}</span></div>
                 ))}
               </div>
             )}
