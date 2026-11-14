@@ -4865,6 +4865,17 @@ const JR_LINES = [
     ["Akabane",13.2],["Kawaguchi",15.8],["Nishi-Kawaguchi",17.8],["Warabi",19.7],["Minami-Urawa",22.5],["Urawa",24.2],
     ["Kita-Urawa",26.0],["Yono",27.6],["Saitama-Shintoshin",28.7],["Omiya",30.3],
   ] },
+  // JR Saikyo Line, Omiya → Osaki (through-running beyond Osaki onto Rinkai
+  // is not included). Cumulative 営業キロ along the Saikyo service, including
+  // the Akabane and Yamanote freight segments. Fares remain CALCULATED, not
+  // officially verified; user-confirmed fare-book entries take precedence.
+  { id: "saikyo", name: "Saikyo Line", source: "JR Saikyo Line · Omiya–Osaki (via Akabane) · cumulative 営業キロ", stations: [
+    ["Omiya",0.0],["Kita-Yono",1.8],["Yono-Hommachi",2.9],["Minami-Yono",4.5],
+    ["Naka-Urawa",6.2],["Musashi-Urawa",7.5],["Kita-Toda",9.9],["Toda",11.3],
+    ["Toda-Koen",12.6],["Ukima-Funado",14.9],["Kita-Akabane",16.5],["Akabane",18.0],
+    ["Jujo",20.0],["Itabashi",21.7],["Ikebukuro",23.5],["Shinjuku",28.3],
+    ["Shibuya",31.7],["Ebisu",33.3],["Osaki",36.9],
+  ] },
   { id: "sobu_local", name: "Chuo-Sobu Line (local)", source: "営業キロ 千葉起点 (総武本線 + 錦糸町–御茶ノ水 支線) · ja.wikipedia 中央・総武緩行線 駅一覧", stations: [
     ["Chiba",0.0],["Nishi-Chiba",1.4],["Inage",3.3],["Shin-Kemigawa",6.0],["Makuhari",7.6],["Makuhari-Hongo",9.6],
     ["Tsudanuma",12.5],["Higashi-Funabashi",14.2],["Funabashi",16.0],["Nishi-Funabashi",18.6],["Shimosanakayama",20.2],
@@ -4878,6 +4889,35 @@ const JR_LINES = [
     ["Tokyo",0.0],["Kinshicho",4.8],
   ] },
 ];
+
+// Non-JR lines are deliberately excluded from JR_ADJ / jrCompute.
+// Tobu fares have their own tariff: station suggestions are supported,
+// but the JR distance-based engine must NEVER price a Tobu-only journey.
+const TOBU_TOJO_STATIONS = [
+  "Ikebukuro", "Kita-Ikebukuro", "Shimo-Itabashi", "Oyama", "Naka-Itabashi",
+  "Tokiwadai", "Kami-Itabashi", "Tobu-Nerima", "Shimo-Akatsuka", "Narimasu",
+  "Wakoshi", "Asaka", "Asakadai", "Shiki", "Yanasegawa",
+  "Mizuhodai", "Tsuruse", "Fujimino", "Kami-Fukuoka", "Shingashi",
+  "Kawagoe", "Kawagoe-shi", "Kasumigaseki", "Tsurugashima", "Wakaba",
+  "Sakado", "Kita-Sakado", "Takasaka", "Higashi-Matsuyama", "Shinrin-koen",
+  "Tsukinowa", "Musashi-Ranzan", "Ogawamachi", "Tobu-Takezawa", "Obusuma",
+  "Hachigata", "Tamayodo", "Yorii",
+];
+// JR Kawagoe Line: Omiya – Kawagoe – Komagawa. This is deliberately a
+// station catalogue until its complete official 営業キロ and tariff exceptions
+// have been checked. Do NOT feed unknown kilometrage into the JR fare graph.
+const KAWAGOE_LINE_STATIONS = [
+  "Omiya", "Nisshin", "Nishi-Omiya", "Sashiogi", "Minami-Furuya",
+  "Kawagoe", "Nishi-Kawagoe", "Matoba", "Kasahata", "Musashi-Takahagi",
+  "Komagawa",
+];
+const UNPRICED_JR_LINES = [
+  { id: "kawagoe", name: "JR Kawagoe Line", operator: "JR East", stations: KAWAGOE_LINE_STATIONS.map((name) => [name]) },
+];
+const OTHER_RAIL_LINES = [
+  { id: "tobu_tojo", name: "Tobu Tojo Line", operator: "Tobu Railway", stations: TOBU_TOJO_STATIONS.map((name) => [name]) },
+];
+const STATION_LINES = [...JR_LINES, ...UNPRICED_JR_LINES, ...OTHER_RAIL_LINES];
 
 // 特定区間 · the 12 corridors that SURVIVED the 2026 revision keep a fare
 // below the band table, so they must be checked BEFORE the arithmetic or
@@ -4900,6 +4940,12 @@ const JR_SPECIAL = [
 const stnKey = (s) => String(s || "").toLowerCase().replace(/[\s\-–—·'’.]/g, "");
 
 const JR_INDEX = (() => { const m = new Map(); JR_LINES.forEach((L) => L.stations.forEach(([n]) => { const k = stnKey(n); if (!m.has(k)) m.set(k, n); })); return m; })();
+// Distinguish Tobu-only stations from shared station names (e.g. Ikebukuro).
+// Shared names must continue to receive normal JR estimates when a JR route exists.
+const NON_JR_STATION_KEYS = new Set(OTHER_RAIL_LINES.flatMap((L) => L.stations.map(([name]) => stnKey(name))).filter((key) => !JR_INDEX.has(key));
+// JR Kawagoe stations without verified route edges must be entered manually.
+// Shared Omiya can still use the existing JR calculator normally.
+const UNPRICED_JR_STATION_KEYS = new Set(UNPRICED_JR_LINES.flatMap((L) => L.stations.map(([name]) => stnKey(name))).filter((key) => !JR_INDEX.has(key));
 // One edge per adjacent station pair, carrying every line that runs it.
 const JR_ADJ = (() => {
   const adj = new Map();
@@ -5030,7 +5076,7 @@ function jrCompute(from, to) {
 
 const SEED_STATIONS = [...new Set([
   "Shimosanakayama","Funabashi","Motoyawata","Gotanda","Okubo",
-  ...JR_LINES.flatMap((L) => L.stations.map(([n]) => n)),
+  ...STATION_LINES.flatMap((L) => L.stations.map(([n]) => n)),
   ...JR_SPECIAL.flatMap(([a, b]) => [a, b]),
 ])].sort();
 
@@ -5143,6 +5189,12 @@ async function fareLookup(supabase, from, to) {
   // A miss is a NORMAL state, not a failure: the pair is on a line the
   // engine has no kilometrage for yet. `miss` distinguishes it from a real
   // fault so the UI can render it as an invitation to type, not an alarm.
+  if (UNPRICED_JR_STATION_KEYS.has(stnKey(from)) || UNPRICED_JR_STATION_KEYS.has(stnKey(to))) {
+    return { error: true, miss: true, reason: "JR Kawagoe Line fare requires confirmation; kilometrage not yet loaded" };
+  }
+  if (NON_JR_STATION_KEYS.has(stnKey(from)) || NON_JR_STATION_KEYS.has(stnKey(to))) {
+    return { error: true, miss: true, reason: "Tobu Railway fare is not supported by the JR fare calculator" };
+  }
   return { error: true, miss: true, reason: "Not on a seeded line yet" };
 }
 
@@ -5286,7 +5338,7 @@ function SmartEntryView({ allExpenses, dueAdd }) {
 
 // Station selection is separate from fare routing: these filters never alter the graph.
 function stationPickerOptions(stations, lineId = "", query = "", recent = []) {
-  const line = JR_LINES.find(l => l.id === lineId);
+  const line = STATION_LINES.find(l => l.id === lineId);
   const pool = line ? line.stations.map(([name]) => name) : stations;
   const known = new Map();
   pool.forEach(name => { const key = stnKey(name); if (key && !known.has(key)) known.set(key, name); });
@@ -5300,13 +5352,13 @@ function stationPickerOptions(stations, lineId = "", query = "", recent = []) {
 function StationPicker({ title, value, stations, recent = [], initialLine = "", onChoose, onClose }) {
   const { theme, inputStyle } = useTheme();
   const [lineId, setLineId] = useState(() => {
-    const line = JR_LINES.find(l => l.id === initialLine);
+    const line = STATION_LINES.find(l => l.id === initialLine);
     return line && (!value || line.stations.some(([name]) => stnKey(name) === stnKey(value))) ? initialLine : "";
   });
   const [query, setQuery] = useState("");
   const closeRef = useRef(null), dialogRef = useRef(null);
   useEffect(() => { const previous = document.activeElement; closeRef.current?.focus(); return () => { if (previous?.isConnected) previous.focus(); }; }, []);
-  const line = JR_LINES.find(l => l.id === lineId);
+  const line = STATION_LINES.find(l => l.id === lineId);
   const options = useMemo(() => stationPickerOptions(stations, lineId, query, recent), [stations, lineId, query, recent]);
   const exact = stations.some(name => stnKey(name) === stnKey(query.trim()));
   const choose = name => onChoose(name, lineId);
@@ -5327,7 +5379,7 @@ function StationPicker({ title, value, stations, recent = [], initialLine = "", 
       <label style={{display:"block",fontSize:12,color:theme.textMuted,marginBottom:10}}>Railway line
         <select aria-label="Railway line" value={lineId} onChange={e => setLineId(e.target.value)} style={{...inputStyle,minHeight:46,marginTop:5}}>
           <option value="">All lines / other stations</option>
-          {JR_LINES.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+          {STATION_LINES.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
         </select>
       </label>
       <input type="search" aria-label="Search stations" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.nativeEvent?.isComposing && options.length === 1) { e.preventDefault(); choose(options[0]); } }} placeholder="Search station name…" autoComplete="off" autoCorrect="off" spellCheck={false} style={{...inputStyle,minHeight:46,fontSize:16,marginBottom:8}}/>
@@ -5338,7 +5390,7 @@ function StationPicker({ title, value, stations, recent = [], initialLine = "", 
       <div style={{maxHeight:"min(38vh, 320px)",overflowY:"auto",overscrollBehavior:"contain",display:"flex",flexDirection:"column",gap:6}}>
         {options.map(name => {
           const selected = stnKey(name) === stnKey(value), used = recent.some(n => stnKey(n) === stnKey(name));
-          const lines = JR_LINES.filter(l => l.stations.some(([n]) => stnKey(n) === stnKey(name))).map(l => l.name);
+          const lines = STATION_LINES.filter(l => l.stations.some(([n]) => stnKey(n) === stnKey(name))).map(l => l.name);
           return <button type="button" key={stnKey(name)} aria-label={`Select ${name}`} aria-pressed={selected} onClick={() => choose(name)} style={{display:"flex",alignItems:"center",gap:10,minHeight:56,width:"100%",padding:"10px 12px",textAlign:"left",borderRadius:10,border:`1px solid ${selected ? theme.primary : theme.cardBorder}`,background:selected ? theme.primaryGlow : theme.inputBg,color:theme.text,cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>
             <span style={{flex:1,minWidth:0}}><span style={{display:"block",fontSize:15,fontWeight:600,overflowWrap:"anywhere"}}>{name}</span><span style={{display:"block",fontSize:10.5,color:theme.textMuted,marginTop:3}}>{lines.join(" · ") || "Other station"}</span></span>
             <span style={{fontSize:11,color:selected ? theme.primary : theme.textMuted}}>{selected ? "Selected" : used ? "Recent" : ""}</span>
