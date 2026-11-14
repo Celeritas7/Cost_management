@@ -4903,10 +4903,21 @@ const TOBU_TOJO_STATIONS = [
   "Tsukinowa", "Musashi-Ranzan", "Ogawamachi", "Tobu-Takezawa", "Obusuma",
   "Hachigata", "Tamayodo", "Yorii",
 ];
+// JR Kawagoe Line: Omiya – Kawagoe – Komagawa. This is deliberately a
+// station catalogue until its complete official 営業キロ and tariff exceptions
+// have been checked. Do NOT feed unknown kilometrage into the JR fare graph.
+const KAWAGOE_LINE_STATIONS = [
+  "Omiya", "Nisshin", "Nishi-Omiya", "Sashiogi", "Minami-Furuya",
+  "Kawagoe", "Nishi-Kawagoe", "Matoba", "Kasahata", "Musashi-Takahagi",
+  "Komagawa",
+];
+const UNPRICED_JR_LINES = [
+  { id: "kawagoe", name: "JR Kawagoe Line", operator: "JR East", stations: KAWAGOE_LINE_STATIONS.map((name) => [name]) },
+];
 const OTHER_RAIL_LINES = [
   { id: "tobu_tojo", name: "Tobu Tojo Line", operator: "Tobu Railway", stations: TOBU_TOJO_STATIONS.map((name) => [name]) },
 ];
-const STATION_LINES = [...JR_LINES, ...OTHER_RAIL_LINES];
+const STATION_LINES = [...JR_LINES, ...UNPRICED_JR_LINES, ...OTHER_RAIL_LINES];
 
 // 特定区間 · the 12 corridors that SURVIVED the 2026 revision keep a fare
 // below the band table, so they must be checked BEFORE the arithmetic or
@@ -4932,6 +4943,9 @@ const JR_INDEX = (() => { const m = new Map(); JR_LINES.forEach((L) => L.station
 // Distinguish Tobu-only stations from shared station names (e.g. Ikebukuro).
 // Shared names must continue to receive normal JR estimates when a JR route exists.
 const NON_JR_STATION_KEYS = new Set(OTHER_RAIL_LINES.flatMap((L) => L.stations.map(([name]) => stnKey(name))).filter((key) => !JR_INDEX.has(key));
+// JR Kawagoe stations without verified route edges must be entered manually.
+// Shared Omiya can still use the existing JR calculator normally.
+const UNPRICED_JR_STATION_KEYS = new Set(UNPRICED_JR_LINES.flatMap((L) => L.stations.map(([name]) => stnKey(name))).filter((key) => !JR_INDEX.has(key));
 // One edge per adjacent station pair, carrying every line that runs it.
 const JR_ADJ = (() => {
   const adj = new Map();
@@ -5175,6 +5189,9 @@ async function fareLookup(supabase, from, to) {
   // A miss is a NORMAL state, not a failure: the pair is on a line the
   // engine has no kilometrage for yet. `miss` distinguishes it from a real
   // fault so the UI can render it as an invitation to type, not an alarm.
+  if (UNPRICED_JR_STATION_KEYS.has(stnKey(from)) || UNPRICED_JR_STATION_KEYS.has(stnKey(to))) {
+    return { error: true, miss: true, reason: "JR Kawagoe Line fare requires confirmation; kilometrage not yet loaded" };
+  }
   if (NON_JR_STATION_KEYS.has(stnKey(from)) || NON_JR_STATION_KEYS.has(stnKey(to))) {
     return { error: true, miss: true, reason: "Tobu Railway fare is not supported by the JR fare calculator" };
   }
