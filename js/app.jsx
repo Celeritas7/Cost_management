@@ -4942,10 +4942,18 @@ const stnKey = (s) => String(s || "").toLowerCase().replace(/[\s\-–—·'’.]
 const JR_INDEX = (() => { const m = new Map(); JR_LINES.forEach((L) => L.stations.forEach(([n]) => { const k = stnKey(n); if (!m.has(k)) m.set(k, n); })); return m; })();
 // Distinguish Tobu-only stations from shared station names (e.g. Ikebukuro).
 // Shared names must continue to receive normal JR estimates when a JR route exists.
-const NON_JR_STATION_KEYS = new Set(OTHER_RAIL_LINES.flatMap((L) => L.stations.map(([name]) => stnKey(name))).filter((key) => !JR_INDEX.has(key));
+const NON_JR_STATION_KEYS = new Set(
+  OTHER_RAIL_LINES
+    .flatMap((L) => L.stations.map(([name]) => stnKey(name)))
+    .filter((key) => !JR_INDEX.has(key))
+);
 // JR Kawagoe stations without verified route edges must be entered manually.
 // Shared Omiya can still use the existing JR calculator normally.
-const UNPRICED_JR_STATION_KEYS = new Set(UNPRICED_JR_LINES.flatMap((L) => L.stations.map(([name]) => stnKey(name))).filter((key) => !JR_INDEX.has(key));
+const UNPRICED_JR_STATION_KEYS = new Set(
+  UNPRICED_JR_LINES
+    .flatMap((L) => L.stations.map(([name]) => stnKey(name)))
+    .filter((key) => !JR_INDEX.has(key))
+);
 // One edge per adjacent station pair, carrying every line that runs it.
 const JR_ADJ = (() => {
   const adj = new Map();
