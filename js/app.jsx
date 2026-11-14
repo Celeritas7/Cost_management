@@ -4865,6 +4865,17 @@ const JR_LINES = [
     ["Akabane",13.2],["Kawaguchi",15.8],["Nishi-Kawaguchi",17.8],["Warabi",19.7],["Minami-Urawa",22.5],["Urawa",24.2],
     ["Kita-Urawa",26.0],["Yono",27.6],["Saitama-Shintoshin",28.7],["Omiya",30.3],
   ] },
+  // JR Saikyo Line, Omiya → Osaki (through-running beyond Osaki onto Rinkai
+  // is not included). Cumulative 営業キロ along the Saikyo service, including
+  // the Akabane and Yamanote freight segments. Fares remain CALCULATED, not
+  // officially verified; user-confirmed fare-book entries take precedence.
+  { id: "saikyo", name: "Saikyo Line", source: "JR Saikyo Line · Omiya–Osaki (via Akabane) · cumulative 営業キロ", stations: [
+    ["Omiya",0.0],["Kita-Yono",1.8],["Yono-Hommachi",2.9],["Minami-Yono",4.5],
+    ["Naka-Urawa",6.2],["Musashi-Urawa",7.5],["Kita-Toda",9.9],["Toda",11.3],
+    ["Toda-Koen",12.6],["Ukima-Funado",14.9],["Kita-Akabane",16.5],["Akabane",18.0],
+    ["Jujo",20.0],["Itabashi",21.7],["Ikebukuro",23.5],["Shinjuku",28.3],
+    ["Shibuya",31.7],["Ebisu",33.3],["Osaki",36.9],
+  ] },
   { id: "sobu_local", name: "Chuo-Sobu Line (local)", source: "営業キロ 千葉起点 (総武本線 + 錦糸町–御茶ノ水 支線) · ja.wikipedia 中央・総武緩行線 駅一覧", stations: [
     ["Chiba",0.0],["Nishi-Chiba",1.4],["Inage",3.3],["Shin-Kemigawa",6.0],["Makuhari",7.6],["Makuhari-Hongo",9.6],
     ["Tsudanuma",12.5],["Higashi-Funabashi",14.2],["Funabashi",16.0],["Nishi-Funabashi",18.6],["Shimosanakayama",20.2],
