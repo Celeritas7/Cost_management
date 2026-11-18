@@ -1432,7 +1432,7 @@ function App({ session, onSignOut }) {
           ) : view === "transactions" ? (
             <TransactionsView pageTx={pageTx} txPage={txPage} setTxPage={setTxPage} txPages={txPages} />
           ) : view === "smart" || view === "farecalc" || view === "capture" ? (
-            <SmartEntryView allExpenses={RAW} dueAdd={dueAdd} />
+            <SmartEntryView allExpenses={RAW} dueAdd={dueAdd} userId={session.user.id} />
           ) : view === "outstanding" ? (
             <OutstandingView pending={regionPending} recurring={recurring} refresh={async () => { const { data: p } = await supabase.from("cost_management_pending").select("*").eq("status", "pending").order("due_date"); setPending(p || []); await fetchData(); }} />
           ) : view === "sukkiri" ? (
@@ -5319,21 +5319,115 @@ function QuickRecurringPanel({ dueAdd }) {
 }
 
 // ═══ SMART TAB — Fare · Capture · Recurring unified under one segmented control ═══
-function SmartEntryView({ allExpenses, dueAdd }) {
-  const { theme } = useTheme();
+// Frequent transaction shortcuts are explicit, device-local selections.
+function frequentTransactionOptions(expenses, currency) {
+  const groups = new Map(), seen = new Set();
+  for (const item of expenses) {
+    const r = expenseRecord(item);
+    if (r.id != null && seen.has(r.id)) continue;
+    if (r.id != null) seen.add(r.id);
+    if (regionOf(r) !== currency || !r.shop || !r.category) continue;
+    const amount = Number(r.amount) - (hasReturnJourney(r) ? Number(r.return_amount) : 0);
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+    const key = JSON.stringify([currency, r.category, r.shop, r.place_id || "", r.place_name || "", amount, r.expense_type || "normal", r.tags || ""]);
+    const old = groups.get(key);
+    if (old) { old.count++; if (String(r.date || "") > old.lastDate) old.lastDate = String(r.date || ""); }
+    else groups.set(key, { key, count: 1, lastDate: String(r.date || ""), outwardOnly: hasReturnJourney(r),
+      record: { region: currency, category: r.category, shop: r.shop, place_id: r.place_id || null, place_name: r.place_name || null,
+        amount, expense_type: r.expense_type || "normal", tags: r.tags || "" } });
+  }
+  return [...groups.values()].sort((a,b) => b.count - a.count || b.lastDate.localeCompare(a.lastDate) || a.key.localeCompare(b.key));
+}
+function FrequentTransactionsPanel({ allExpenses, userId }) {
+  const { theme, inputStyle, currency, fetchData } = useTheme();
+  const { insertExpense, modals } = useExpenseMutations({ onChange: fetchData });
+  const storageKey = "cm_favourites_v1:" + userId + ":" + currency;
+  const [selected, setSelected] = useState(() => { try { const v = JSON.parse(localStorage.getItem(storageKey)); return Array.isArray(v) ? v.filter(x => typeof x === "string") : []; } catch { return []; } });
+  const [choosing, setChoosing] = useState(false), [query, setQuery] = useState("");
+  const [form, setForm] = useState(null), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const saving = useRef(false);
+  const options = useMemo(() => frequentTransactionOptions(allExpenses, currency), [allExpenses, currency]);
+  const favourites = options.filter(x => selected.includes(x.key));
+  const matches = options.filter(x => (x.record.shop + " " + (x.record.place_name || "") + " " + x.record.category + " " + x.record.amount).toLowerCase().includes(query.trim().toLowerCase()));
+  const toggle = key => {
+    const next = selected.includes(key) ? selected.filter(x => x !== key) : [...selected, key];
+    try { localStorage.setItem(storageKey, JSON.stringify(next)); setSelected(next); setError(""); }
+    catch { setError("Could not save your selection on this device. Please try again."); }
+  };
+  const open = item => { setError(""); setForm({ ...item.record, date: ymdToday(), notes: "", outwardOnly: item.outwardOnly }); };
+  const save = async () => {
+    if (saving.current || !form) return;
+    const amount = Number(form.amount);
+    if (!Number.isFinite(amount) || amount <= 0 || !form.date) { setError("Enter a date and an amount greater than zero."); return; }
+    saving.current = true; setBusy(true); setError("");
+    try {
+      const { outwardOnly, ...record } = form;
+      const result = await insertExpense({ ...record, amount });
+      if (result.ok) setForm(null); else setError(result.error || "Could not save. Please try again.");
+    } catch { setError("Could not save. Please try again."); }
+    finally { saving.current = false; setBusy(false); }
+  };
+  const button = { minHeight:44, padding:"10px 14px", borderRadius:10, border:`1px solid ${theme.cardBorder}`, background:theme.inputBg, color:theme.text, fontFamily:"inherit", cursor:"pointer" };
+  const card = { padding:16, borderRadius:12, border:`1px solid ${theme.cardBorder}`, background:theme.cardBg };
+  return <div style={{maxWidth:560,margin:"0 auto"}}>
+    <div style={card}>
+      <h3 style={{margin:"0 0 8px",color:theme.text}}>Favourite transactions</h3>
+      <p style={{color:theme.textMuted,fontSize:13,lineHeight:1.5,margin:"0 0 12px"}}>Choose your usual transactions. Tap a favourite to review and save a new entry.</p>
+      <button type="button" style={{...button,width:"100%",background:theme.primaryGlow}} onClick={() => setChoosing(v => !v)}>{choosing ? "Done choosing" : "Choose transactions"}</button>
+      <div style={{fontSize:11,color:theme.textMuted,marginTop:8}}>{favourites.length} selected · saved on this device</div>
+    </div>
+    {error && <p role="alert" style={{color:theme.danger}}>{error}</p>}
+    {choosing ? <div style={{...card,marginTop:12}}>
+      <label style={{color:theme.text,fontSize:13}}>Search your history<input type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Shop, place, category or amount" style={{...inputStyle,minHeight:44,margin:"8px 0 12px"}}/></label>
+      <div style={{fontSize:12,color:theme.textMuted,marginBottom:10}}>Most frequent first · {matches.length} options</div>
+      <div style={{maxHeight:"55vh",overflowY:"auto",display:"grid",gap:8}}>
+        {matches.map(item => <label key={item.key} style={{...button,display:"flex",alignItems:"center",gap:12,minHeight:64}}>
+          <input type="checkbox" checked={selected.includes(item.key)} onChange={() => toggle(item.key)} aria-label={`Favourite ${expenseShopLabel(item.record)} ${fmt(item.record.amount)}`} style={{width:22,height:22,flexShrink:0}}/>
+          <span style={{minWidth:0,flex:1,overflowWrap:"anywhere"}}><strong>{expenseShopLabel(item.record)}</strong><span style={{display:"block",fontSize:12,color:theme.textMuted,marginTop:4}}>{item.record.category} · {item.count} entries · last {item.lastDate}</span></span>
+          <strong style={{whiteSpace:"nowrap"}}>{fmt(item.record.amount)}</strong>
+        </label>)}
+        {!matches.length && <p style={{color:theme.textMuted}}>No matching transactions in your history.</p>}
+      </div>
+    </div> : <div style={{display:"grid",gap:10,marginTop:12}}>
+      {favourites.map(item => <button type="button" key={item.key} onClick={() => open(item)} style={{...button,...card,textAlign:"left",minHeight:84}}>
+        <span style={{display:"flex",justifyContent:"space-between",gap:12}}><strong style={{overflowWrap:"anywhere"}}>{expenseShopLabel(item.record)}</strong><strong style={{whiteSpace:"nowrap",color:theme.primary}}>{fmt(item.record.amount)}</strong></span>
+        <span style={{display:"block",fontSize:12,color:theme.textMuted,marginTop:8}}>{item.record.category} · Review & add{item.outwardOnly ? " · outward journey" : ""}</span>
+      </button>)}
+      {!favourites.length && <p style={{color:theme.textMuted,textAlign:"center",padding:16}}>Choose transactions above to fill this panel with your favourites.</p>}
+    </div>}
+    {form && <Modal sheet onClose={() => { if (!saving.current) setForm(null); }}>
+      <h3 style={{color:theme.text,marginTop:0}}>Review new entry</h3>
+      <p style={{color:theme.text}}>{expenseShopLabel(form)} · {form.category}</p>
+      {form.outwardOnly && <p style={{color:theme.textMuted,fontSize:12}}>This shortcut adds the outward journey only. Add a return later from History.</p>}
+      <fieldset disabled={busy} style={{border:0,padding:0,margin:0,minWidth:0}}>
+        <label style={{display:"block",color:theme.text}}>Date<input aria-label="Favourite entry date" type="date" value={form.date} onChange={e => setForm({...form,date:e.target.value})} style={{...inputStyle,margin:"6px 0 12px"}}/></label>
+        <label style={{display:"block",color:theme.text}}>Amount<input aria-label="Favourite entry amount" type="number" inputMode="decimal" min="0.01" step="any" value={form.amount} onChange={e => setForm({...form,amount:e.target.value})} style={{...inputStyle,margin:"6px 0 12px"}}/></label>
+        <label style={{display:"block",color:theme.text}}>Notes<input value={form.notes} onChange={e => setForm({...form,notes:e.target.value})} style={{...inputStyle,margin:"6px 0 12px"}}/></label>
+        {error && <p role="alert" style={{color:theme.danger}}>{error}</p>}
+        <div style={{display:"flex",gap:8}}><button type="button" style={{...button,flex:1}} onClick={() => setForm(null)}>Cancel</button><button type="button" style={{...button,flex:1,background:theme.primaryGlow}} onClick={save}>{busy ? "Saving…" : "Save entry"}</button></div>
+      </fieldset>
+    </Modal>}
+    {modals}
+  </div>;
+}
+
+function SmartEntryView({ allExpenses, dueAdd, userId }) {
+  const { theme, currency } = useTheme();
   const [seg, setSeg] = useState(() => { try { return localStorage.getItem("cm_smart_seg") || "fare"; } catch (e) { return "fare"; } });
   const pick = (s) => { setSeg(s); try { localStorage.setItem("cm_smart_seg", s); } catch (e) {} };
-  const segs = [["fare", "train", "Fare"], ["capture", "crosshair", "Capture"], ["recurring", "repeat", "Recurring"]];
+  const segs = [["favourites", "star", "Favourites"], ["fare", "train", "Fare"], ["capture", "crosshair", "Capture"], ["recurring", "repeat", "Recurring"]];
   return (
     <div>
-      <div style={{ maxWidth: 560, margin: "0 auto 14px", display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 4, padding: 4, background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 12, boxSizing: "border-box" }}>
+      <div style={{ maxWidth: 560, margin: "0 auto 14px", display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 4, padding: 4, background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 12, boxSizing: "border-box" }}>
         {segs.map(([id, icon, label]) => (
           <button key={id} onClick={() => pick(id)} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 4px", borderRadius: 9, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 700, background: seg === id ? theme.primaryGlow : "transparent", color: seg === id ? "#fff" : theme.textMuted }}>
             <Icon name={icon} size={14}/>{label}
           </button>
         ))}
       </div>
-      {seg === "fare" ? (
+      {seg === "favourites" ? (
+        <FrequentTransactionsPanel key={userId + ":" + currency} allExpenses={allExpenses} userId={userId} />
+      ) : seg === "fare" ? (
         <FareCalcView allExpenses={allExpenses} dueAdd={dueAdd} />
       ) : seg === "capture" ? (
         <ShopCaptureView allExpenses={allExpenses} />
