@@ -1073,6 +1073,8 @@ function App({ session, onSignOut }) {
   // Shop name → the areas (this region) it is linked to. A named stop is remembered as a spot
   // only when its shop sits in exactly ONE area: hub spots belong to an area.
   const [shopAreas, setShopAreas] = useState({});
+  const [favouriteAreas, setFavouriteAreas] = useState([]);
+  const [favouriteAreaStatus, setFavouriteAreaStatus] = useState("loading");
   const [pinsVer, setPinsVer] = useState(0);
   useEffect(() => { window.cm.pins = stopPins; }, [stopPins]);
   useEffect(() => { const h = () => setStops(getStops()); window.addEventListener(STOPS_EVT, h); return () => window.removeEventListener(STOPS_EVT, h); }, []);
@@ -1087,12 +1089,15 @@ function App({ session, onSignOut }) {
   useEffect(() => {
     let dead = false;
     (async () => {
+      setFavouriteAreaStatus("loading"); setFavouriteAreas([]);
       const [p, a, l] = await Promise.all([
         supabase.from(HUB_POINTS).select("id,area_id,lat,lng,radius_m,label,confirmed,shop_name"),
-        supabase.from(HUB_AREAS).select("id,name,region"),
+        supabase.from(HUB_AREAS).select("id,name,region,lat,lng,radius_m"),
         supabase.from("cost_management_shop_locations").select("area_id,shop_id"),
       ]);
       if (dead) return;
+      setFavouriteAreaStatus(p.error || a.error || l.error ? "error" : "ready");
+      setFavouriteAreas((a.data || []).filter(x => !x.region || x.region === currency).map(x => ({...x, id: String(x.id)})));
       const areaById = {}; (a.data || []).forEach((x) => { areaById[String(x.id)] = x; });
       const shopById = {}, shopByName = {};
       shops.forEach((s) => { shopById[String(s.id)] = s; shopByName[s.name] = s; });
@@ -1111,14 +1116,14 @@ function App({ session, onSignOut }) {
         const linked = (inArea[String(pt.area_id)] || []).map((id) => shopById[id]).filter(Boolean);
         // The hub's shop_name (from the anchor's entity_ref) names the shop — not the label.
         const sh = (pt.shop_name && shopByName[pt.shop_name]) || (linked.length === 1 ? linked[0] : null);
-        out.push({ lat: Number(pt.lat), lng: Number(pt.lng), radius: Number(pt.radius_m) || 200, shop: sh ? sh.name : null, category: sh ? sh.category : null, label: pt.label || null, areaName: ar ? ar.name : null });
+        out.push({ areaId: String(pt.area_id), lat: Number(pt.lat), lng: Number(pt.lng), radius: Number(pt.radius_m) || 200, shop: sh ? sh.name : null, category: sh ? sh.category : null, label: pt.label || null, areaName: ar ? ar.name : null });
       });
       locTriggers.forEach((t) => {
         if (t.lat == null || t.lng == null || regionOf(t) !== currency) return;
         out.push({ lat: Number(t.lat), lng: Number(t.lng), radius: Number(t.radius) || 150, shop: t.shop || null, category: t.category || null, label: t.name || null, areaName: null });
       });
       setStopPins(out);
-    })();
+    })().catch(() => { if (!dead) setFavouriteAreaStatus("error"); });
     return () => { dead = true; };
   }, [currency, shopKey, locTriggers, pinsVer]);
 
@@ -1343,7 +1348,7 @@ function App({ session, onSignOut }) {
   const hideFloating = isMobile && keyboardUp;
 
   return (
-    <ThemeContext.Provider value={{ theme, themeName, inputStyle, labelStyle, pillStyle, supabase, fetchData, categories, tags, getCatIcon, getCatColor, getTagIcon, getTagColor, shops: regionShops, recurring: regionRecurring, currency, changeTheme, setView, presetDate, setPresetDate, locTriggers: regionTriggers, reloadTriggers, checkLocation, locStatus, simulateStop, stopStatus, stopPins }}>
+    <ThemeContext.Provider value={{ theme, themeName, inputStyle, labelStyle, pillStyle, supabase, fetchData, categories, tags, getCatIcon, getCatColor, getTagIcon, getTagColor, shops: regionShops, recurring: regionRecurring, currency, changeTheme, setView, presetDate, setPresetDate, locTriggers: regionTriggers, reloadTriggers, checkLocation, locStatus, simulateStop, stopStatus, stopPins, favouriteAreas, favouriteAreaStatus }}>
       <div style={{minHeight:"100vh",background:theme.bg,color:theme.text,fontFamily:"'Noto Sans JP', system-ui, sans-serif"}}>
         {/* Header */}
         <div style={{background:theme.headerBg,borderBottom:`1px solid ${theme.cardBorder}`,padding:"calc(14px + env(safe-area-inset-top, 0px)) 16px 14px"}}>
@@ -5338,17 +5343,73 @@ function frequentTransactionOptions(expenses, currency) {
   }
   return [...groups.values()].sort((a,b) => b.count - a.count || b.lastDate.localeCompare(a.lastDate) || a.key.localeCompare(b.key));
 }
+// Only explicit assignments or exact saved place labels establish an area.
+function favouriteAreaFor(item, areas, pins, assignments) {
+  const assigned = assignments[item.key];
+  if (assigned !== undefined) return areas.find(a => a.id === assigned) || null;
+  const place = String(item.record.place_name || "").trim().toLowerCase();
+  if (!place) return null;
+  const ids = new Set(areas.filter(a => String(a.name).trim().toLowerCase() === place).map(a => a.id));
+  pins.filter(p => p.shop === item.record.shop && p.category === item.record.category && String(p.label || "").trim().toLowerCase() === place).forEach(p => { if (p.areaId) ids.add(p.areaId); });
+  return ids.size === 1 ? areas.find(a => ids.has(a.id)) || null : null;
+}
+function favouriteAreaDistance(area, pins, position) {
+  if (!area || !position) return Infinity;
+  const valid = p => p.lat != null && p.lng != null && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng)) && Math.abs(Number(p.lat)) <= 90 && Math.abs(Number(p.lng)) <= 180;
+  const points = [area, ...pins.filter(p => p.areaId === area.id)].filter(valid);
+  return points.length ? Math.min(...points.map(p => distanceMeters(position, {lat:Number(p.lat),lng:Number(p.lng)}))) : Infinity;
+}
+function filterFavouriteLocations(options, areas, pins, settings, filters, position) {
+  return options.map(item => {
+    const area = favouriteAreaFor(item, areas, pins, settings.assignments);
+    return {...item, area, hub: area ? settings.hubs[area.id] || "" : "", distance: favouriteAreaDistance(area, pins, position)};
+  }).filter(item => (!filters.hub || (filters.hub === "__none" ? !item.hub : item.hub === filters.hub))
+    && (!filters.area || (filters.area === "__none" ? !item.area : item.area?.id === filters.area))
+    && (!filters.nearby || item.distance <= filters.radius))
+    .sort((a,b) => (position ? a.distance - b.distance : 0) || b.count - a.count || b.lastDate.localeCompare(a.lastDate));
+}
 function FrequentTransactionsPanel({ allExpenses, userId }) {
-  const { theme, inputStyle, currency, fetchData } = useTheme();
+  const { theme, inputStyle, currency, fetchData, favouriteAreas = [], favouriteAreaStatus = "ready", stopPins = [] } = useTheme();
   const { insertExpense, modals } = useExpenseMutations({ onChange: fetchData });
   const storageKey = "cm_favourites_v1:" + userId + ":" + currency;
   const [selected, setSelected] = useState(() => { try { const v = JSON.parse(localStorage.getItem(storageKey)); return Array.isArray(v) ? v.filter(x => typeof x === "string") : []; } catch { return []; } });
   const [choosing, setChoosing] = useState(false), [query, setQuery] = useState("");
   const [form, setForm] = useState(null), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const saving = useRef(false);
+  const locationKey = storageKey + ":locations";
+  const [locations, setLocations] = useState(() => {
+    try { const v = JSON.parse(localStorage.getItem(locationKey)); return { assignments: v?.assignments && typeof v.assignments === "object" ? v.assignments : {}, hubs: v?.hubs && typeof v.hubs === "object" ? v.hubs : {} }; }
+    catch { return {assignments:{},hubs:{}}; }
+  });
+  const [filters, setFilters] = useState({hub:"",area:"",nearby:false,radius:1000});
+  const [position, setPosition] = useState(null), [locating, setLocating] = useState(false), [locationMessage, setLocationMessage] = useState("");
+  const [organizing, setOrganizing] = useState(false), [hubDrafts, setHubDrafts] = useState({});
+  const locationRequest = useRef(0);
+  useEffect(() => () => { locationRequest.current++; }, []);
+  const saveLocations = next => {
+    try { localStorage.setItem(locationKey, JSON.stringify(next)); setLocations(next); setError(""); }
+    catch { setError("Could not save location choices on this device."); }
+  };
+  const locate = () => {
+    if (locating) return;
+    if (!navigator.geolocation) { setLocationMessage("Location unavailable. Choose a hub or area manually."); return; }
+    const request = ++locationRequest.current;
+    setLocating(true); setPosition(null); setFilters(v => ({...v,nearby:false})); setLocationMessage("");
+    navigator.geolocation.getCurrentPosition(p => {
+      if (request !== locationRequest.current) return;
+      setLocating(false);
+      if (!Number.isFinite(p.coords.latitude) || !Number.isFinite(p.coords.longitude) || !Number.isFinite(p.coords.accuracy) || p.coords.accuracy > 500) { setLocationMessage("Location is too approximate. Try again outdoors or choose an area."); return; }
+      setPosition({lat:p.coords.latitude,lng:p.coords.longitude});
+      setFilters(v => ({...v,hub:"",area:"",nearby:true}));
+      setLocationMessage("Nearby saved areas · refresh Near me after moving.");
+    }, () => { if (request !== locationRequest.current) return; setLocating(false); setLocationMessage("Could not get your location. Choose a hub or area manually."); },
+    {enableHighAccuracy:true,timeout:12000,maximumAge:60000});
+  };
+  const hubs = [...new Set(favouriteAreas.map(a => locations.hubs[a.id]).filter(x => typeof x === "string" && x))].sort();
   const options = useMemo(() => frequentTransactionOptions(allExpenses, currency), [allExpenses, currency]);
-  const favourites = options.filter(x => selected.includes(x.key));
-  const matches = options.filter(x => (x.record.shop + " " + (x.record.place_name || "") + " " + x.record.category + " " + x.record.amount).toLowerCase().includes(query.trim().toLowerCase()));
+  const locatedOptions = filterFavouriteLocations(options, favouriteAreas, stopPins, locations, filters, position);
+  const favourites = locatedOptions.filter(x => selected.includes(x.key));
+  const matches = locatedOptions.filter(x => (x.record.shop + " " + (x.record.place_name || "") + " " + x.record.category + " " + x.record.amount).toLowerCase().includes(query.trim().toLowerCase()));
   const toggle = key => {
     const next = selected.includes(key) ? selected.filter(x => x !== key) : [...selected, key];
     try { localStorage.setItem(storageKey, JSON.stringify(next)); setSelected(next); setError(""); }
@@ -5376,24 +5437,50 @@ function FrequentTransactionsPanel({ allExpenses, userId }) {
       <button type="button" style={{...button,width:"100%",background:theme.primaryGlow}} onClick={() => setChoosing(v => !v)}>{choosing ? "Done choosing" : "Choose transactions"}</button>
       <div style={{fontSize:11,color:theme.textMuted,marginTop:8}}>{favourites.length} selected · saved on this device</div>
     </div>
+    <div style={{...card,marginTop:12}}>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        <button type="button" style={button} disabled={locating} onClick={locate}>{locating ? "Locating…" : "Near me"}</button>
+        <button type="button" style={button} onClick={() => { locationRequest.current++; setLocating(false); setPosition(null); setLocationMessage(""); setFilters({hub:"",area:"",nearby:false,radius:1000}); }}>All locations</button>
+        <button type="button" style={button} onClick={() => setOrganizing(v => !v)}>{organizing ? "Close organisation" : "Organise hubs"}</button>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:12}}>
+        <label style={{color:theme.text,fontSize:12}}>Hub<select aria-label="Favourite hub" value={filters.hub} onChange={e => setFilters({...filters,hub:e.target.value,area:"",nearby:false})} style={{...inputStyle,minHeight:44}}><option value="">All hubs</option>{hubs.map(h => <option key={h} value={h}>{h}</option>)}<option value="__none">No hub assigned</option></select></label>
+        <label style={{color:theme.text,fontSize:12}}>Area<select aria-label="Favourite area" value={filters.area} onChange={e => setFilters({...filters,area:e.target.value,nearby:false})} style={{...inputStyle,minHeight:44}}><option value="">All areas</option><option value="__none">Unassigned</option>{favouriteAreas.filter(a => !filters.hub || (filters.hub === "__none" ? !locations.hubs[a.id] : locations.hubs[a.id] === filters.hub)).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
+      </div>
+      {filters.nearby && <label style={{display:"block",color:theme.text,fontSize:12,marginTop:10}}>Nearby radius<select aria-label="Nearby radius" value={filters.radius} onChange={e => setFilters({...filters,radius:Number(e.target.value)})} style={inputStyle}><option value={500}>500 m</option><option value={1000}>1 km</option><option value={3000}>3 km</option></select></label>}
+      <p aria-live="polite" style={{color:theme.textMuted,fontSize:12}}>{locationMessage || "Choose a hub and area, or use Near me."}</p>
+      {favouriteAreaStatus !== "ready" && <p role="status" style={{color:theme.textMuted,fontSize:12}}>{favouriteAreaStatus === "error" ? "Saved locations could not fully load. Reload online to retry; All locations still works." : "Loading saved locations…"}</p>}
+      {organizing && <div style={{marginTop:12}}>
+        <p style={{color:theme.textMuted,fontSize:12}}>Group saved areas under your own hub names. These groups and transaction assignments are saved on this device.</p>
+        {!favouriteAreas.length && <p style={{color:theme.textMuted}}>No saved areas. Add areas in the app's location settings first.</p>}
+        {favouriteAreas.map(a => <div key={a.id} style={{marginBottom:12}}>
+          <label style={{color:theme.text,fontSize:13}}>{a.name}<input aria-label={`Hub for ${a.name}`} placeholder="Hub name, e.g. Musashi-Urawa" maxLength={80} value={hubDrafts[a.id] ?? locations.hubs[a.id] ?? ""} onChange={e => setHubDrafts({...hubDrafts,[a.id]:e.target.value})} style={{...inputStyle,marginTop:4}}/></label>
+          <button type="button" style={{...button,marginTop:4}} onClick={() => { saveLocations({...locations,hubs:{...locations.hubs,[a.id]:(hubDrafts[a.id] ?? locations.hubs[a.id] ?? "").trim()}}); setFilters(v => ({...v,hub:"",area:""})); }}>Save hub</button>
+        </div>)}
+      </div>}
+    </div>
     {error && <p role="alert" style={{color:theme.danger}}>{error}</p>}
     {choosing ? <div style={{...card,marginTop:12}}>
       <label style={{color:theme.text,fontSize:13}}>Search your history<input type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Shop, place, category or amount" style={{...inputStyle,minHeight:44,margin:"8px 0 12px"}}/></label>
       <div style={{fontSize:12,color:theme.textMuted,marginBottom:10}}>Most frequent first · {matches.length} options</div>
       <div style={{maxHeight:"55vh",overflowY:"auto",display:"grid",gap:8}}>
-        {matches.map(item => <label key={item.key} style={{...button,display:"flex",alignItems:"center",gap:12,minHeight:64}}>
+        {matches.map(item => <div key={item.key}><label style={{...button,display:"flex",alignItems:"center",gap:12,minHeight:64}}>
           <input type="checkbox" checked={selected.includes(item.key)} onChange={() => toggle(item.key)} aria-label={`Favourite ${expenseShopLabel(item.record)} ${fmt(item.record.amount)}`} style={{width:22,height:22,flexShrink:0}}/>
           <span style={{minWidth:0,flex:1,overflowWrap:"anywhere"}}><strong>{expenseShopLabel(item.record)}</strong><span style={{display:"block",fontSize:12,color:theme.textMuted,marginTop:4}}>{item.record.category} · {item.count} entries · last {item.lastDate}</span></span>
           <strong style={{whiteSpace:"nowrap"}}>{fmt(item.record.amount)}</strong>
-        </label>)}
-        {!matches.length && <p style={{color:theme.textMuted}}>No matching transactions in your history.</p>}
+        </label>
+          <div style={{padding:"4px 10px 12px"}}>
+            <label style={{fontSize:12,color:theme.textMuted}}>Area for this transaction<select aria-label={`Area for ${expenseShopLabel(item.record)} ${fmt(item.record.amount)}`} value={item.area?.id || ""} onChange={e => saveLocations({...locations,assignments:{...locations.assignments,[item.key]:e.target.value}})} style={{...inputStyle,minHeight:44}}><option value="">Unassigned</option>{favouriteAreas.map(a => <option key={a.id} value={a.id}>{locations.hubs[a.id] ? locations.hubs[a.id] + " / " : ""}{a.name}</option>)}</select></label>
+          </div>
+        </div>)}
+        {!matches.length && <p style={{color:theme.textMuted}}>No transactions match these filters. Try All locations or a different search.</p>}
       </div>
     </div> : <div style={{display:"grid",gap:10,marginTop:12}}>
       {favourites.map(item => <button type="button" key={item.key} onClick={() => open(item)} style={{...button,...card,textAlign:"left",minHeight:84}}>
         <span style={{display:"flex",justifyContent:"space-between",gap:12}}><strong style={{overflowWrap:"anywhere"}}>{expenseShopLabel(item.record)}</strong><strong style={{whiteSpace:"nowrap",color:theme.primary}}>{fmt(item.record.amount)}</strong></span>
-        <span style={{display:"block",fontSize:12,color:theme.textMuted,marginTop:8}}>{item.record.category} · Review & add{item.outwardOnly ? " · outward journey" : ""}</span>
+        <span style={{display:"block",fontSize:12,color:theme.textMuted,marginTop:8}}>{item.hub ? item.hub + " / " : ""}{item.area?.name || "Unassigned"}{Number.isFinite(item.distance) ? " · " + Math.round(item.distance) + " m to saved area" : ""}<br/>{item.record.category} · Review & add{item.outwardOnly ? " · outward journey" : ""}</span>
       </button>)}
-      {!favourites.length && <p style={{color:theme.textMuted,textAlign:"center",padding:16}}>Choose transactions above to fill this panel with your favourites.</p>}
+      {!favourites.length && <p style={{color:theme.textMuted,textAlign:"center",padding:16}}>No favourites match this location. Try All locations, or choose transactions and assign their areas.</p>}
     </div>}
     {form && <Modal sheet onClose={() => { if (!saving.current) setForm(null); }}>
       <h3 style={{color:theme.text,marginTop:0}}>Review new entry</h3>
