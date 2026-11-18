@@ -5,7 +5,7 @@ const areas=[{id:'a',name:'East',lat:35,lng:139},{id:'b',name:'West',lat:36,lng:
 const pins=[{areaId:'a',shop:'Mart',category:'Food',label:'East branch',lat:35,lng:139}];
 const ctx={distanceMeters:(a,b)=>Math.hypot(a.lat-b.lat,a.lng-b.lng)*111000};
 vm.createContext(ctx);
-vm.runInContext(src.slice(src.indexOf('// Only explicit assignments'),src.indexOf('function FrequentTransactionsPanel')),ctx);
+vm.runInContext(src.slice(src.indexOf('// Only explicit assignments'),src.indexOf('const QUICK_TIME_WINDOWS')),ctx);
 const item=(key,place)=>({key,count:2,lastDate:'2026-11-18',record:{shop:'Mart',category:'Food',place_name:place}});
 const east=item('east','East branch'),west=item('west','West'),unknown=item('unknown','');
 assert.equal(ctx.favouriteAreaFor(east,areas,pins,{}).id,'a');
@@ -26,7 +26,7 @@ navigator:{geolocation:{getCurrentPosition(ok,bad){success=ok;failure=bad;}}},
 localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},
 require:()=>({jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})}),
 useState(initial){const i=cursor++;if(!(i in state))state[i]=typeof initial==='function'?initial():initial;return [state[i],v=>state[i]=typeof v==='function'?v(state[i]):v];},
-useRef(v){const i=cursor++;return state[i]||(state[i]={current:v});},useMemo:fn=>fn(),useEffect:fn=>{cleanup=fn();},
+useKeyboardUp:()=>false,useRef(v){const i=cursor++;return state[i]||(state[i]={current:v});},useMemo:fn=>fn(),useEffect:fn=>{cleanup=fn();},
 useTheme:()=>({theme:{},inputStyle:{},currency:'JPY',favouriteAreas:areas,stopPins:pins}),
 useExpenseMutations:()=>({modals:null,insertExpense:()=>{writes++;}})});
 vm.runInContext(babel.babelTransform(src.slice(src.indexOf('// Frequent transaction shortcuts'),src.indexOf('function SmartEntryView')),'panel.jsx',false,[],[]).code,ctx);
@@ -47,3 +47,4 @@ button('Save hub').props.onClick();
 assert.equal(JSON.parse(storage.get('cm_favourites_v1:test:JPY:locations')).hubs.a,'Home');
 assert.equal(writes,0,'filtering and grouping never create expenses');
 console.log('PASS: exact/ambiguous/manual assignments, null coordinates, hub/area/nearby filters, nearest ordering, GPS denial/accuracy/stale callbacks, persisted hubs and no automatic expense writes');
+

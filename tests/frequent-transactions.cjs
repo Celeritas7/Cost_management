@@ -8,7 +8,7 @@ const ctx={console,expenseRecord:r=>r,hasReturnJourney:r=>r.return_amount!=null,
  localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},
  require:()=>({jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})}),
  useState(initial){let i=cursor++;if(!(i in state))state[i]=typeof initial==='function'?initial():initial;return [state[i],v=>state[i]=typeof v==='function'?v(state[i]):v];},
- useEffect(){},useRef(v){let i=cursor++;return state[i]||(state[i]={current:v});},useMemo:fn=>fn(),
+ useEffect(){},useKeyboardUp:()=>false,useRef(v){let i=cursor++;return state[i]||(state[i]={current:v});},useMemo:fn=>fn(),
  useTheme:()=>({theme:{},inputStyle:{},currency:'JPY',fetchData(){}}),
  useExpenseMutations:()=>({modals:null,insertExpense:r=>{writes.push(r);return new Promise(resolve=>resolveSave=resolve);}})};
 vm.createContext(ctx);

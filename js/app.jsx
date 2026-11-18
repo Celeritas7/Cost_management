@@ -1429,6 +1429,7 @@ function App({ session, onSignOut }) {
             <>
               <ToLogStrip requests={sukkiriPending} reload={reloadSukkiri} onOpenRequests={() => { reloadSukkiri(); setView("sukkiri"); }} />
               <AddEntryView recentEntries={recentEntries} allExpenses={RAW} />
+              <FrequentTransactionsPanel key={"quick:" + session.user.id + ":" + currency} compact allExpenses={RAW} userId={session.user.id} />
             </>
           ) : view === "overview" ? (
             <OverviewView {...{filtered,totalSpend,monthlyAvg,dailyAvg,monthlyData,catData,topShops}} allExpenses={RAW} />
@@ -5368,18 +5369,44 @@ function filterFavouriteLocations(options, areas, pins, settings, filters, posit
     && (!filters.nearby || item.distance <= filters.radius))
     .sort((a,b) => (position ? a.distance - b.distance : 0) || b.count - a.count || b.lastDate.localeCompare(a.lastDate));
 }
-function FrequentTransactionsPanel({ allExpenses, userId }) {
-  const { theme, inputStyle, currency, fetchData, favouriteAreas = [], favouriteAreaStatus = "ready", stopPins = [] } = useTheme();
+const QUICK_TIME_WINDOWS = [
+  ["any", "Anytime"], ["morning", "Morning · 05–11"], ["lunch", "Lunch · 11–15"], ["evening", "Evening · 17–23"]
+];
+function quickTimeMatch(windowName, hour) {
+  if (windowName === "morning") return hour >= 5 && hour < 11;
+  if (windowName === "lunch") return hour >= 11 && hour < 15;
+  if (windowName === "evening") return hour >= 17 && hour < 23;
+  return true;
+}
+function quickEntrySuggestions(options, selected, locations, areas, pins, position, areaId, now) {
+  const list = filterFavouriteLocations(options.filter(x => selected.includes(x.key) && quickTimeMatch(locations.times?.[x.key], now.getHours())),
+    areas, pins, locations, {hub:"",area:areaId,nearby:!!position && !areaId,radius:1000}, position);
+  return list.sort((a,b) => Number(!!locations.times?.[b.key] && locations.times[b.key] !== "any") - Number(!!locations.times?.[a.key] && locations.times[a.key] !== "any")
+    || (position ? a.distance - b.distance : 0) || b.count - a.count || b.lastDate.localeCompare(a.lastDate)).slice(0,5);
+}
+function FrequentTransactionsPanel({ allExpenses, userId, compact = false }) {
+  const { theme, inputStyle, currency, fetchData, setView, favouriteAreas = [], favouriteAreaStatus = "ready", stopPins = [] } = useTheme();
   const { insertExpense, modals } = useExpenseMutations({ onChange: fetchData });
   const storageKey = "cm_favourites_v1:" + userId + ":" + currency;
   const [selected, setSelected] = useState(() => { try { const v = JSON.parse(localStorage.getItem(storageKey)); return Array.isArray(v) ? v.filter(x => typeof x === "string") : []; } catch { return []; } });
   const [choosing, setChoosing] = useState(false), [query, setQuery] = useState("");
   const [form, setForm] = useState(null), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const saving = useRef(false);
+  const [quickOpen, setQuickOpen] = useState(false), [clock, setClock] = useState(() => Date.now());
+  const keyboardUp = useKeyboardUp();
+  const [currentPos, setCurrentPos] = useState(null);
+  useEffect(() => {
+    if (!compact) return;
+    const refresh = () => { setClock(Date.now()); setCurrentPos(window.cm?.pos || null); };
+    refresh();
+    const timer = setInterval(refresh, 30000);
+    window.addEventListener("focus", refresh);
+    return () => { clearInterval(timer); window.removeEventListener("focus", refresh); };
+  }, [compact]);
   const locationKey = storageKey + ":locations";
   const [locations, setLocations] = useState(() => {
-    try { const v = JSON.parse(localStorage.getItem(locationKey)); return { assignments: v?.assignments && typeof v.assignments === "object" ? v.assignments : {}, hubs: v?.hubs && typeof v.hubs === "object" ? v.hubs : {} }; }
-    catch { return {assignments:{},hubs:{}}; }
+    try { const v = JSON.parse(localStorage.getItem(locationKey)); return { assignments: v?.assignments && typeof v.assignments === "object" ? v.assignments : {}, hubs: v?.hubs && typeof v.hubs === "object" ? v.hubs : {}, times: v?.times && typeof v.times === "object" ? v.times : {} }; }
+    catch { return {assignments:{},hubs:{},times:{}}; }
   });
   const [filters, setFilters] = useState({hub:"",area:"",nearby:false,radius:1000});
   const [position, setPosition] = useState(null), [locating, setLocating] = useState(false), [locationMessage, setLocationMessage] = useState("");
@@ -5399,7 +5426,7 @@ function FrequentTransactionsPanel({ allExpenses, userId }) {
       if (request !== locationRequest.current) return;
       setLocating(false);
       if (!Number.isFinite(p.coords.latitude) || !Number.isFinite(p.coords.longitude) || !Number.isFinite(p.coords.accuracy) || p.coords.accuracy > 500) { setLocationMessage("Location is too approximate. Try again outdoors or choose an area."); return; }
-      setPosition({lat:p.coords.latitude,lng:p.coords.longitude});
+      setPosition({lat:p.coords.latitude,lng:p.coords.longitude,t:Date.now()});
       setFilters(v => ({...v,hub:"",area:"",nearby:true}));
       setLocationMessage("Nearby saved areas · refresh Near me after moving.");
     }, () => { if (request !== locationRequest.current) return; setLocating(false); setLocationMessage("Could not get your location. Choose a hub or area manually."); },
@@ -5410,12 +5437,17 @@ function FrequentTransactionsPanel({ allExpenses, userId }) {
   const locatedOptions = filterFavouriteLocations(options, favouriteAreas, stopPins, locations, filters, position);
   const favourites = locatedOptions.filter(x => selected.includes(x.key));
   const matches = locatedOptions.filter(x => (x.record.shop + " " + (x.record.place_name || "") + " " + x.record.category + " " + x.record.amount).toLowerCase().includes(query.trim().toLowerCase()));
+  const freshPosition = [position, currentPos].filter(p => p && Number.isFinite(p.lat) && Number.isFinite(p.lng) && clock - p.t < 120000 && clock - p.t >= -5000 && (p.acc == null || p.acc <= 500)).sort((a,b) => b.t - a.t)[0] || null;
+  const quickItems = quickEntrySuggestions(options, selected, locations, favouriteAreas, stopPins, freshPosition, filters.area, new Date(clock));
+  const quickReady = quickItems.length > 0 && (!!freshPosition || !!filters.area);
+  const openQuick = () => { setClock(Date.now()); setCurrentPos(window.cm?.pos || null); setQuickOpen(true); };
+  const manage = () => { try { localStorage.setItem("cm_smart_seg", "favourites"); } catch {} setView("smart"); };
   const toggle = key => {
     const next = selected.includes(key) ? selected.filter(x => x !== key) : [...selected, key];
     try { localStorage.setItem(storageKey, JSON.stringify(next)); setSelected(next); setError(""); }
     catch { setError("Could not save your selection on this device. Please try again."); }
   };
-  const open = item => { setError(""); setForm({ ...item.record, date: ymdToday(), notes: "", outwardOnly: item.outwardOnly }); };
+  const open = item => { setQuickOpen(false); setError(""); setForm({ ...item.record, date: ymdToday(), notes: "", outwardOnly: item.outwardOnly }); };
   const save = async () => {
     if (saving.current || !form) return;
     const amount = Number(form.amount);
@@ -5431,7 +5463,29 @@ function FrequentTransactionsPanel({ allExpenses, userId }) {
   const button = { minHeight:44, padding:"10px 14px", borderRadius:10, border:`1px solid ${theme.cardBorder}`, background:theme.inputBg, color:theme.text, fontFamily:"inherit", cursor:"pointer" };
   const card = { padding:16, borderRadius:12, border:`1px solid ${theme.cardBorder}`, background:theme.cardBg };
   return <div style={{maxWidth:560,margin:"0 auto"}}>
-    <div style={card}>
+    {compact ? (<>
+      {!quickOpen && !form && !keyboardUp && <button type="button" aria-label={quickReady ? "Quick add — suggestions ready" : "Quick add"} title="Quick add" aria-haspopup="dialog" onClick={openQuick}
+        style={{position:"fixed",right:18,bottom:"calc(88px + env(safe-area-inset-bottom))",width:54,height:54,borderRadius:"45% 55% 49% 51%",border:`1px solid ${theme.primary}`,background:theme.cardBg,color:theme.primary,boxShadow:"0 4px 18px rgba(0,0,0,.35)",zIndex:210,cursor:"pointer",fontSize:26}}>
+        <span aria-hidden="true">⚡</span>{quickReady && <span data-quick-ready="true" aria-hidden="true" style={{position:"absolute",top:3,right:3,width:10,height:10,borderRadius:"50%",background:theme.success,border:`2px solid ${theme.cardBg}`}}/>}
+      </button>}
+      {quickOpen && <Modal sheet onClose={() => setQuickOpen(false)}>
+        <div role="dialog" aria-label="Quick add">
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><h3 style={{color:theme.text,margin:0}}>Quick add</h3><button type="button" aria-label="Close quick add" style={button} onClick={() => setQuickOpen(false)}>×</button></div>
+          <p style={{fontSize:12,color:theme.textMuted}}>{filters.area ? "Selected area" : freshPosition ? "Near you · within 1 km of saved areas" : "Time matches · location not checked"} · local time {new Date(clock).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}</p>
+          <div style={{display:"flex",gap:8,marginBottom:12}}><button type="button" style={button} disabled={locating} onClick={locate}>{locating ? "Locating…" : "Near me"}</button><button type="button" style={button} onClick={manage}>Manage</button></div>
+          <select aria-label="Quick add area" style={{...inputStyle,minHeight:44,marginBottom:12}} value={filters.area} onChange={e => setFilters({...filters,area:e.target.value})}><option value="">Use current location</option>{favouriteAreas.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
+          {locationMessage && <p role="status" style={{fontSize:12,color:theme.textMuted}}>{locationMessage}</p>}
+          <div style={{display:"grid",gap:8}}>
+            {quickItems.map(item => <button type="button" key={item.key} onClick={() => open(item)} style={{...button,textAlign:"left",minHeight:66}}>
+              <span style={{display:"flex",justifyContent:"space-between",gap:12}}><strong style={{overflowWrap:"anywhere"}}>{expenseShopLabel(item.record)}</strong><strong style={{whiteSpace:"nowrap"}}>{fmt(item.record.amount)}</strong></span>
+              <span style={{display:"block",fontSize:12,color:theme.textMuted,marginTop:5}}>{item.area?.name || "Unassigned"} · {item.outwardOnly ? "Outward journey · " : ""}Review & add</span>
+            </button>)}
+          </div>
+          {!quickItems.length && <p style={{color:theme.textMuted}}>No favourites match this time and area. Use Manage to choose favourites, areas and times.</p>}
+          {favouriteAreaStatus !== "ready" && <p role="status" style={{color:theme.textMuted,fontSize:12}}>Saved areas are {favouriteAreaStatus === "error" ? "unavailable; reload online to retry" : "loading"}.</p>}
+        </div>
+      </Modal>}
+    </>) : (<>    <div style={card}>
       <h3 style={{margin:"0 0 8px",color:theme.text}}>Favourite transactions</h3>
       <p style={{color:theme.textMuted,fontSize:13,lineHeight:1.5,margin:"0 0 12px"}}>Choose your usual transactions. Tap a favourite to review and save a new entry.</p>
       <button type="button" style={{...button,width:"100%",background:theme.primaryGlow}} onClick={() => setChoosing(v => !v)}>{choosing ? "Done choosing" : "Choose transactions"}</button>
@@ -5471,6 +5525,7 @@ function FrequentTransactionsPanel({ allExpenses, userId }) {
         </label>
           <div style={{padding:"4px 10px 12px"}}>
             <label style={{fontSize:12,color:theme.textMuted}}>Area for this transaction<select aria-label={`Area for ${expenseShopLabel(item.record)} ${fmt(item.record.amount)}`} value={item.area?.id || ""} onChange={e => saveLocations({...locations,assignments:{...locations.assignments,[item.key]:e.target.value}})} style={{...inputStyle,minHeight:44}}><option value="">Unassigned</option>{favouriteAreas.map(a => <option key={a.id} value={a.id}>{locations.hubs[a.id] ? locations.hubs[a.id] + " / " : ""}{a.name}</option>)}</select></label>
+            <label style={{display:"block",fontSize:12,color:theme.textMuted,marginTop:8}}>Quick add time<select aria-label={`Time for ${expenseShopLabel(item.record)} ${fmt(item.record.amount)}`} value={locations.times?.[item.key] || "any"} onChange={e => saveLocations({...locations,times:{...locations.times,[item.key]:e.target.value}})} style={{...inputStyle,minHeight:44}}>{QUICK_TIME_WINDOWS.map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           </div>
         </div>)}
         {!matches.length && <p style={{color:theme.textMuted}}>No transactions match these filters. Try All locations or a different search.</p>}
@@ -5482,6 +5537,7 @@ function FrequentTransactionsPanel({ allExpenses, userId }) {
       </button>)}
       {!favourites.length && <p style={{color:theme.textMuted,textAlign:"center",padding:16}}>No favourites match this location. Try All locations, or choose transactions and assign their areas.</p>}
     </div>}
+</>)}
     {form && <Modal sheet onClose={() => { if (!saving.current) setForm(null); }}>
       <h3 style={{color:theme.text,marginTop:0}}>Review new entry</h3>
       <p style={{color:theme.text}}>{expenseShopLabel(form)} · {form.category}</p>
