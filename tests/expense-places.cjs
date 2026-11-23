@@ -49,11 +49,38 @@ function amount(value){find(n=>n.type==='input'&&n.props.type==='number').props.
  assert.equal(field('Place / branch').props.value,'My nearby branch','failed save retains draft');assert.equal(writes.at(-1).place_id,null);
  outcome={ok:true,queued:true};await button('Add expense').props.onClick();assert.equal(writes.at(-1).place_name,'My nearby branch');
  await select();find(n=>n.type==='input'&&n.props.value==='FamilyMart').props.onChange({target:{value:'Different shop'}});assert.equal(field('Place / branch').props.value,'','changing shop clears stale branch');
+ // A named search uses the provider before opening a draft. Only the selected branch is recorded.
+ const originalRow=writes[0]; state=[]; writes=[]; outcome={ok:true}; const lookups=[];
+ const shops=[{name:'Daiso'}]; const existingTheme=context.useTheme;
+ context.useTheme=()=>({...existingTheme(),shops});
+ context.hubPlacesNearby=async body=>{
+   lookups.push(body);
+   return {http:200,res:{status:'fetched',candidates:[
+     {name:'Bookshop',types:['book_store'],distance_m:10,place_id:'book'},
+     {name:'ダイソー 武蔵浦和店',types:['discount_store'],distance_m:40,place_id:'daiso-east',address:'Live Tower'}
+   ]}};
+ };
+ const submit=async(query)=>{
+   field('Shop name').props.onChange({target:{value:query}});
+   find(n=>n.type==='form').props.onSubmit({preventDefault(){}});
+   await new Promise(r=>setImmediate(r));
+ };
+ await submit('Daiso');
+ assert.deepEqual([lookups.length,lookups[0].mode,lookups[0].query], [1,'cost_shops','Daiso']);
+ assert(!nodes(render()).some(n=>n.props?.children?.[0]==='Bookshop'));
+ assert.equal(writes.length,0);
+ find(n=>n.type==='button'&&nodes(n).some(c=>c.props?.children?.[0]==='ダイソー 武蔵浦和店')).props.onClick();
+ assert.equal(field('Place / branch').props.value,'武蔵浦和店'); amount('110');
+ await button('Add expense').props.onClick(); assert.equal(writes[0].shop,'Daiso'); assert.equal(writes[0].place_id,'daiso-east');
+ await submit('Unlisted'); await button('Search farther · 3 km').props.onClick();
+ assert.equal(lookups.at(-1).wider,true); assert.equal(lookups.at(-1).query,'Unlisted');
+ button('Use typed name manually').props.onClick();
+ assert.equal(field('Place / branch').props.value,''); assert.equal(lookups.length,3);
  // Actual offline write/overlay code preserves metadata through local JSON storage.
  const queueSource=source.slice(source.indexOf('const OUTBOX_KEY'),source.indexOf('const idOrd'));
  let storage={};Object.assign(context,{localStorage:{getItem:k=>storage[k],setItem:(k,v)=>storage[k]=v},window:{dispatchEvent(){}},Event:function(){},navigator:{onLine:false},setTimeout(){}});
  vm.runInContext(queueSource,context);
- await context.writeThrough({table:'cost_management_expenses',op:'insert',row:writes[0]});
+ await context.writeThrough({table:'cost_management_expenses',op:'insert',row:originalRow});
  const queued=vm.runInContext('overlayExpenses([])',context);assert.equal(queued[0].place_name,'Ageo East Exit');assert.equal(queued[0].place_id,'branch-a');
  // Reload projection must retain both fields as well as the unmodified shop key.
  assert.match(source,/shop: r.shop, place_name: r.place_name \|\| null, place_id: r.place_id \|\| null/);

@@ -606,18 +606,75 @@ function expenseShopLabel(row) {
   const shop = (row.shop || "").trim() + (row._leg ? ` · ${row._leg === "return" ? "Return" : "Outward"}` : ""), place = (row.place_name || "").trim();
   return place && place.toLowerCase() !== shop.toLowerCase() ? `${shop} · ${place}` : shop;
 }
-function capturePlace(candidate, expenses = []) {
-  const name = (candidate.name || "").trim();
-  const known = [...new Set(expenses.map(e => e.shop).filter(Boolean))];
-  // Only explicit aliases or a delimited prefix identify an existing shop.
-  const family = /^(?:family\s*mart|ファミリーマート)(?=$|[\s・·—–-]|[^\x00-\x7f])/i.exec(name);
-  const familyShop = family && known.find(n => /^(?:family\s*mart|ファミリーマート)$/i.test(n.trim()));
-  const prefix = known.sort((a, b) => b.length - a.length).find(n =>
-    name.toLowerCase() === n.toLowerCase() || (name.toLowerCase().startsWith(n.toLowerCase()) && /^[\s・·—–-]/.test(name.slice(n.length))));
-  const shop = familyShop || prefix || name;
-  const remainder = familyShop ? name.slice(family[0].length) : prefix ? name.slice(prefix.length) : "";
-  const branch = remainder.replace(/^[\s・·—–-]+/, "").trim();
-  return { shop, place_name: candidate.place_name || branch || candidate.address || "", place_id: candidate.place_id || null };
+const CAPTURE_BRANDS = [
+  ["daiso", "ダイソー", "ザ・ダイソー", "the daiso"],
+  ["yaoko", "ヤオコー"],
+  ["familymart", "family mart", "ファミリーマート"],
+  ["lawson", "ローソン"], ["seiyu", "西友"], ["maruetsu", "マルエツ"],
+  ["7-eleven", "7 eleven", "seven eleven", "セブン-イレブン", "セブンイレブン"],
+];
+function captureText(value) {
+  return String(value || "").normalize("NFKC").trim().toLowerCase().replace(/\s+/g, " ");
+}
+function shopPrefix(name, prefix) {
+  if (!prefix || !name.startsWith(prefix)) return false;
+  const next = name.slice(prefix.length, prefix.length + 1);
+  return !next || !/[a-z0-9]/.test(next) || /[ぁ-ヿ㐀-鿿]$/.test(prefix);
+}
+function captureBrand(name) {
+  for (const aliases of CAPTURE_BRANDS) {
+    const prefix = aliases.find(alias => shopPrefix(name, alias));
+    if (prefix) return { key: aliases[0], aliases, prefix };
+  }
+  return null;
+}
+function captureCatalogue(expenses, shops = []) {
+  const names = new Map(), ids = new Map();
+  for (const row of [...expenses, ...shops]) {
+    const name = row.shop || row.name, key = captureText(name);
+    if (!key) continue;
+    names.set(key, name);
+    if (row.place_id) ids.set(row.place_id, name);
+  }
+  return { names, ids, prefixes: [...names.keys()].sort((a, b) => b.length - a.length) };
+}
+function captureIdentity(candidate, catalogue) {
+  const name = captureText(candidate.name);
+  const brand = captureBrand(name);
+  const prefix = catalogue.prefixes.find(key => shopPrefix(name, key));
+  const alias = brand?.aliases.find(key => catalogue.names.has(key));
+  const saved = catalogue.ids.get(candidate.place_id) || catalogue.names.get(prefix) || catalogue.names.get(alias);
+  const used = prefix && catalogue.names.get(prefix) === saved ? prefix : alias ? brand.prefix : "";
+  const branch = used ? candidate.name.normalize("NFKC").trim().replace(/\s+/g, " ").slice(used.length).replace(/^[\s・·—–-]+/, "").trim() : "";
+  return { saved, branch };
+}
+function capturePlace(candidate, expenses = [], catalogue = captureCatalogue(expenses)) {
+  const { saved, branch } = captureIdentity(candidate, catalogue);
+  return { shop: saved || candidate.name.trim(), place_name: candidate.place_name || branch || candidate.address || "", place_id: candidate.place_id || null };
+}
+function captureQueryMatches(name, query) {
+  const canonical = value => {
+    const text = captureText(value), brand = captureBrand(text);
+    return brand ? brand.key + " " + text.slice(brand.prefix.length).trim() : text;
+  };
+  const text = canonical(name).trim();
+  return canonical(query).trim().split(/\s+/).every(word => {
+    if (!word) return true;
+    if (/^[a-z0-9]+$/i.test(word)) return text.split(/[^a-z0-9]+/i).includes(word);
+    return text.includes(word);
+  });
+}
+function rankCaptureShops(candidates, catalogue, query = "") {
+  const seen = new Set();
+  return candidates.filter(c => !query || captureQueryMatches(c.name + (c.place_name ? " " + c.place_name : ""), query))
+    .map(c => ({ ...c, known: c.source === "pin" || !!captureIdentity(c, catalogue).saved }))
+    .sort((a, b) => Number(b.known) - Number(a.known) || a.distance_m - b.distance_m)
+    .filter(c => {
+      const key = c.place_id || JSON.stringify([captureText(c.name), c.pin_key || c.address]);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, 5);
 }
 
 function enrichRow(r) {
@@ -5573,7 +5630,7 @@ function SmartEntryView({ allExpenses, dueAdd, userId }) {
       ) : seg === "fare" ? (
         <FareCalcView allExpenses={allExpenses} dueAdd={dueAdd} />
       ) : seg === "capture" ? (
-        <ShopCaptureView allExpenses={allExpenses} />
+        <ShopCaptureView key={userId + ":" + currency} allExpenses={allExpenses} />
       ) : (
         <div className="cm-fade" style={{ maxWidth: 560, margin: "0 auto" }}><QuickRecurringPanel dueAdd={dueAdd} /></div>
       )}
@@ -6287,13 +6344,15 @@ function FareBookView() {
 
 // ═══ PHASE C — Location-based Shop Capture + category inference ═══
 function ShopCaptureView({ allExpenses }) {
-  const { theme, inputStyle, labelStyle, supabase, fetchData, categories, currency, getCatIcon, stopPins = [] } = useTheme();
+  const { theme, inputStyle, labelStyle, supabase, fetchData, categories, currency, shops = [], stopPins = [] } = useTheme();
   const [hubCalls, setHubCalls] = useState(null); // this month's count, as the hub reports it
   const [capped, setCapped] = useState(false);
-  const [candSource, setCandSource] = useState(null); // "pins" | "cache" | "google"
-  const [lastPos, setLastPos] = useState(null);
+  const [candSource, setCandSource] = useState(null);
+  const [search, setSearch] = useState(null);
+  const lookupBusy = useRef(false);
+  const catalogue = useMemo(() => captureCatalogue(allExpenses, shops), [allExpenses, shops]);
   const { insertExpense, modals } = useExpenseMutations({ onChange: fetchData });
-  const [locState, setLocState] = useState("idle"); // idle | locating | picked
+  const [locState, setLocState] = useState("idle");
   const [cands, setCands] = useState(null);
   const [locErr, setLocErr] = useState("");
   const [manualName, setManualName] = useState("");
@@ -6304,49 +6363,49 @@ function ShopCaptureView({ allExpenses }) {
   const savingRef = useRef(false);
   const validCats = useMemo(() => categories.map((c) => c.name), [categories]);
   const startForm = (name, placeTypes, candidate = {}) => {
-    const place = capturePlace({ ...candidate, name }, allExpenses);
+    const place = capturePlace({ ...candidate, name }, allExpenses, catalogue);
     const inf = inferCategory(place.shop, allExpenses, placeTypes, validCats);
     // instrument the cascade: which step produced this suggestion
     console.log(`[capture] cascade step ${inf.step} (${CASCADE_LABELS[inf.step]})`, { shop: name, ...inf });
     setInfer(inf); setSaved(false);
     setForm({ ...place, category: inf.category, amount: "", date: ymdToday(), notes: "" });
   };
-  // Order: your pinned shops (free, local maths) → the hub. The hub answers from its own corner
-  // cache ("hit") or asks Google ("fetched"); `force` skips both caches and costs one call.
-  const askGoogle = async (pos, force = false) => {
-    setLocState("locating");
-    let res = null, err = null, http = null;
-    try { const r = await hubPlacesNearby({ lat: pos.lat, lng: pos.lng, force: !!force }); res = r.res; http = r.http; }
-    catch (e) { console.warn("[capture] hub places unreachable", e); err = { message: "Couldn't reach Akatsuki's shop lookup — type the name instead." }; }
-    if (!err && !res) err = { message: `Akatsuki's shop lookup answered HTTP ${http}${http === 404 ? " — function not deployed" : ""}.` };
-    setLocState("idle");
-    const st = res && res.status;
-    console.log("[capture] hub places", { status: st, cached: res && res.cached, calls: res && res.calls, n: res && Array.isArray(res.candidates) ? res.candidates.length : null, place_id: !!(res && res.candidates && res.candidates[0] && res.candidates[0].place_id), http });
-    if (res && res.calls != null) setHubCalls(res.calls);
-    if (st === "capped") { setCapped(true); setLocErr(res.reason || "This month's Google lookups are used up — pick a pinned shop or type the name."); return; }
-    if (!res || st === "error" || !Array.isArray(res.candidates)) { setLocErr((res && res.reason) || (err && err.message) || "Shop lookup failed — type the name instead."); return; }
-    if (st === "empty" || !res.candidates.length) { setLocErr("No shops found nearby — type the name instead."); return; }
-    const src2 = st === "hit" || res.cached ? "cache" : "google";
-    setCands(res.candidates.map((c) => ({ name: c.name, place_types: c.types || [], distance_m: c.distance_m, place_id: c.place_id || null, address: c.address || c.formatted_address || c.formattedAddress || "", source: src2 }))); setCandSource(src2); // pick-list, never auto-select (GPS drift indoors)
-  };
-  const locate = (force = false) => {
-    setLocErr(""); setCands(null); setCandSource(null); setForm(null);
-    if (force && lastPos) { askGoogle(lastPos, true); return; }
-    if (!("geolocation" in navigator)) { setLocErr("Location isn't available here — type the shop name instead."); return; }
-    setLocState("locating");
-    navigator.geolocation.getCurrentPosition(async (p) => {
-      const pos = { lat: p.coords.latitude, lng: p.coords.longitude };
-      setLastPos(pos);
-      if (force) { await askGoogle(pos, true); return; }
-      // 1. Pinned shops within reach — pure maths, free.
-      const pinned = stopPins.filter((x) => x.shop && x.category)
-        .map((x) => ({ name: x.shop, place_name: x.areaName || (x.label !== x.shop ? x.label : "") || "", pin_key: `${x.lat},${x.lng}`, place_types: [], distance_m: Math.round(distanceMeters(pos, x)), radius: x.radius, source: "pin" }))
-        .filter((x) => x.distance_m <= Math.max(150, x.radius || 0)).sort((a, b) => a.distance_m - b.distance_m);
-      const seen = new Set(); const uniq = pinned.filter((x) => (seen.has(x.name + "|" + x.pin_key) ? false : (seen.add(x.name + "|" + x.pin_key), true)));
-      if (uniq.length) { setLocState("idle"); setCands(uniq.slice(0, 6)); setCandSource("pins"); return; }
-      // 2. The hub (its cache first, then Google under its cap).
-      await askGoogle(pos);
-    }, (e) => { setLocState("idle"); setLocErr(e.code === 1 ? "Location permission denied — type the shop name instead." : "Couldn't get your location — type the shop name instead."); }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 });
+  const locate = async (query = "", wider = false) => {
+    if (lookupBusy.current) return;
+    lookupBusy.current = true;
+    setLocState("locating"); setLocErr(""); setCands(null); setSaved(false); setForm(null);
+    setCandSource(null); setSearch({ query, wider });
+    try {
+      const fix = await new Promise((resolve, reject) => {
+        if (!navigator.geolocation) { reject(new Error("Location is unavailable. You can enter the shop manually.")); return; }
+        navigator.geolocation.getCurrentPosition(resolve, () => reject(new Error("Couldn’t get your location. Allow location access or enter the shop manually.")),
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 });
+      });
+      const pos = { lat: fix.coords.latitude, lng: fix.coords.longitude };
+      const radius = query ? (wider ? 3000 : 750) : 300;
+      const pins = stopPins.filter(p => p.shop && /^(supermarket|convenience|asian shop|restaurant|daily need stuffs|shopping|café|cafe|food|groceries|retail|pharmacy)$/i.test(p.category))
+        .map(p => ({ name: p.shop, place_name: p.areaName || (p.label !== p.shop ? p.label : "") || "",
+          pin_key: p.lat + "," + p.lng, source: "pin", distance_m: Math.round(distanceMeters(pos, p)) }))
+        .filter(p => p.distance_m <= radius);
+      const local = rankCaptureShops(pins, catalogue, query);
+      setCands(local);
+      if (local.length === 5 || navigator.onLine === false) {
+        if (!local.length) setLocErr("Offline. No matching saved shops nearby. You can enter the shop manually.");
+        return;
+      }
+      const { res } = await hubPlacesNearby({ ...pos, mode: "cost_shops", query, wider });
+      if (res?.calls != null) setHubCalls(res.calls);
+      if (res?.status === "capped") { setCapped(true); setLocErr("Monthly lookup limit reached. Choose a saved shop or enter the name manually."); return; }
+      if (!Array.isArray(res?.candidates)) throw new Error(res?.reason || "Shop search is unavailable. You can enter the name manually.");
+      const places = res.candidates.map(c => ({ ...c, place_types: c.types || [], source: "google" }));
+      const results = rankCaptureShops([...places, ...pins], catalogue, query);
+      setCapped(false); setCandSource(res.cached ? "cache" : "google"); setCands(results);
+      if (!results.length) setLocErr(query ? `No shops matching “${query}” within ${wider ? "3 km" : "750 m"}.` : "No shops found within 300 m. Try a shop name.");
+    } catch (e) {
+      setLocErr(e.blocked ? "Shop search is offline. You can enter the name manually." : (e.message || "Couldn’t search nearby shops."));
+    } finally {
+      lookupBusy.current = false; setLocState("idle");
+    }
   };
   const confirm = async () => {
     if (savingRef.current || !form) return;
@@ -6357,7 +6416,7 @@ function ShopCaptureView({ allExpenses }) {
       const res = await insertExpense({ region: currency, date: form.date, category: form.category,
         shop: form.shop.trim(), place_name: (form.place_name || "").trim() || null, place_id: form.place_id || null,
         amount: amt, notes: form.notes || "", expense_type: "normal", tags: "" });
-      if (res.ok) { setSaved(true); setForm(null); setCands(null); setInfer(null); setManualName(""); }
+      if (res.ok) { setSaved(true); setForm(null); setCands(null); setInfer(null); setManualName(""); setSearch(null); setLocErr(""); }
     } finally { savingRef.current = false; setSaving(false); }
   };
   const amtNum = form ? Number(form.amount) : NaN;
@@ -6367,39 +6426,45 @@ function ShopCaptureView({ allExpenses }) {
       step {infer.step} · {infer.step === 3 ? `like “${infer.matchedShop}”` : CASCADE_LABELS[infer.step]}
     </span>
   );
+  const searching = locState === "locating";
+  const buttonStyle = { minHeight: 44, padding: "10px 14px", borderRadius: 10, border: `1px solid ${theme.cardBorder}`, background: theme.inputBg, color: theme.text, fontFamily: "inherit", fontSize: 14, fontWeight: 650, cursor: "pointer" };
+  const linkStyle = { ...buttonStyle, background: "transparent", color: theme.primary, border: 0, marginRight: 8, padding: "8px 0" };
   return (
     <div className="cm-fade" style={{ maxWidth: 560, margin: "0 auto" }}>
       <fieldset disabled={saving} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
       <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 12, padding: 16 }}>
         <div style={{ fontSize: 13.5, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}><Icon name="crosshair" size={15}/>Capture this shop</div>
-        <div style={{ fontSize: 11, color: theme.textDim, marginBottom: 12 }}>One tap resolves where you are, infers the category, and pre-fills the entry for you to confirm.</div>
-        <button onClick={() => locate(false)} disabled={locState === "locating"} style={{ width: "100%", padding: "12px", borderRadius: 10, border: "none", cursor: locState === "locating" ? "wait" : "pointer", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})`, opacity: locState === "locating" ? 0.6 : 1 }}>{locState === "locating" ? "Finding shops near you…" : "📍 Find shops near me"}</button>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 7, fontSize: 10.5, color: theme.textDim }}>
-          <span>Your pins answer free. Otherwise Akatsuki asks Google — it remembers corners and caps the month.</span>
-          <span style={{ whiteSpace: "nowrap", fontWeight: 600, color: capped ? theme.danger : theme.textMuted }}>{capped ? "monthly cap reached" : hubCalls != null ? `${hubCalls} lookups this month` : "via Akatsuki"}</span>
-        </div>
-        {locErr && <div style={{ fontSize: 11.5, color: theme.warning, marginTop: 8 }}>{locErr}</div>}
-        {locErr && lastPos && !capped && <button onClick={() => locate(true)} style={{ marginTop: 6, border: "none", background: "none", color: theme.primary, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>Search Google again · 1 lookup</button>}
-        {cands && !form && (
-          <div className="cm-slide-in" style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              <div style={{ fontSize: 10.5, color: theme.textDim, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>Pick the right one — nearest isn't auto-selected</div>
-              <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 6, padding: "2px 7px", whiteSpace: "nowrap", color: candSource === "google" ? theme.warning : theme.success, background: `${candSource === "google" ? theme.warning : theme.success}16`, border: `1px solid ${candSource === "google" ? theme.warning : theme.success}44` }}>{candSource === "pins" ? "your pins · free" : candSource === "cache" ? "remembered · free" : "Google · 1 lookup"}</span>
-            </div>
-            {cands.map((c, i) => (
-              <button key={i} onClick={() => startForm(c.name, c.place_types || [], c)} style={{ display: "flex", alignItems: "center", gap: 10, textAlign: "left", width: "100%", padding: "10px 12px", borderRadius: 10, border: `1px solid ${theme.cardBorder}`, background: theme.inputBg, cursor: "pointer", fontFamily: "inherit" }}>
-                <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}{(c.place_name || c.address) && <span style={{ display: "block", fontSize: 11, fontWeight: 400, color: theme.textMuted, whiteSpace: "normal" }}>{c.place_name || c.address}</span>}</span>
-                {c.distance_m != null && <span style={{ fontSize: 10.5, color: theme.textMuted, whiteSpace: "nowrap" }}>{c.distance_m} m</span>}
-              </button>
-            ))}
-            {candSource !== "google" && !capped && <button onClick={() => locate(true)} style={{ alignSelf: "flex-start", border: "none", background: "none", color: theme.textDim, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", padding: "2px 0" }}>Not here? Search Google · 1 lookup</button>}
+        <button type="button" onClick={() => { setManualName(""); locate(); }} disabled={searching || !!form} style={{ ...buttonStyle, width: "100%", background: theme.primary, color: "#fff", border: 0 }}>{searching && !search?.query ? "Finding shops…" : "📍 Find shops near me"}</button>
+        {!form && <>
+          <form onSubmit={e => { e.preventDefault(); if (manualName.trim()) locate(manualName.trim()); }} style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <input type="search" aria-label="Shop name" placeholder="Shop name, e.g. Daiso" maxLength={100} value={manualName} disabled={searching}
+              onChange={e => { setManualName(e.target.value); setSearch(null); setCands(null); setLocErr(""); setSaved(false); }}
+              style={{ ...inputStyle, minWidth: 0, flex: 1, fontSize: 16 }}/>
+            <button type="submit" style={buttonStyle} disabled={searching || !manualName.trim()}>{searching && search?.query ? "Searching…" : "Search nearby"}</button>
+          </form>
+          <div style={{ marginTop: 8, fontSize: 12, color: theme.textMuted }} aria-live="polite">
+            {capped ? "Monthly lookup limit reached" : candSource === "cache" ? "Remembered search · free" : candSource === "google" ? "Google · 1 lookup" : "Saved pins and remembered searches are free."}
+            {hubCalls != null && ` · ${hubCalls} lookups this month`}
           </div>
-        )}
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
-          <input value={manualName} onChange={(e) => setManualName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && manualName.trim()) startForm(manualName.trim(), []); }} placeholder="…or type shop name instead" style={{ ...inputStyle, fontSize: 12.5 }}/>
-          <button onClick={() => manualName.trim() && startForm(manualName.trim(), [])} disabled={!manualName.trim()} style={{ border: `1px solid ${theme.cardBorder}`, background: theme.inputBg, color: theme.textMuted, borderRadius: 10, padding: "10px 14px", fontSize: 12, fontWeight: 600, cursor: manualName.trim() ? "pointer" : "not-allowed", fontFamily: "inherit", whiteSpace: "nowrap" }}>Use</button>
-        </div>
-        {saved && !form && <div style={{ fontSize: 12, color: theme.success, fontWeight: 600, marginTop: 10 }}>✓ Added — this shop will auto-match next time.</div>}
+          {locErr && <p role="status" style={{ fontSize: 13, color: theme.warning }}>{locErr}</p>}
+          {cands?.length > 0 && <div className="cm-slide-in" style={{ display: "grid", gap: 6 }}>
+            {[true, false].map(known => {
+              const group = cands.filter(c => c.known === known);
+              if (!group.length) return null;
+              return <div key={String(known)} style={{ display: "grid", gap: 6 }}>
+                <strong style={{ fontSize: 13, color: theme.textMuted, marginTop: 10 }}>{known ? "Your shops nearby" : "Other nearby shops"}</strong>
+                {group.map(c => <button type="button" key={c.place_id || c.name + (c.pin_key || c.address)} disabled={searching} onClick={() => startForm(c.name, c.place_types || [], c)}
+                  style={{ ...buttonStyle, display: "flex", alignItems: "center", gap: 10, textAlign: "left", width: "100%" }}>
+                  <span style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>{c.name}{(c.place_name || c.address) && <span style={{ display: "block", fontSize: 13, fontWeight: 400, color: theme.textMuted }}>{c.place_name || c.address}</span>}</span>
+                  {c.distance_m != null && <span style={{ fontSize: 12, color: theme.textMuted, whiteSpace: "nowrap" }}>{c.distance_m} m</span>}
+                </button>)}
+              </div>;
+            })}
+          </div>}
+          {search?.query && !search.wider && !searching && !capped && <button type="button" style={linkStyle} onClick={() => locate(search.query, true)}>Search farther · 3 km</button>}
+          {manualName.trim() && <button type="button" style={linkStyle} disabled={searching} onClick={() => { setLocErr(""); startForm(manualName.trim(), []); }}>Use typed name manually</button>}
+        </>}
+        {saved && !form && <div role="status" style={{ fontSize: 13, color: theme.success, marginTop: 10 }}>Expense added.</div>}
       </div>
 
       {form && (
