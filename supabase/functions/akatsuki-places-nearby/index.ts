@@ -65,6 +65,15 @@ async function explore(sb: any, uid: string, origin: string | null, req: Request
   return json(origin, { status: candidates.length ? 'fetched' : 'empty', cached: false, calls, ...payload });
 }
 
+// Cost requests a merchant-only pool. Personal shop ranking happens on the device.
+const SHOP_TYPES = ['store', 'discount_store', 'home_goods_store', 'department_store', 'book_store',
+  'hardware_store', 'electronics_store', 'clothing_store', 'shoe_store', 'furniture_store', 'gift_shop',
+  'sporting_goods_store', 'pet_store', 'convenience_store', 'grocery_store', 'supermarket', 'food_store',
+  'market', 'liquor_store', 'drugstore', 'pharmacy', 'restaurant', 'cafe', 'coffee_shop', 'bakery',
+  'meal_takeaway', 'bar', 'dessert_shop'];
+const NON_SHOPS = ['taxi_stand', 'library', 'school', 'real_estate_agency', 'lawyer', 'corporate_office',
+  'shopping_mall', 'train_station', 'bus_station', 'local_government_office'];
+
 // Keys (2026-10-28 key migration): the new publishable key, falling back to the legacy anon key.  Either way the
 // DB calls run as the forwarded user JWT; a request with no signed-in user stops at getUser below.
 const PUBLIC_KEY = (() => { try { return JSON.parse(Deno.env.get('SUPABASE_PUBLISHABLE_KEYS') || '{}').default; } catch { return null; } })() || Deno.env.get('SUPABASE_ANON_KEY')!;
@@ -92,8 +101,21 @@ Deno.serve(async (req) => {
   const q = { lat, lng };
   if (body?.mode === 'explore') return explore(sb, user.id, origin, req, q, body, force, KEY);
 
+  const shopsOnly = body?.mode === 'cost_shops';
+  const query = shopsOnly && typeof body.query === 'string' ? body.query.normalize('NFKC').trim() : '';
+  if (shopsOnly && (Math.abs(lat) > 90 || Math.abs(lng) > 180 || body.lat == null || body.lng == null ||
+      (body.query != null && typeof body.query !== 'string') || query.length > 100))
+    return json(origin, { status: 'error', reason: 'Invalid shop search or coordinates.' }, 400);
+  const radius = shopsOnly ? (query ? (body.wider === true ? 3000 : 750) : 300) : 150;
+  const cacheKey = shopsOnly ? JSON.stringify([round4(lat), round4(lng), radius, query.toLowerCase()]) : `g:${round4(lat)},${round4(lng)}`;
+
+  if (shopsOnly && !force) {
+    const { data: hit } = await sb.from('akatsuki_cache').select('payload').eq('user_id', user.id)
+      .eq('source', 'cost_shops_v1').eq('key', cacheKey).gt('expires_at', new Date().toISOString()).maybeSingle();
+    if (hit) return json(origin, { status: hit.payload.candidates.length ? 'hit' : 'empty', cached: true, ...hit.payload });
+  }
   // 1 · cache-first: nearest corner within 100 m
-  if (!force) {
+  if (!shopsOnly && !force) {
     const { data: hit } = await sb.rpc('akatsuki_places_cache_get', { p_lat: lat, p_lng: lng });
     if (hit) return json(origin, { status: hit.candidates?.length ? 'hit' : 'empty', cached: true, q: hit.q, candidates: hit.candidates ?? [] });
   }
@@ -106,28 +128,36 @@ Deno.serve(async (req) => {
   }
 
   // 3 · Google — same request shape as Cost's, plus places.id
-  const res = await fetch('https://places.googleapis.com/v1/places:searchNearby', {
+  const circle = { center: { latitude: lat, longitude: lng }, radius };
+  const searchBody = query
+    ? { textQuery: query, pageSize: 20, locationBias: { circle }, languageCode: /[ぁ-ヿ㐀-鿿]/.test(query) ? 'ja' : 'en' }
+    : { maxResultCount: shopsOnly ? 20 : 10, rankPreference: 'DISTANCE', locationRestriction: { circle },
+        ...(shopsOnly ? { includedTypes: SHOP_TYPES, excludedPrimaryTypes: NON_SHOPS } : {}) };
+  const res = await fetch('https://places.googleapis.com/v1/places:' + (query ? 'searchText' : 'searchNearby'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': KEY,
-               'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.types,places.location' },
-    body: JSON.stringify({ maxResultCount: 10, rankPreference: 'DISTANCE', locationRestriction: { circle: { center: { latitude: lat, longitude: lng }, radius: 150 } } }),
+               'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.types,places.location' + (shopsOnly ? ',places.primaryType' : '') },
+    body: JSON.stringify(searchBody),
   });
   if (!res.ok) return json(origin, { status: 'error', reason: `places HTTP ${res.status}`, detail: (await res.text()).slice(0, 200) }, 502);
   const data = await res.json();
   const candidates = (data.places || [])
     .filter((p: any) => p.displayName?.text)
+    .filter((p: any) => !shopsOnly || (p.location && !NON_SHOPS.includes(p.primaryType) &&
+      (p.types || []).some((t: string) => SHOP_TYPES.includes(t) || t.endsWith('_store') || t.endsWith('_restaurant'))))
     .map((p: any) => ({
       place_id: p.id, name: p.displayName.text, address: p.formattedAddress || null, types: p.types || [],
       lat: p.location?.latitude, lng: p.location?.longitude,
       distance_m: p.location ? Math.round(dist(q, { lat: p.location.latitude, lng: p.location.longitude })) : null,
     }))
+    .filter((p: any) => !shopsOnly || (p.distance_m != null && p.distance_m <= radius))
     .sort((a: any, b: any) => (a.distance_m ?? 1e9) - (b.distance_m ?? 1e9))
-    .slice(0, 5);
+    .slice(0, shopsOnly ? 20 : 5);
 
   // 4 · cache (empty answers too, shorter TTL) — key = 4-dp grid; lookup is by distance, not key
   const ttlDays = candidates.length ? 30 : 7;
   await sb.from('akatsuki_cache').upsert({
-    user_id: user.id, source: 'places_nearby', key: `g:${round4(lat)},${round4(lng)}`,
+    user_id: user.id, source: shopsOnly ? 'cost_shops_v1' : 'places_nearby', key: cacheKey,
     payload: { q, candidates, fetched_by: req.headers.get('x-akatsuki-app') || 'unknown' },
     fetched_at: new Date().toISOString(), expires_at: new Date(Date.now() + ttlDays * 864e5).toISOString(),
   }, { onConflict: 'user_id,source,key' });
