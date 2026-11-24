@@ -38,8 +38,8 @@ const backend = vm.createContext({
 });
 const edge = read("supabase/functions/akatsuki-places-nearby/index.ts").replace(/^import .*?;$/m, "");
 vm.runInContext(babel.babelTransform(edge, "index.ts", false, [], []).code, backend);
-const lookup = async (body = {}) => {
-  const res = await handler(new Request("https://example.test/", {method:"POST", body:JSON.stringify({lat:35, lng:139, mode:"cost_shops", ...body})}));
+const lookup = async (body = {}, headers = {}) => {
+  const res = await handler(new Request("https://example.test/", {method:"POST", headers, body:JSON.stringify({lat:35, lng:139, mode:"cost_shops", ...body})}));
   return res.json();
 };
 const place = (id, name, type, m) => ({id, displayName:{text:name}, types:[type], primaryType:type,
@@ -60,6 +60,18 @@ const ranked = (result, q) => Array.from(client.rankCaptureShops(result.candidat
   assert.deepEqual(ranked(found), ["daiso","yaoko","book","c0","c1"]);
   assert.equal((await lookup()).cached, true);
   assert.equal(budget,1);
+  const oldCost = { "x-akatsuki-app": "cost" };
+  const remembered = await lookup({mode:undefined}, oldCost);
+  assert.equal(remembered.cached, true);
+  assert.equal(remembered.candidates.length, 5);
+  assert(!remembered.candidates.some(c => c.place_id === "taxi"));
+  assert.equal(budget, 1, "an old Cost screen can use the new merchant cache");
+  const oldFirst = await lookup({mode:undefined, lng:139.0001}, oldCost);
+  assert.equal(oldFirst.cached, false);
+  assert.equal(oldFirst.candidates.length, 5);
+  const sameCorner = await lookup({lng:139.0001});
+  assert.equal(sameCorner.cached, true);
+  assert.deepEqual(ranked(sameCorner).slice(0,2), ["daiso","yaoko"], "legacy response limit preserves the larger pool for current clients");
   const byName = await lookup({query:"Daiso"});
   assert(calls.at(-1).url.endsWith(":searchText"));
   assert.equal(calls.at(-1).body.textQuery,"Daiso");

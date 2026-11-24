@@ -101,7 +101,11 @@ Deno.serve(async (req) => {
   const q = { lat, lng };
   if (body?.mode === 'explore') return explore(sb, user.id, origin, req, q, body, force, KEY);
 
-  const shopsOnly = body?.mode === 'cost_shops';
+  // Installed Cost screens from before branch search send the app header but no mode.
+  // They render every returned item. Keep their five-row limit outside the shared merchant cache.
+  const legacyCost = body?.mode == null && req.headers.get('x-akatsuki-app') === 'cost';
+  const shopsOnly = body?.mode === 'cost_shops' || legacyCost;
+  const forScreen = (rows: any[]) => legacyCost ? rows.slice(0, 5) : rows;
   const query = shopsOnly && typeof body.query === 'string' ? body.query.normalize('NFKC').trim() : '';
   if (shopsOnly && (Math.abs(lat) > 90 || Math.abs(lng) > 180 || body.lat == null || body.lng == null ||
       (body.query != null && typeof body.query !== 'string') || query.length > 100))
@@ -112,7 +116,7 @@ Deno.serve(async (req) => {
   if (shopsOnly && !force) {
     const { data: hit } = await sb.from('akatsuki_cache').select('payload').eq('user_id', user.id)
       .eq('source', 'cost_shops_v1').eq('key', cacheKey).gt('expires_at', new Date().toISOString()).maybeSingle();
-    if (hit) return json(origin, { status: hit.payload.candidates.length ? 'hit' : 'empty', cached: true, ...hit.payload });
+    if (hit) return json(origin, { status: hit.payload.candidates.length ? 'hit' : 'empty', cached: true, ...hit.payload, candidates: forScreen(hit.payload.candidates) });
   }
   // 1 · cache-first: nearest corner within 100 m
   if (!shopsOnly && !force) {
@@ -162,5 +166,5 @@ Deno.serve(async (req) => {
     fetched_at: new Date().toISOString(), expires_at: new Date(Date.now() + ttlDays * 864e5).toISOString(),
   }, { onConflict: 'user_id,source,key' });
 
-  return json(origin, { status: candidates.length ? 'fetched' : 'empty', cached: false, calls, q, candidates });
+  return json(origin, { status: candidates.length ? 'fetched' : 'empty', cached: false, calls, q, candidates: forScreen(candidates) });
 });

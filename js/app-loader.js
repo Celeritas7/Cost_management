@@ -13,7 +13,8 @@
 (function () {
   const BABEL = 'https://cdn.jsdelivr.net/npm/@babel/standalone@7.23.9/babel.min.js';
   const CACHE = 'cm-compiled';           // sw.js keeps this cache across shell versions
-  const SRC = 'js/app.jsx';
+  // Carry the entry script’s release into the source URL, even under an older cache-first worker.
+  const SRC = 'js/app.jsx' + new URL(document.currentScript.src).search;
   // Bump when the compile options change: it is part of the cache key, so every phone drops a
   // copy built the old way. v2: block scoping (v72's copies kept `const` and could not start).
   const COMPILER = 'v2';
