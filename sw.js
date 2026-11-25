@@ -1,4 +1,4 @@
-const RELEASE = '89';
+const RELEASE = '90';
 const SHELL = 'cm-shell-v' + RELEASE;
 const DATA = 'cm-data-v1';
 const ASSETS = [

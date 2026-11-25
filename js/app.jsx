@@ -5730,6 +5730,7 @@ function FareCalcView({ allExpenses, dueAdd }) {
   const [correcting, setCorrecting] = useState({}); // legIndex → showing the "charged something else" input
   const [busy, setBusy] = useState(false);
   const lookupVersion = useRef(0);
+  const [purpose, setPurpose] = useState("");
   const [date, setDate] = useState(ymdToday());
   const [card, setCard] = useState(null);
   const [round, setRound] = useState(false);
@@ -5856,7 +5857,8 @@ function FareCalcView({ allExpenses, dueAdd }) {
     savingTripRef.current = true; setSavingTrip(true);
     try {
     const route = clean.join(" → ");
-    const notes = hasPaidFare ? "" : legs.map((r, i) => { const c = routePick[i] != null ? pickedRoute(i) : null; return `${legPairs[i][0]}→${legPairs[i][1]} ${fmt(amounts[i])}${r && !r.error ? "" : " (manual)"}${c ? ` [route: ${routeLabel(c)} · ${c.km} km · chosen]` : ""}`; }).join(" · ");
+    const legNotes = hasPaidFare ? "" : legs.map((r, i) => { const c = routePick[i] != null ? pickedRoute(i) : null; return `${legPairs[i][0]}→${legPairs[i][1]} ${fmt(amounts[i])}${r && !r.error ? "" : " (manual)"}${c ? ` [route: ${routeLabel(c)} · ${c.km} km · chosen]` : ""}`; }).join(" · ");
+    const notes = [purpose.trim() && "Purpose: " + purpose.trim(), legNotes].filter(Boolean).join("\n");
     const res = await insertExpense({ region: currency, date, category: "Transportation", shop: route, amount: total, return_date: round ? (returnDate || date) : null, return_amount: round ? returnFare : null, notes, expense_type: "normal", tags: "" });
     // Feed the fare book so the next occurrence of these legs autofills.
     if (res.ok && !hasPaidFare) {
@@ -5883,10 +5885,10 @@ function FareCalcView({ allExpenses, dueAdd }) {
     }
     const out = hasPaidFare ? [{ route, amount: oneWay, source: "paid" }] : legs.map((r, i) => ({ from: legPairs[i][0], to: legPairs[i][1], amount: amounts[i], source: r && !r.error ? r.source : "manual", km: r && !r.error ? r.distance_km : null }));
     const back = round ? [{ route: reverseJourney(route), amount: returnFare, source: "confirmed" }] : [];
-    if (res.ok) setCard({ route, legs: !hasPaidFare && useDirect ? [{from: clean[0], to: clean[clean.length - 1], amount: oneWay, source: "confirmed"}] : out, back, hasPaidFare, oneWay, total, date, round, returnDate: returnDate || date, returnFare });
+    if (res.ok) setCard({ route, purpose: purpose.trim(), legs: !hasPaidFare && useDirect ? [{from: clean[0], to: clean[clean.length - 1], amount: oneWay, source: "confirmed"}] : out, back, hasPaidFare, oneWay, total, date, round, returnDate: returnDate || date, returnFare });
     } finally { savingTripRef.current = false; setSavingTrip(false); }
   };
-  const startNew = () => { setCard(null); setStops(["", ""]); setRound(false); setReturnDate(""); setReturnFareInput(""); reset(); };
+  const startNew = () => { setCard(null); setDate(ymdToday()); setPurpose(""); setStops(["", ""]); setRound(false); setReturnDate(""); setReturnFareInput(""); reset(); };
 
   if (card) return (
     <div className="cm-fade" style={{ maxWidth: 560, margin: "0 auto" }}>
@@ -5895,6 +5897,7 @@ function FareCalcView({ allExpenses, dueAdd }) {
           <span style={{ fontSize: 13.5, fontWeight: 700, color: "#fff", display: "inline-flex", alignItems: "center", gap: 8 }}><Icon name="train" size={15}/>Journey saved</span>
           <span style={{ fontSize: 10.5, color: theme.textMuted }}>{card.date}</span>
         </div>
+        {card.purpose && <p>Purpose: {card.purpose}</p>}
         {[["Outbound", card.legs, theme.primary], ["Return", card.back || [], theme.accent]].map(([label, list, dot]) => list.length === 0 ? null : (
           <div key={label} style={{ marginBottom: 12 }}>
             {card.round && <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, color: theme.textDim, marginBottom: 2 }}>{label}</div>}
@@ -5992,6 +5995,15 @@ function FareCalcView({ allExpenses, dueAdd }) {
             )}
           </div>
         )}
+        <div style={{display:"grid", gap:8, marginBottom:10}}>
+          <label style={labelStyle}>{round ? "Outward travel date" : "Travel date"}
+            <input type="date" aria-label="Travel date" value={date} onChange={e => setDate(e.target.value)} style={{...inputStyle,colorScheme:"dark"}}/>
+          </label>
+          {round && <label style={labelStyle}>Return date<input aria-label="Return date" type="date" min={date} value={returnDate || date} onChange={e => setReturnDate(e.target.value)} style={{...inputStyle,colorScheme:"dark"}}/></label>}
+          <label style={labelStyle}>Purpose of travel (optional)
+            <input aria-label="Purpose of travel" value={purpose} placeholder="e.g. Commute to work" onChange={e => setPurpose(e.target.value)} style={inputStyle}/>
+          </label>
+        </div>
         <label style={{ display: "block", marginBottom: 10 }}>
           <span style={{ display: "block", marginBottom: 5, color: theme.text, fontWeight: 600, fontSize: 13 }}>{round ? "Outward fare paid" : "Fare paid"} ({CUR.symbol})</span>
           <input type="text" inputMode="numeric" aria-label={round ? "Outward fare paid" : "Fare paid"} disabled={!canCalc || savingTrip} value={paidFareInput}
@@ -6072,12 +6084,10 @@ function FareCalcView({ allExpenses, dueAdd }) {
               <span style={{ fontSize: 20, fontWeight: 700, color: total != null ? "#fff" : theme.textDim }}>{total != null ? fmt(total) : "—"}{round && total != null ? <span style={{ fontSize: 11, fontWeight: 600, color: theme.textMuted }}> ({fmt(oneWay)} + {fmt(returnFare)})</span> : null}</span>
             </div>
             <div>
-              <label style={labelStyle}>Date</label>
-              <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ ...inputStyle, colorScheme: "dark", marginBottom: 8 }}/>
               {round && <div style={{background:theme.inputBg,borderRadius:10,padding:12,marginBottom:10}}>
                 <div style={{fontSize:12,fontWeight:600,color:theme.text,marginBottom:8}}>Return journey · {reverseJourney(clean.join(" → "))}</div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                  <label style={labelStyle}>Return date<input aria-label="Return date" type="date" min={date} value={returnDate || date} onChange={e => setReturnDate(e.target.value)} style={{...inputStyle,colorScheme:"dark"}}/></label>
+
                   <label style={labelStyle}>Return fare<input aria-label="Return fare" type="number" inputMode="numeric" min="1" step="1" value={returnFareInput} placeholder={oneWay == null ? "" : String(oneWay)} onChange={e => setReturnFareInput(e.target.value)} style={inputStyle}/></label>
                 </div>
                 <div style={{fontSize:11,color:theme.textMuted,marginTop:7}}>Leave the fare blank to use the outward fare. You can return on a later date.</div>
