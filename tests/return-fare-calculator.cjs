@@ -27,10 +27,13 @@ async function plan(){
  await button('Calculate 1 leg').props.onClick();
 }
 (async()=>{
+ assert.equal(field("Travel date").props.value,"2026-12-30");
+ field("Travel date").props.onChange({target:{value:"2026-12-28"}});
+ field("Purpose of travel").props.onChange({target:{value:"Office visit"}});
  await plan();button('Round trip').props.onClick();
  field('Return date').props.onChange({target:{value:'2027-01-02'}});field('Return fare').props.onChange({target:{value:'209'}});
  const save=button('Add round trip');assert.equal(save.props.disabled,false);const p=save.props.onClick();await save.props.onClick();await p;
- assert.equal(rows.length,1);assert.equal(rows[0].date,'2026-12-30');assert.equal(rows[0].return_date,'2027-01-02');assert.equal(rows[0].return_amount,209);assert.equal(rows[0].amount,408);assert.equal(rows[0].shop,'A → B');
+ assert.equal(rows.length,1);assert.equal(rows[0].date,'2026-12-28');assert.match(rows[0].notes,/Purpose: Office visit/);assert.ok(text(render()).includes('Office visit'));assert.equal(rows[0].return_date,'2027-01-02');assert.equal(rows[0].return_amount,209);assert.equal(rows[0].amount,408);assert.equal(rows[0].shop,'A → B');
  assert.ok(text(render()).includes('2027-01-02'));assert.ok(!text(render()).includes('× 2'));
  button('Plan another journey').props.onClick();await plan();await button('Add journey').props.onClick();assert.equal(rows[1].return_date,null);assert.equal(rows[1].amount,199);
  button('Plan another journey').props.onClick();await plan();button('Round trip').props.onClick();field('Return date').props.onChange({target:{value:'2026-12-29'}});assert.equal(button('Add round trip').props.disabled,true);
