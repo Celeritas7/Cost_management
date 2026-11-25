@@ -17,11 +17,13 @@ const find=fn=>{const n=nodes(render()).find(fn);assert.ok(n,'control exists');r
 const text=n=>n==null?'':typeof n==='object'?(Array.isArray(n)?n.map(text).join(''):text(n.props?.children)):String(n);
 const button=t=>find(n=>n.type==='button'&&text(n).startsWith(t));
 const field=name=>find(n=>n.type==='input'&&n.props['aria-label']===name);
+function chooseStation(kind, name) {
+ find(n=>n.type==='button'&&n.props['aria-label']===`Choose ${kind} station`).props.onClick();
+ find(n=>n.type===ctx.StationPicker).props.onChoose(name,'');
+}
 async function plan(){
- find(n=>n.type==='button'&&n.props['aria-label']==='Choose from station').props.onClick();
- find(n=>n.type===ctx.StationPicker).props.onChoose('A','');
- find(n=>n.type==='button'&&n.props['aria-label']==='Choose to station').props.onClick();
- find(n=>n.type===ctx.StationPicker).props.onChoose('B','');
+ chooseStation('from','A');
+ chooseStation('to','B');
  await button('Calculate 1 leg').props.onClick();
 }
 (async()=>{
@@ -34,5 +36,67 @@ async function plan(){
  button('Plan another journey').props.onClick();await plan();button('Round trip').props.onClick();field('Return date').props.onChange({target:{value:'2026-12-29'}});assert.equal(button('Add round trip').props.disabled,true);
  field('Return date').props.onChange({target:{value:'2026-12-30'}});field('Return fare').props.onChange({target:{value:'209.5'}});assert.equal(button('Add round trip').props.disabled,true);
  field('Return fare').props.onChange({target:{value:''}});await button('Add round trip').props.onClick();assert.equal(rows[2].return_amount,199);assert.equal(rows[2].amount,398);
+ button('Plan another journey').props.onClick();
+ assert.equal(field('Fare paid').props.disabled,true);
+ let bookWrites=0;
+ ctx.fareBookSave=async()=>{bookWrites++; return {status:'ok'};};
+ const estimate=ctx.fareLookup;
+ ctx.fareLookup=()=>{throw Error('Manual entry triggered a fare lookup');};
+ chooseStation('from','Musashi Urawa');
+ chooseStation('to','Minami Urawa');
+ const pay=(value,name='Fare paid')=>field(name).props.onChange({target:{value}});
+ for(const invalid of ['0','-5','199.5','abc','2147483648']){
+   pay(invalid);
+   assert.equal(button('Add journey').props.disabled,true,invalid);
+   await button('Add journey').props.onClick();
+ }
+ assert.equal(rows.length,3);
+ pay('１９９');
+ assert.equal(button('Add journey').props.disabled,false);
+ const failOnce=ctx.useExpenseMutations;
+ ctx.useExpenseMutations=()=>({insertExpense:async()=>({ok:false}),modals:null});
+ await button('Add journey').props.onClick();
+ assert.equal(field('Fare paid').props.value,'199','keeps the entered fare for retry');
+ ctx.useExpenseMutations=failOnce;
+ const manualSave=button('Add journey');
+ await Promise.all([manualSave.props.onClick(),manualSave.props.onClick()]);
+ assert.equal(rows.length,4);
+ assert.equal(rows[3].amount,199);
+ assert.equal(rows[3].return_amount,null);
+ assert.equal(rows[3].shop,'Musashi Urawa → Minami Urawa');
+ assert.equal(rows[3].category,'Transportation');
+ assert.equal(rows[3].region,'JPY');
+ assert.ok(text(render()).includes('Journey saved'));
+
+ button('Plan another journey').props.onClick();
+ chooseStation('from','A');chooseStation('to','B');
+ pay('155');button('Add transfer stop').props.onClick();
+ assert.equal(field('Fare paid').props.value,'','route edit clears previous fare');
+ chooseStation('to','C');button('Round trip').props.onClick();
+ pay('200','Outward fare paid');
+ assert.ok(text(button('Add round trip')).includes('¥400'));
+ field('Return fare').props.onChange({target:{value:'210'}});
+ field('Return date').props.onChange({target:{value:'2027-01-02'}});
+ await button('Add round trip').props.onClick();
+ assert.equal(rows.length,5);
+ assert.equal(rows[4].shop,'A → B → C');
+ assert.equal(rows[4].amount,410);
+ assert.equal(rows[4].return_amount,210);
+ assert.equal(rows[4].return_date,'2027-01-02');
+ assert.ok(text(render()).includes('A → B → C'));
+ assert.ok(text(render()).includes('C → B → A'));
+ assert.equal(bookWrites,0,'whole-journey fares do not verify individual legs');
+
+ button('Plan another journey').props.onClick();
+ ctx.fareLookup=estimate;
+ await plan();pay('180');assert.ok(text(button('Add journey')).includes('¥180'));
+ pay('');assert.ok(text(button('Add journey')).includes('¥199'));
+ let finish;
+ ctx.fareLookup=()=>new Promise(resolve=>{finish=resolve;});
+ const pending=button('Calculate 1 leg').props.onClick();
+ chooseStation('to','C');
+ finish({fare_ic:499,source:'book'});await pending;
+ assert.ok(!text(render()).includes('¥499'),'discard the estimate for the previous route');
+ console.log('PASS: upfront fare entry, transfer and round-trip totals, validation, retry, route edits and switching back to estimates');
  console.log('PASS: calculator one-row insert, different return fare/date, same-day default, double-click prevention, invalid values and one-way reset');
 })().catch(e=>{console.error(e);process.exitCode=1;});

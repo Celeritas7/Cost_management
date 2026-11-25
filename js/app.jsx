@@ -5726,8 +5726,10 @@ function FareCalcView({ allExpenses, dueAdd }) {
   const [routePick, setRoutePick] = useState({}); // legIndex → candidate index the user chose (15b)
   const [routeOpen, setRouteOpen] = useState({});
   const [manual, setManual] = useState({});
+  const [paidFareInput, setPaidFareInput] = useState("");
   const [correcting, setCorrecting] = useState({}); // legIndex → showing the "charged something else" input
   const [busy, setBusy] = useState(false);
+  const lookupVersion = useRef(0);
   const [date, setDate] = useState(ymdToday());
   const [card, setCard] = useState(null);
   const [round, setRound] = useState(false);
@@ -5760,7 +5762,7 @@ function FareCalcView({ allExpenses, dueAdd }) {
     return out;
   }, [allExpenses]);
 
-  const reset = () => { setLegs([]); setReturnFareInput(""); setManual({}); setSugg(null); setCorrecting({}); setDirect(null); setUseDirect(false); setBookMsg(null); setRoutePick({}); setRouteOpen({}); };
+  const reset = () => { lookupVersion.current++; setBusy(false); setLegs([]); setPaidFareInput(""); setReturnFareInput(""); setManual({}); setSugg(null); setCorrecting({}); setDirect(null); setUseDirect(false); setBookMsg(null); setRoutePick({}); setRouteOpen({}); };
   const setStop = (i, v) => { setStops((s) => s.map((x, j) => (j === i ? v : x))); reset(); };
   const addStop = () => { setStops((s) => [...s, ""]); reset(); };
   const removeStop = (i) => { setStops((s) => (s.length <= 2 ? s : s.filter((_, j) => j !== i))); reset(); };
@@ -5814,16 +5816,19 @@ function FareCalcView({ allExpenses, dueAdd }) {
   const applySugg = () => {
     if (!sugg || sugg.note) return;
     setStops([endA, ...sugg.vias, endB]);
-    setLegs([]); setManual({}); setSugg(null);
+    reset();
   };
 
   const calc = async () => {
-    if (!canCalc || busy) return;
-    setBusy(true); setLegs([]); setManual({}); setCard(null); setRoutePick({}); setRouteOpen({});
+    if (!canCalc || busy || paidFareInput !== "") return;
+    const version = ++lookupVersion.current;
+    setBusy(true); setLegs([]); setManual({}); setCard(null); setRoutePick({}); setRouteOpen({}); setDirect(null); setUseDirect(false);
     const out = [];
     for (const [f, to] of legPairs) out.push(await fareLookup(supabase, f, to)); // sequential: shared cache table
+    const endpointFare = clean.length > 2 ? await fareBookGet(supabase, clean[0], clean[clean.length - 1]) : null;
+    if (lookupVersion.current !== version) return;
     setLegs(out);
-    if (clean.length > 2) setDirect(await fareBookGet(supabase, clean[0], clean[clean.length - 1]));
+    setDirect(endpointFare);
     setBusy(false);
   };
 
@@ -5838,21 +5843,23 @@ function FareCalcView({ allExpenses, dueAdd }) {
   // Japanese fares are not additive: one operator often charges less for
   // A→C than fare(A,B)+fare(B,C). If the book holds a direct endpoint fare
   // that differs from the sum, offer it instead of guessing.
-  const oneWay = useDirect && direct ? direct.fare_ic : legSum;
+  const hasPaidFare = paidFareInput !== "";
+  const paidFare = /^\d+$/.test(paidFareInput) ? Number(paidFareInput) : null;
+  const oneWay = hasPaidFare ? paidFare : useDirect && direct ? direct.fare_ic : legSum;
   const returnFare = returnFareInput === "" ? oneWay : Number(returnFareInput);
-  const total = oneWay == null ? null : Number(oneWay) + (round ? Number(returnFare) : 0);
   const tripError = journeyFormError({ date, amount: oneWay, category: "Transportation", shop: clean.join(" → "), has_return: round, return_date: returnDate || date, return_amount: returnFare });
+  const total = tripError ? null : Number(oneWay) + (round ? Number(returnFare) : 0);
+  const canSave = canCalc && !tripError && (hasPaidFare || (allPriced && !busy)) && !savingTrip;
 
   const save = async () => {
-    if (!allPriced || busy || savingTripRef.current || tripError) return;
+    if (!canSave || savingTripRef.current) return;
     savingTripRef.current = true; setSavingTrip(true);
     try {
     const route = clean.join(" → ");
-    const legNotes = legs.map((r, i) => { const c = routePick[i] != null ? pickedRoute(i) : null; return `${legPairs[i][0]}→${legPairs[i][1]} ${fmt(amounts[i])}${r && !r.error ? "" : " (manual)"}${c ? ` [route: ${routeLabel(c)} · ${c.km} km · chosen]` : ""}`; }).join(" · ");
-    const notes = legNotes;
+    const notes = hasPaidFare ? "" : legs.map((r, i) => { const c = routePick[i] != null ? pickedRoute(i) : null; return `${legPairs[i][0]}→${legPairs[i][1]} ${fmt(amounts[i])}${r && !r.error ? "" : " (manual)"}${c ? ` [route: ${routeLabel(c)} · ${c.km} km · chosen]` : ""}`; }).join(" · ");
     const res = await insertExpense({ region: currency, date, category: "Transportation", shop: route, amount: total, return_date: round ? (returnDate || date) : null, return_amount: round ? returnFare : null, notes, expense_type: "normal", tags: "" });
     // Feed the fare book so the next occurrence of these legs autofills.
-    if (res.ok) {
+    if (res.ok && !hasPaidFare) {
       const clashes = [], failures = [];
       for (let i = 0; i < legPairs.length; i++) {
         // Saving a book fare you did NOT override is your confirmation that
@@ -5874,9 +5881,9 @@ function FareCalcView({ allExpenses, dueAdd }) {
       if (useDirect && direct) await fareBookSave(supabase, clean[0], clean[clean.length - 1], direct.fare_ic, { origin: "manual" });
       setBookMsg(failures.length ? { kind: "error", lines: failures } : clashes.length ? { kind: "clash", lines: clashes } : { kind: "ok" });
     }
-    const out = legs.map((r, i) => ({ from: legPairs[i][0], to: legPairs[i][1], amount: amounts[i], source: r && !r.error ? r.source : "manual", km: r && !r.error ? r.distance_km : null }));
-    const back = round ? [{ from: clean[clean.length - 1], to: clean[0], amount: returnFare, source: "confirmed" }] : [];
-    if (res.ok) setCard({ route, legs: useDirect ? [{from: clean[0], to: clean[clean.length - 1], amount: oneWay, source: "confirmed"}] : out, back, oneWay, total, date, round, returnDate: returnDate || date, returnFare });
+    const out = hasPaidFare ? [{ route, amount: oneWay, source: "paid" }] : legs.map((r, i) => ({ from: legPairs[i][0], to: legPairs[i][1], amount: amounts[i], source: r && !r.error ? r.source : "manual", km: r && !r.error ? r.distance_km : null }));
+    const back = round ? [{ route: reverseJourney(route), amount: returnFare, source: "confirmed" }] : [];
+    if (res.ok) setCard({ route, legs: !hasPaidFare && useDirect ? [{from: clean[0], to: clean[clean.length - 1], amount: oneWay, source: "confirmed"}] : out, back, hasPaidFare, oneWay, total, date, round, returnDate: returnDate || date, returnFare });
     } finally { savingTripRef.current = false; setSavingTrip(false); }
   };
   const startNew = () => { setCard(null); setStops(["", ""]); setRound(false); setReturnDate(""); setReturnFareInput(""); reset(); };
@@ -5895,8 +5902,8 @@ function FareCalcView({ allExpenses, dueAdd }) {
               <div key={i} style={{ display: "grid", gridTemplateColumns: "14px 1fr auto", gap: 10, alignItems: "center", padding: "9px 0", borderBottom: i < list.length - 1 ? `1px solid ${theme.cardBorder}` : "none" }}>
                 <span style={{ display: "flex", justifyContent: "center" }}><span style={{ width: 8, height: 8, borderRadius: 8, background: dot, display: "block" }}/></span>
                 <span style={{ minWidth: 0 }}>
-                  <span style={{ display: "block", fontSize: 12.5, fontWeight: 600, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.from} → {l.to}</span>
-                  <span style={{ display: "block", fontSize: 10.5, color: theme.textDim }}>Leg {i + 1}{l.km != null ? ` · ${l.km} km` : ""}{l.source === "manual" ? " · manual" : l.source === "cache" ? " · cached" : " · live"}</span>
+                  <span style={{ display: "block", fontSize: 12.5, fontWeight: 600, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.route || `${l.from} → ${l.to}`}</span>
+                  <span style={{ display: "block", fontSize: 10.5, color: theme.textDim }}>{card.hasPaidFare ? "Fare paid" : <>Leg {i + 1}{l.km != null ? ` · ${l.km} km` : ""}{l.source === "manual" ? " · manual" : l.source === "cache" ? " · cached" : l.source === "confirmed" ? " · confirmed" : " · live"}</>}</span>
                 </span>
                 <span style={{ fontSize: 13, fontWeight: 700, color: "#fff", whiteSpace: "nowrap" }}>{fmt(l.amount)}</span>
               </div>
@@ -5908,7 +5915,7 @@ function FareCalcView({ allExpenses, dueAdd }) {
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: theme.textMuted, marginBottom: 6 }}><span>Outward · {card.date}<br/>Return · {card.returnDate}</span><span>{fmt(card.oneWay)}<br/>{fmt(card.returnFare)}</span></div>
           )}
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-            <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600, color: theme.textMuted }}>Total · {card.legs.length + (card.back ? card.back.length : 0)} leg{card.legs.length + (card.back ? card.back.length : 0) === 1 ? "" : "s"}</span>
+            <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600, color: theme.textMuted }}>Total{!card.hasPaidFare && <> · {card.legs.length + (card.back ? card.back.length : 0)} leg{card.legs.length + (card.back ? card.back.length : 0) === 1 ? "" : "s"}</>}</span>
             <span style={{ fontSize: 21, fontWeight: 700, color: "#fff" }}>{fmt(card.total)}</span>
           </div>
         </div>
@@ -5945,7 +5952,7 @@ function FareCalcView({ allExpenses, dueAdd }) {
           <button onClick={reverse} title="Reverse the whole journey" style={{ border: `1px solid ${theme.cardBorder}`, background: theme.inputBg, color: theme.textMuted, borderRadius: 9, padding: "5px 9px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "inherit", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0 }}><Icon name="swap" size={13}/>Reverse</button>
           </div>
         </div>
-        <div style={{ fontSize: 11, color: theme.textDim, marginBottom: 12 }}>Add every station you change at — each hop is priced separately and summed.</div>
+        <div style={{ fontSize: 11, color: theme.textDim, marginBottom: 12 }}>Choose your stations, then enter the fare you paid or calculate an estimate.</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
           {stops.map((s, i) => (
             <div key={i} style={{ display: "grid", gridTemplateColumns: "42px minmax(0,1fr) auto", gap: 8, alignItems: "center" }}>
@@ -5985,11 +5992,18 @@ function FareCalcView({ allExpenses, dueAdd }) {
             )}
           </div>
         )}
-        <button onClick={calc} disabled={!canCalc || busy} style={{ width: "100%", padding: "11px", borderRadius: 10, border: "none", cursor: canCalc && !busy ? "pointer" : "not-allowed", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})`, opacity: canCalc && !busy ? 1 : 0.5 }}>{busy ? "Looking up legs…" : `Calculate ${Math.max(stops.length - 1, 1)} leg${stops.length - 1 === 1 ? "" : "s"}`}</button>
+        <label style={{ display: "block", marginBottom: 10 }}>
+          <span style={{ display: "block", marginBottom: 5, color: theme.text, fontWeight: 600, fontSize: 13 }}>{round ? "Outward fare paid" : "Fare paid"} ({CUR.symbol})</span>
+          <input type="text" inputMode="numeric" aria-label={round ? "Outward fare paid" : "Fare paid"} disabled={!canCalc || savingTrip} value={paidFareInput}
+            placeholder={canCalc ? "Amount for the whole outward journey" : "Choose stations first"}
+            onChange={e => setPaidFareInput(e.target.value.normalize("NFKC").trim())}
+            style={{ ...inputStyle, minHeight: 44, fontSize: 16 }}/>
+        </label>
+        {!hasPaidFare && <button onClick={calc} disabled={!canCalc || busy} style={{ width: "100%", padding: "11px", borderRadius: 10, border: "none", cursor: canCalc && !busy ? "pointer" : "not-allowed", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})`, opacity: canCalc && !busy ? 1 : 0.5 }}>{busy ? "Looking up legs…" : `Calculate ${Math.max(stops.length - 1, 1)} leg${stops.length - 1 === 1 ? "" : "s"}`}</button>}
 
-        {legs.length > 0 && (
+        {(hasPaidFare || legs.length > 0) && (
           <div className="cm-slide-in" style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
-            {legs.map((r, i) => (
+            {!hasPaidFare && legs.map((r, i) => (
               <div key={i} style={{ borderRadius: 10, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${r && r.error && !r.miss ? theme.warning + "55" : theme.cardBorder}`, padding: "11px 13px" }}>
                 <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
                   <span style={{ fontSize: 12, fontWeight: 600, color: "#fff" }}>{legPairs[i][0]} → {legPairs[i][1]}</span>
@@ -6044,7 +6058,7 @@ function FareCalcView({ allExpenses, dueAdd }) {
                 )}
               </div>
             ))}
-            {direct && legSum != null && direct.fare_ic !== legSum && (
+            {!hasPaidFare && direct && legSum != null && direct.fare_ic !== legSum && (
               <div style={{ borderRadius: 10, background: theme.inputBg, boxShadow: `inset 0 0 0 1px ${theme.primary}55`, padding: "11px 13px" }}>
                 <div style={{ fontSize: 11.5, color: "#fff", fontWeight: 600, marginBottom: 2 }}>Book has a direct fare for {clean[0]} → {clean[clean.length - 1]}: {fmt(direct.fare_ic)}</div>
                 <div style={{ fontSize: 10.5, color: theme.textDim, marginBottom: 8 }}>{direct.fare_ic < legSum
@@ -6054,8 +6068,8 @@ function FareCalcView({ allExpenses, dueAdd }) {
               </div>
             )}
             <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", padding: "4px 2px" }}>
-              <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600, color: theme.textMuted }}>Journey total{round ? " · round trip" : ""}{useDirect ? " · direct" : ""}</span>
-              <span style={{ fontSize: 20, fontWeight: 700, color: total != null ? "#fff" : theme.textDim }}>{total != null ? fmt(total) : "—"}{round && oneWay != null ? <span style={{ fontSize: 11, fontWeight: 600, color: theme.textMuted }}> ({fmt(oneWay)} + {fmt(returnFare)})</span> : null}</span>
+              <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600, color: theme.textMuted }}>Journey total{round ? " · round trip" : ""}{!hasPaidFare && useDirect ? " · direct" : ""}</span>
+              <span style={{ fontSize: 20, fontWeight: 700, color: total != null ? "#fff" : theme.textDim }}>{total != null ? fmt(total) : "—"}{round && total != null ? <span style={{ fontSize: 11, fontWeight: 600, color: theme.textMuted }}> ({fmt(oneWay)} + {fmt(returnFare)})</span> : null}</span>
             </div>
             <div>
               <label style={labelStyle}>Date</label>
@@ -6064,19 +6078,19 @@ function FareCalcView({ allExpenses, dueAdd }) {
                 <div style={{fontSize:12,fontWeight:600,color:theme.text,marginBottom:8}}>Return journey · {reverseJourney(clean.join(" → "))}</div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
                   <label style={labelStyle}>Return date<input aria-label="Return date" type="date" min={date} value={returnDate || date} onChange={e => setReturnDate(e.target.value)} style={{...inputStyle,colorScheme:"dark"}}/></label>
-                  <label style={labelStyle}>Return fare<input aria-label="Return fare" type="number" min="1" step="1" value={returnFareInput} placeholder={oneWay == null ? "" : String(oneWay)} onChange={e => setReturnFareInput(e.target.value)} style={inputStyle}/></label>
+                  <label style={labelStyle}>Return fare<input aria-label="Return fare" type="number" inputMode="numeric" min="1" step="1" value={returnFareInput} placeholder={oneWay == null ? "" : String(oneWay)} onChange={e => setReturnFareInput(e.target.value)} style={inputStyle}/></label>
                 </div>
                 <div style={{fontSize:11,color:theme.textMuted,marginTop:7}}>Leave the fare blank to use the outward fare. You can return on a later date.</div>
               </div>}
               {!round && <div style={{fontSize:11,color:theme.textMuted,marginBottom:8}}>Returning later? Save this journey now, then choose Add return journey in History.</div>}
               {tripError && <div role="alert" style={{fontSize:11,color:theme.warning,marginBottom:8}}>{tripError}</div>}
-              <button onClick={save} disabled={!allPriced || !!tripError || savingTrip} style={{ width: "100%", padding: "11px", borderRadius: 10, border: "none", cursor: allPriced ? "pointer" : "not-allowed", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})`, opacity: allPriced ? 1 : 0.5 }}>{savingTrip ? "Saving" : "Add"} {round ? "round trip" : "journey"} as expense{total != null ? ` · ${fmt(total)}` : ""}</button>
+              <button onClick={save} disabled={!canSave} style={{ width: "100%", padding: "11px", borderRadius: 10, border: "none", cursor: canSave ? "pointer" : "not-allowed", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})`, opacity: canSave ? 1 : 0.5 }}>{savingTrip ? "Saving" : "Add"} {round ? "round trip" : "journey"} as expense{total != null ? ` · ${fmt(total)}` : ""}</button>
             </div>
           </div>
         )}
       </div>
 
-      {recentTrips.length > 0 && legs.length === 0 && (
+      {recentTrips.length > 0 && legs.length === 0 && !hasPaidFare && (
         <div style={{ marginTop: 14 }}>
           <div style={{ fontSize: 10.5, color: theme.textDim, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600, marginBottom: 6 }}>Recent journeys · tap to reload</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
