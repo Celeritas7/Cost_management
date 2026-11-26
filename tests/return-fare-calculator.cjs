@@ -7,6 +7,7 @@ const ctx={console,Date,Number,Map,Set,require:()=>({jsx:(type,props)=>({type,pr
  useRef(initial){const i=cursor++;return state[i]||(state[i]={current:initial});},useMemo:fn=>fn(),
  useTheme:()=>({theme,inputStyle:{},labelStyle:{},supabase:{},fetchData(){},currency:'JPY'}),
  useExpenseMutations:()=>({insertExpense:async row=>{rows.push(row);await Promise.resolve();return {ok:true};},modals:null}),
+ AddCalSheet:()=>null,pillish:()=>({}),dateOfIso:s=>new Date(s+'T00:00:00'),addDays:(d,n)=>new Date(d.getFullYear(),d.getMonth(),d.getDate()+n),
  ymdToday:()=> '2026-12-30',canonStation:s=>s.trim(),SEED_STATIONS:[],jrRoutes:()=>[],fareLookup:async()=>({fare_ic:199,source:'book',verified:true}),
  fareBookSave:async()=>({status:'ok'}),fareTone:()=> '#888888',fareSourceLabel:()=> 'Saved fare',overridden:x=>x!=null&&x!=='',fmt:x=>'¥'+x,CUR:{symbol:'¥'},Icon:()=>null,StationPicker:()=>null,stnKey:s=>String(s||'').toLowerCase().replace(/[\s-]/g,'')};
 vm.createContext(ctx);vm.runInContext(src.slice(src.indexOf('// Round trips are one'),src.indexOf('function App(')),ctx);
@@ -27,8 +28,11 @@ async function plan(){
  await button('Calculate 1 leg').props.onClick();
 }
 (async()=>{
- assert.equal(field("Travel date").props.value,"2026-12-30");
- field("Travel date").props.onChange({target:{value:"2026-12-28"}});
+ assert.ok(text(render()).includes('2026-12-30'));
+ button('Single day').props.onClick();
+ const single=find(n=>n.type===ctx.AddCalSheet).props;
+ assert.equal(single.single,true);
+ single.setDates(['2026-12-28']);single.onClose();
  field("Purpose of travel").props.onChange({target:{value:"Office visit"}});
  await plan();button('Round trip').props.onClick();
  field('Return date').props.onChange({target:{value:'2027-01-02'}});field('Return fare').props.onChange({target:{value:'209'}});
@@ -100,6 +104,63 @@ async function plan(){
  chooseStation('to','C');
  finish({fare_ic:499,source:'book'});await pending;
  assert.ok(!text(render()).includes('¥499'),'discard the estimate for the previous route');
+ // Review dates before pricing, use the same route and fare for each departure.
+ state=[];ctx.fareLookup=estimate;
+ button('Multiple days').props.onClick();
+ const openCalendar=()=>find(n=>n.type===ctx.AddCalSheet).props;
+ assert.deepEqual(Object.keys(openCalendar().initialCounts),[]);
+ const selectDays=days=>{
+   const picker=openCalendar();assert.equal(picker.uniqueDays,true);
+   picker.onConfirm(Object.fromEntries(days.map(d=>[d,1])));picker.onClose();
+ };
+ const days=['2026-12-28','2026-12-30','2027-01-03'];
+ selectDays([...days].reverse());
+ field('Purpose of travel').props.onChange({target:{value:'Commute'}});
+ await plan();
+ const editDates=()=>button('Multiple days').props.onClick();
+ editDates();
+ assert.deepEqual(Object.keys(openCalendar().initialCounts),days);
+ assert.equal(button('Add 3 journeys').props.disabled,true,'unsaved date changes prevent submission');
+ button('Cancel selection').props.onClick();
+ assert.ok(text(button('Add 3 journeys')).includes('¥597'));
+ button('Round trip').props.onClick();
+ const returnField=day=>field('Return date for '+day);
+ assert.equal(returnField(days[0]).props.value,days[0]);
+ returnField(days[1]).props.onChange({target:{value:'2026-12-29'}});
+ assert.equal(button('Add 3 round trips').props.disabled,true);
+ returnField(days[1]).props.onChange({target:{value:'2027-01-02'}});
+ field('Return fare').props.onChange({target:{value:'202'}});
+ assert.ok(text(button('Add 3 round trips')).includes('¥1203'));
+ const before=rows.length;
+ ctx.useExpenseMutations=()=>({insertExpense:async()=>({ok:false}),modals:null});
+ await button('Add 3 round trips').props.onClick();
+ assert.ok(text(render()).includes(days[2]));
+ ctx.useExpenseMutations=failOnce;
+ const saveMany=button('Add 3 round trips');
+ await Promise.all([saveMany.props.onClick(),saveMany.props.onClick()]);
+ assert.equal(rows.length,before+1,'one bulk insert');
+ const batch=Array.from(rows.at(-1));
+ assert.deepEqual(batch.map(r=>r.date),days);
+ assert.deepEqual(batch.map(r=>r.return_date),[days[0],'2027-01-02',days[2]]);
+ assert.ok(batch.every(r=>r.amount===401&&r.return_amount===202&&r.shop==='A → B'&&r.notes.includes('Commute')));
+ assert.ok(text(render()).includes('3 journeys saved'));
+ assert.ok(text(render()).includes('¥1203'));
+ button('Plan another journey').props.onClick();
+ assert.ok(!text(render()).includes('2027-01-03'));
+
+ // The normal offline batch write is atomic and projected onto History per date.
+ const storage=new Map();let writes=0;
+ Object.assign(ctx,{localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>{storage.set(k,v);writes++;}},
+   window:{dispatchEvent(){}},Event:function(){},navigator:{onLine:false},setTimeout(){}});
+ vm.runInContext(src.slice(src.indexOf('const OUTBOX_KEY'),src.indexOf('const idOrd')),ctx);
+ const record={table:'cost_management_expenses',op:'insert',row:batch};
+ assert.equal((await ctx.writeThrough(record)).queued,true);
+ assert.equal(writes,1);
+ assert.deepEqual(Array.from(vm.runInContext('overlayExpenses([])',ctx),r=>r.date).sort(),days);
+ ctx.localStorage.setItem=()=>{throw Error('quota')};
+ assert.equal((await ctx.writeThrough(record)).ok,false);
+ assert.equal(vm.runInContext('getOutbox().length',ctx),3);
+ console.log('PASS: calendar selection, per-date returns and purpose, batch total, retry, atomic offline queue and history');
  console.log('PASS: upfront fare entry, transfer and round-trip totals, validation, retry, route edits and switching back to estimates');
  console.log('PASS: calculator one-row insert, different return fare/date, same-day default, double-click prevention, invalid values and one-way reset');
 })().catch(e=>{console.error(e);process.exitCode=1;});

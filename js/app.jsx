@@ -1614,10 +1614,15 @@ const getOutbox = () => { try { const a = JSON.parse(localStorage.getItem(OUTBOX
 // Cap is generous: the seed alone can be ~600 ops (150 stops + 60 blocks + 400
 // corners), and it must never evict an unsent expense sitting ahead of it.
 const OUTBOX_CAP = 2000;
-const writeOutbox = (l) => { try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(l.slice(-OUTBOX_CAP))); } catch (e) {} window.dispatchEvent(new Event(OUTBOX_EVT)); };
+const writeOutbox = (l) => {
+  try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(l.slice(-OUTBOX_CAP))); } catch (e) { return false; }
+  window.dispatchEvent(new Event(OUTBOX_EVT));
+  return true;
+};
+const queuedItem = op => ({ qid: "q" + Date.now() + Math.random().toString(36).slice(2, 6), ts: Date.now(), tries: 0, ...op });
 const enqueue = (op) => {
   if (syncOff) return null;
-  const item = { qid: "q" + Date.now() + Math.random().toString(36).slice(2, 6), ts: Date.now(), tries: 0, ...op };
+  const item = queuedItem(op);
   writeOutbox([...getOutbox(), item]);
   if (navigator.onLine) setTimeout(drainOutbox, 0);
   return item;
@@ -1676,7 +1681,13 @@ async function writeThrough(w) {
   const many = w.op === "insert" && Array.isArray(w.row) ? w.row : null;
   const queueIt = () => {
     if (syncOff) return { ok: false, error: "Offline — this can't be saved until you're back online" };
-    if (many) many.forEach((r) => enqueue({ table: w.table, op: "insert", row: r, tempId: newTempId() }));
+    if (many) {
+      const existing = getOutbox();
+      if (existing.length + many.length > OUTBOX_CAP) return { ok: false, error: "Sync pending entries before adding this batch." };
+      const items = many.map(row => queuedItem({ table: w.table, op: "insert", row, tempId: newTempId() }));
+      if (!writeOutbox([...existing, ...items])) return { ok: false, error: "Device storage is full. Connect and try saving again." };
+      if (navigator.onLine) setTimeout(drainOutbox, 0);
+    }
     else enqueue({ ...w, tempId: w.op === "insert" ? newTempId() : undefined });
     return { ok: true, queued: true };
   };
@@ -3856,9 +3867,9 @@ function AddEntryView({ recentEntries, allExpenses }) {
   );
 }
 
-// compact multi-date picker sheet for the Add screen
-function AddCalSheet({ dates, setDates, today, yest, C, chip, theme, onClose, onConfirm = () => {}, initialCounts = {}, confirmLabel = "Done", single = false }) {
-  const [view, setView] = useState({ y: today.getFullYear(), m: today.getMonth() });
+// Shared date picker for Add and Smart Fare.
+function AddCalSheet({ dates, setDates, today, yest, C, chip, theme, onClose, onConfirm = () => {}, initialCounts = {}, confirmLabel = "Done", single = false, uniqueDays = false, openingDate = today }) {
+  const [view, setView] = useState({ y: openingDate.getFullYear(), m: openingDate.getMonth() });
   const [counts, setCounts] = useState(initialCounts);
   const dim = new Date(view.y, view.m + 1, 0).getDate();
   const fd = (new Date(view.y, view.m, 1).getDay() + 6) % 7;
@@ -3871,24 +3882,29 @@ function AddCalSheet({ dates, setDates, today, yest, C, chip, theme, onClose, on
     if (n <= 0) delete next[s]; else next[s] = n;
     return next;
   });
-  const toggle = (day) => {
-    const s = isoOf(day);
+  const choose = (s) => {
     if (single) { setDates([s]); onClose(); return; }
-    bump(s, +1);
+    if (uniqueDays) {
+      setCounts(current => {
+        const next = { ...current };
+        if (next[s]) delete next[s]; else next[s] = 1;
+        return next;
+      });
+    } else bump(s, 1);
   };
-  const quick = (d) => { const s = ymdLocal(d); if (single) { setDates([s]); onClose(); return; } bump(s, +1); };
   const confirm = () => { if (!single) onConfirm(counts); onClose(); };
+  const countLabel = uniqueDays ? `${total} day${total === 1 ? "" : "s"}` : `${total} entr${total === 1 ? "y" : "ies"}`;
   const stepBtn = { width: 26, height: 26, borderRadius: 8, border: "none", background: C.input, color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", lineHeight: 1 };
   return (
     <div style={{ background: C.card, borderRadius: 16, padding: 14, boxShadow: `inset 0 0 0 1px ${C.border}` }}>
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <button onClick={() => quick(today)} style={{ ...chip(single ? (dates.length === 1 && dates[0] === ymdLocal(today)) : (counts[ymdLocal(today)] > 0), theme.primary), flex: 1, justifyContent: "center" }}>Today</button>
-        <button onClick={() => quick(yest)} style={{ ...chip(single ? (dates.length === 1 && dates[0] === ymdLocal(yest)) : (counts[ymdLocal(yest)] > 0), theme.primary), flex: 1, justifyContent: "center" }}>Yesterday</button>
+        <button onClick={() => choose(ymdLocal(today))} style={{ ...chip(single ? (dates.length === 1 && dates[0] === ymdLocal(today)) : (counts[ymdLocal(today)] > 0), theme.primary), flex: 1, justifyContent: "center" }}>Today</button>
+        <button onClick={() => choose(ymdLocal(yest))} style={{ ...chip(single ? (dates.length === 1 && dates[0] === ymdLocal(yest)) : (counts[ymdLocal(yest)] > 0), theme.primary), flex: 1, justifyContent: "center" }}>Yesterday</button>
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <button onClick={() => setView((v) => v.m === 0 ? { y: v.y - 1, m: 11 } : { ...v, m: v.m - 1 })} style={{ background: C.input, border: "none", color: C.muted, width: 28, height: 28, borderRadius: 8, cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Icon name="chevronLeft" size={15}/></button>
+        <button aria-label="Previous month" onClick={() => setView((v) => v.m === 0 ? { y: v.y - 1, m: 11 } : { ...v, m: v.m - 1 })} style={{ background: C.input, border: "none", color: C.muted, width: 28, height: 28, borderRadius: 8, cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Icon name="chevronLeft" size={15}/></button>
         <span style={{ fontSize: 13, fontWeight: 600, color: "#fff" }}>{MONTHS_FULL[view.m]} {view.y}</span>
-        <button onClick={() => setView((v) => v.m === 11 ? { y: v.y + 1, m: 0 } : { ...v, m: v.m + 1 })} style={{ background: C.input, border: "none", color: C.muted, width: 28, height: 28, borderRadius: 8, cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Icon name="chevronRight" size={15}/></button>
+        <button aria-label="Next month" onClick={() => setView((v) => v.m === 11 ? { y: v.y + 1, m: 0 } : { ...v, m: v.m + 1 })} style={{ background: C.input, border: "none", color: C.muted, width: 28, height: 28, borderRadius: 8, cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Icon name="chevronRight" size={15}/></button>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 3 }}>
         {["M","T","W","T","F","S","S"].map((d, i) => <div key={i} style={{ textAlign: "center", fontSize: 9, color: C.dim, padding: 2 }}>{d}</div>)}
@@ -3898,14 +3914,15 @@ function AddCalSheet({ dates, setDates, today, yest, C, chip, theme, onClose, on
           const cnt = single ? 0 : (counts[s] || 0);
           const sel = single ? dates.includes(s) : cnt > 0;
           return (
-            <button key={day} onClick={() => toggle(day)} style={{ position: "relative", aspectRatio: "1", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, background: sel ? theme.primary : "transparent", color: sel ? "#fff" : C.text, fontWeight: sel ? 700 : 400 }}>
+            <button key={day} aria-label={s} aria-pressed={sel} onClick={() => choose(s)} style={{ position: "relative", aspectRatio: "1", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, background: sel ? theme.primary : "transparent", color: sel ? "#fff" : C.text, fontWeight: sel ? 700 : 400 }}>
               {day}
               {cnt > 1 && <span style={{ position: "absolute", top: 1, right: 2, minWidth: 13, height: 13, borderRadius: 7, background: "#fff", color: theme.primary, fontSize: 8.5, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 2px" }}>{cnt}</span>}
             </button>
           );
         })}
       </div>
-      {!single && total > 0 && (
+      {uniqueDays && total > 0 && <p aria-live="polite" style={{ color: C.text, fontSize: 12 }}>{Object.keys(counts).sort().map(fmtDay).join(" · ")}</p>}
+      {!single && !uniqueDays && total > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12 }}>
           {Object.keys(counts).sort().map((s) => (
             <div key={s} style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -3918,7 +3935,7 @@ function AddCalSheet({ dates, setDates, today, yest, C, chip, theme, onClose, on
         </div>
       )}
       <button onClick={confirm} disabled={!single && total === 0} style={{ width: "100%", marginTop: 10, height: 38, borderRadius: 11, border: "none", background: (single ? dates.length : total) ? theme.primary : C.input, color: "#fff", fontSize: 13, fontWeight: 600, cursor: (!single && total === 0) ? "default" : "pointer", opacity: (!single && total === 0) ? 0.55 : 1, fontFamily: "inherit" }}>
-        {confirmLabel}{single ? (dates.length > 1 ? ` · ${dates.length} days` : "") : (total > 0 ? ` · ${total} entr${total !== 1 ? "ies" : "y"}` : "")}
+        {confirmLabel}{single ? (dates.length > 1 ? ` · ${dates.length} days` : "") : (total > 0 ? ` · ${countLabel}` : "")}
       </button>
     </div>
   );
@@ -5731,10 +5748,17 @@ function FareCalcView({ allExpenses, dueAdd }) {
   const [busy, setBusy] = useState(false);
   const lookupVersion = useRef(0);
   const [purpose, setPurpose] = useState("");
-  const [date, setDate] = useState(ymdToday());
+  const [chosenDates, setDates] = useState(null);
+  const dates = chosenDates || [ymdToday()];
+  const [calendarMode, setCalendarMode] = useState(null);
+  const [returnDates, setReturnDates] = useState({});
+  const multiple = dates.length > 1;
+  const selectDates = (days) => {
+    setDates(days);
+    setReturnDates(current => Object.fromEntries(days.filter(day => current[day]).map(day => [day, current[day]])));
+  };
   const [card, setCard] = useState(null);
   const [round, setRound] = useState(false);
-  const [returnDate, setReturnDate] = useState("");
   const [returnFareInput, setReturnFareInput] = useState("");
   const [savingTrip, setSavingTrip] = useState(false);
   const savingTripRef = useRef(false);
@@ -5848,9 +5872,9 @@ function FareCalcView({ allExpenses, dueAdd }) {
   const paidFare = /^\d+$/.test(paidFareInput) ? Number(paidFareInput) : null;
   const oneWay = hasPaidFare ? paidFare : useDirect && direct ? direct.fare_ic : legSum;
   const returnFare = returnFareInput === "" ? oneWay : Number(returnFareInput);
-  const tripError = journeyFormError({ date, amount: oneWay, category: "Transportation", shop: clean.join(" → "), has_return: round, return_date: returnDate || date, return_amount: returnFare });
+  const tripError = dates.map(date => journeyFormError({ date, amount: oneWay, category: "Transportation", shop: clean.join(" → "), has_return: round, return_date: returnDates[date] || date, return_amount: returnFare })).find(Boolean) || "";
   const total = tripError ? null : Number(oneWay) + (round ? Number(returnFare) : 0);
-  const canSave = canCalc && !tripError && (hasPaidFare || (allPriced && !busy)) && !savingTrip;
+  const canSave = !calendarMode && dates.length > 0 && canCalc && !tripError && (hasPaidFare || (allPriced && !busy)) && !savingTrip;
 
   const save = async () => {
     if (!canSave || savingTripRef.current) return;
@@ -5859,7 +5883,12 @@ function FareCalcView({ allExpenses, dueAdd }) {
     const route = clean.join(" → ");
     const legNotes = hasPaidFare ? "" : legs.map((r, i) => { const c = routePick[i] != null ? pickedRoute(i) : null; return `${legPairs[i][0]}→${legPairs[i][1]} ${fmt(amounts[i])}${r && !r.error ? "" : " (manual)"}${c ? ` [route: ${routeLabel(c)} · ${c.km} km · chosen]` : ""}`; }).join(" · ");
     const notes = [purpose.trim() && "Purpose: " + purpose.trim(), legNotes].filter(Boolean).join("\n");
-    const res = await insertExpense({ region: currency, date, category: "Transportation", shop: route, amount: total, return_date: round ? (returnDate || date) : null, return_amount: round ? returnFare : null, notes, expense_type: "normal", tags: "" });
+    const records = dates.map(date => ({
+      region: currency, date, category: "Transportation", shop: route, amount: total,
+      return_date: round ? (returnDates[date] || date) : null, return_amount: round ? returnFare : null,
+      notes, expense_type: "normal", tags: "",
+    }));
+    const res = await insertExpense(multiple ? records : records[0]);
     // Feed the fare book so the next occurrence of these legs autofills.
     if (res.ok && !hasPaidFare) {
       const clashes = [], failures = [];
@@ -5885,17 +5914,17 @@ function FareCalcView({ allExpenses, dueAdd }) {
     }
     const out = hasPaidFare ? [{ route, amount: oneWay, source: "paid" }] : legs.map((r, i) => ({ from: legPairs[i][0], to: legPairs[i][1], amount: amounts[i], source: r && !r.error ? r.source : "manual", km: r && !r.error ? r.distance_km : null }));
     const back = round ? [{ route: reverseJourney(route), amount: returnFare, source: "confirmed" }] : [];
-    if (res.ok) setCard({ route, purpose: purpose.trim(), legs: !hasPaidFare && useDirect ? [{from: clean[0], to: clean[clean.length - 1], amount: oneWay, source: "confirmed"}] : out, back, hasPaidFare, oneWay, total, date, round, returnDate: returnDate || date, returnFare });
+    if (res.ok) setCard({ route, purpose: purpose.trim(), legs: !hasPaidFare && useDirect ? [{from: clean[0], to: clean[clean.length - 1], amount: oneWay, source: "confirmed"}] : out, back, hasPaidFare, oneWay, total: total * dates.length, dates, round, returnDates, returnFare });
     } finally { savingTripRef.current = false; setSavingTrip(false); }
   };
-  const startNew = () => { setCard(null); setDate(ymdToday()); setPurpose(""); setStops(["", ""]); setRound(false); setReturnDate(""); setReturnFareInput(""); reset(); };
+  const startNew = () => { setCard(null); setDates(null); setCalendarMode(null); setPurpose(""); setStops(["", ""]); setRound(false); setReturnDates({}); setReturnFareInput(""); reset(); };
 
   if (card) return (
     <div className="cm-fade" style={{ maxWidth: 560, margin: "0 auto" }}>
       <div style={{ background: theme.cardBg, border: `1px solid ${theme.success}55`, borderRadius: 12, padding: 16 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 12 }}>
-          <span style={{ fontSize: 13.5, fontWeight: 700, color: "#fff", display: "inline-flex", alignItems: "center", gap: 8 }}><Icon name="train" size={15}/>Journey saved</span>
-          <span style={{ fontSize: 10.5, color: theme.textMuted }}>{card.date}</span>
+          <span style={{ fontSize: 13.5, fontWeight: 700, color: "#fff", display: "inline-flex", alignItems: "center", gap: 8 }}><Icon name="train" size={15}/>{card.dates.length > 1 ? `${card.dates.length} journeys saved` : "Journey saved"}</span>
+          <span style={{ fontSize: 10.5, color: theme.textMuted }}>{card.dates.length === 1 ? card.dates[0] : ""}</span>
         </div>
         {card.purpose && <p>Purpose: {card.purpose}</p>}
         {[["Outbound", card.legs, theme.primary], ["Return", card.back || [], theme.accent]].map(([label, list, dot]) => list.length === 0 ? null : (
@@ -5914,15 +5943,18 @@ function FareCalcView({ allExpenses, dueAdd }) {
           </div>
         ))}
         <div style={{ background: theme.inputBg, borderRadius: 10, padding: "11px 13px" }}>
-          {card.round && (
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: theme.textMuted, marginBottom: 6 }}><span>Outward · {card.date}<br/>Return · {card.returnDate}</span><span>{fmt(card.oneWay)}<br/>{fmt(card.returnFare)}</span></div>
-          )}
+          {(card.round || card.dates.length > 1) && card.dates.map(day => (
+            <div key={day} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: theme.text, marginBottom: 6 }}>
+              <span>{day}{card.round && <> → {card.returnDates[day] || day}</>}</span>
+              <span>{fmt(card.oneWay)}{card.round && <> + {fmt(card.returnFare)}</>}</span>
+            </div>
+          ))}
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-            <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600, color: theme.textMuted }}>Total{!card.hasPaidFare && <> · {card.legs.length + (card.back ? card.back.length : 0)} leg{card.legs.length + (card.back ? card.back.length : 0) === 1 ? "" : "s"}</>}</span>
+            <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600, color: theme.textMuted }}>Total{card.dates.length === 1 && !card.hasPaidFare && <> · {card.legs.length + (card.back ? card.back.length : 0)} leg{card.legs.length + (card.back ? card.back.length : 0) === 1 ? "" : "s"}</>}</span>
             <span style={{ fontSize: 21, fontWeight: 700, color: "#fff" }}>{fmt(card.total)}</span>
           </div>
         </div>
-        <div style={{ fontSize: 11.5, color: theme.success, fontWeight: 600, marginTop: 10 }}>✓ Added to expenses as one Transportation entry</div>
+        <div style={{ fontSize: 11.5, color: theme.success, fontWeight: 600, marginTop: 10 }}>✓ {card.dates.length === 1 ? "Added to expenses as one Transportation entry" : `Added ${card.dates.length} Transportation entries`}</div>
         {bookMsg && bookMsg.kind === "ok" && <div style={{ fontSize: 11, color: theme.textDim, marginTop: 4 }}>Fare book updated — these legs autofill next time.</div>}
         {bookMsg && bookMsg.kind === "error" && (
           <div style={{ marginTop: 8, borderRadius: 9, background: theme.danger + "14", border: `1px solid ${theme.danger}44`, padding: "9px 11px" }}>
@@ -5956,6 +5988,35 @@ function FareCalcView({ allExpenses, dueAdd }) {
           </div>
         </div>
         <div style={{ fontSize: 11, color: theme.textDim, marginBottom: 12 }}>Choose your stations, then enter the fare you paid or calculate an estimate.</div>
+        <fieldset disabled={savingTrip} style={{ border: 0, padding: 0, margin: "0 0 12px", minWidth: 0 }}>
+          <legend style={{ ...labelStyle, display: "flex", alignItems: "center", gap: 5 }}><Icon name="calendar" size={14}/>{round ? "Outward travel dates" : "Travel dates"}</legend>
+          <div style={{ display: "flex", gap: 6 }}>
+            {[["single", "Single day"], ["multiple", "Multiple days"]].map(([mode, label]) => (
+              <button type="button" key={mode} aria-expanded={calendarMode === mode}
+                onClick={() => setCalendarMode(calendarMode === mode ? null : mode)}
+                style={{ ...pillish((calendarMode || (multiple ? "multiple" : "single")) === mode, theme), flex: 1, minHeight: 44, fontSize: 13 }}>
+                {label}
+              </button>
+            ))}
+          </div>
+          {calendarMode && <div style={{ marginTop: 6 }}>
+            <AddCalSheet key={calendarMode} dates={dates} setDates={selectDates}
+              today={dateOfIso(ymdToday())} yest={addDays(dateOfIso(ymdToday()), -1)} openingDate={dateOfIso(dates[0])}
+              theme={theme} C={{ text: theme.text, muted: theme.textMuted, dim: theme.textDim, card: theme.cardBg, border: theme.cardBorder, input: theme.inputBg }}
+              chip={on => pillish(on, theme)} single={calendarMode === "single"} uniqueDays={calendarMode === "multiple"}
+              initialCounts={Object.fromEntries((chosenDates || []).map(day => [day, 1]))}
+              confirmLabel={calendarMode === "single" ? "Done" : "Use these days"}
+              onConfirm={counts => selectDates(Object.keys(counts).sort())} onClose={() => setCalendarMode(null)}/>
+            {calendarMode === "multiple" && <button type="button" style={{ ...pillish(false, theme), marginTop: 4 }} onClick={() => setCalendarMode(null)}>Cancel selection</button>}
+          </div>}
+          <div aria-live="polite" style={{ color: theme.text, fontSize: 12, marginTop: 6 }}>{dates.join(" · ")}</div>
+          {round && dates.map(day => (
+            <label key={day} style={{ ...labelStyle, marginTop: 6 }}>{multiple ? `Return for ${day}` : "Return date"}
+              <input aria-label={multiple ? `Return date for ${day}` : "Return date"} type="date" min={day} value={returnDates[day] || day}
+                onChange={e => setReturnDates(current => ({ ...current, [day]: e.target.value }))} style={{...inputStyle,colorScheme:"dark"}}/>
+            </label>
+          ))}
+        </fieldset>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
           {stops.map((s, i) => (
             <div key={i} style={{ display: "grid", gridTemplateColumns: "42px minmax(0,1fr) auto", gap: 8, alignItems: "center" }}>
@@ -5996,10 +6057,6 @@ function FareCalcView({ allExpenses, dueAdd }) {
           </div>
         )}
         <div style={{display:"grid", gap:8, marginBottom:10}}>
-          <label style={labelStyle}>{round ? "Outward travel date" : "Travel date"}
-            <input type="date" aria-label="Travel date" value={date} onChange={e => setDate(e.target.value)} style={{...inputStyle,colorScheme:"dark"}}/>
-          </label>
-          {round && <label style={labelStyle}>Return date<input aria-label="Return date" type="date" min={date} value={returnDate || date} onChange={e => setReturnDate(e.target.value)} style={{...inputStyle,colorScheme:"dark"}}/></label>}
           <label style={labelStyle}>Purpose of travel (optional)
             <input aria-label="Purpose of travel" value={purpose} placeholder="e.g. Commute to work" onChange={e => setPurpose(e.target.value)} style={inputStyle}/>
           </label>
@@ -6080,7 +6137,7 @@ function FareCalcView({ allExpenses, dueAdd }) {
               </div>
             )}
             <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", padding: "4px 2px" }}>
-              <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600, color: theme.textMuted }}>Journey total{round ? " · round trip" : ""}{!hasPaidFare && useDirect ? " · direct" : ""}</span>
+              <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600, color: theme.textMuted }}>{multiple ? "Fare per day" : "Journey total"}{round ? " · round trip" : ""}{!hasPaidFare && useDirect ? " · direct" : ""}</span>
               <span style={{ fontSize: 20, fontWeight: 700, color: total != null ? "#fff" : theme.textDim }}>{total != null ? fmt(total) : "—"}{round && total != null ? <span style={{ fontSize: 11, fontWeight: 600, color: theme.textMuted }}> ({fmt(oneWay)} + {fmt(returnFare)})</span> : null}</span>
             </div>
             <div>
@@ -6094,7 +6151,7 @@ function FareCalcView({ allExpenses, dueAdd }) {
               </div>}
               {!round && <div style={{fontSize:11,color:theme.textMuted,marginBottom:8}}>Returning later? Save this journey now, then choose Add return journey in History.</div>}
               {tripError && <div role="alert" style={{fontSize:11,color:theme.warning,marginBottom:8}}>{tripError}</div>}
-              <button onClick={save} disabled={!canSave} style={{ width: "100%", padding: "11px", borderRadius: 10, border: "none", cursor: canSave ? "pointer" : "not-allowed", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})`, opacity: canSave ? 1 : 0.5 }}>{savingTrip ? "Saving" : "Add"} {round ? "round trip" : "journey"} as expense{total != null ? ` · ${fmt(total)}` : ""}</button>
+              <button onClick={save} disabled={!canSave} style={{ width: "100%", padding: "11px", borderRadius: 10, border: "none", cursor: canSave ? "pointer" : "not-allowed", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})`, opacity: canSave ? 1 : 0.5 }}>{savingTrip ? "Saving…" : multiple ? `Add ${dates.length} ${round ? "round trips" : "journeys"}` : `Add ${round ? "round trip" : "journey"} as expense`}{total != null ? ` · ${fmt(total * dates.length)}` : ""}</button>
             </div>
           </div>
         )}
