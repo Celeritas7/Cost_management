@@ -8,7 +8,7 @@ const ctx={console,Date,Number,Map,Set,require:()=>({jsx:(type,props)=>({type,pr
  useTheme:()=>({theme,inputStyle:{},labelStyle:{},supabase:{},fetchData(){},currency:'JPY'}),
  useExpenseMutations:()=>({insertExpense:async row=>{rows.push(row);await Promise.resolve();return {ok:true};},modals:null}),
  ymdToday:()=> '2026-12-30',canonStation:s=>s.trim(),SEED_STATIONS:[],jrRoutes:()=>[],fareLookup:async()=>({fare_ic:199,source:'book',verified:true}),
- fareBookSave:async()=>({status:'ok'}),fareTone:()=> '#888888',fareSourceLabel:()=> 'Saved fare',overridden:x=>x!=null&&x!=='',fmt:x=>'¥'+x,CUR:{symbol:'¥'},Icon:()=>null,StationPicker:()=>null,stnKey:s=>String(s||'').toLowerCase().replace(/[\s-]/g,'')};
+ fareBookSave:async()=>({status:'ok'}),fareTone:()=> '#888888',fareSourceLabel:()=> 'Saved fare',overridden:x=>x!=null&&x!=='',fmt:x=>'¥'+x,CUR:{symbol:'¥'},Icon:()=>null,AddCalSheet:()=>null,StationPicker:()=>null,stnKey:s=>String(s||'').toLowerCase().replace(/[\s-]/g,'')};
 vm.createContext(ctx);vm.runInContext(src.slice(src.indexOf('// Round trips are one'),src.indexOf('function App(')),ctx);
 vm.runInContext(babel.babelTransform(src.slice(src.indexOf('function FareCalcView'),src.indexOf('function FareBookView')),'fare.jsx',false,[],[]).code,ctx);
 const render=()=>{cursor=0;return ctx.FareCalcView({allExpenses:[],dueAdd(){}});};
@@ -27,8 +27,8 @@ async function plan(){
  await button('Calculate 1 leg').props.onClick();
 }
 (async()=>{
- assert.equal(field("Travel date").props.value,"2026-12-30");
- field("Travel date").props.onChange({target:{value:"2026-12-28"}});
+ button("Single day").props.onClick();
+ const picker=find(n=>n.type===ctx.AddCalSheet);assert.equal(picker.props.dates[0],"2026-12-30");picker.props.setDates(["2026-12-28"]);picker.props.onClose();
  field("Purpose of travel").props.onChange({target:{value:"Office visit"}});
  await plan();button('Round trip').props.onClick();
  field('Return date').props.onChange({target:{value:'2027-01-02'}});field('Return fare').props.onChange({target:{value:'209'}});
@@ -101,5 +101,8 @@ async function plan(){
  finish({fare_ic:499,source:'book'});await pending;
  assert.ok(!text(render()).includes('¥499'),'discard the estimate for the previous route');
  console.log('PASS: upfront fare entry, transfer and round-trip totals, validation, retry, route edits and switching back to estimates');
+ pay('199');button('Multiple days').props.onClick();
+ const multi=find(n=>n.type===ctx.AddCalSheet);multi.props.onConfirm({"2027-01-06":1,"2027-01-03":1});multi.props.onClose();
+ await button('Add journey').props.onClick();assert.deepEqual(Array.from(rows.at(-1),r=>r.date),["2027-01-03","2027-01-06"]);
  console.log('PASS: calculator one-row insert, different return fare/date, same-day default, double-click prevention, invalid values and one-way reset');
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -3857,7 +3857,7 @@ function AddEntryView({ recentEntries, allExpenses }) {
 }
 
 // compact multi-date picker sheet for the Add screen
-function AddCalSheet({ dates, setDates, today, yest, C, chip, theme, onClose, onConfirm = () => {}, initialCounts = {}, confirmLabel = "Done", single = false }) {
+function AddCalSheet({ dates, setDates, today, yest, C, chip, theme, onClose, onConfirm = () => {}, initialCounts = {}, confirmLabel = "Done", single = false, uniqueDays = false }) {
   const [view, setView] = useState({ y: today.getFullYear(), m: today.getMonth() });
   const [counts, setCounts] = useState(initialCounts);
   const dim = new Date(view.y, view.m + 1, 0).getDate();
@@ -3874,9 +3874,9 @@ function AddCalSheet({ dates, setDates, today, yest, C, chip, theme, onClose, on
   const toggle = (day) => {
     const s = isoOf(day);
     if (single) { setDates([s]); onClose(); return; }
-    bump(s, +1);
+    bump(s, uniqueDays && counts[s] ? -1 : +1);
   };
-  const quick = (d) => { const s = ymdLocal(d); if (single) { setDates([s]); onClose(); return; } bump(s, +1); };
+  const quick = (d) => { const s = ymdLocal(d); if (single) { setDates([s]); onClose(); return; } bump(s, uniqueDays && counts[s] ? -1 : +1); };
   const confirm = () => { if (!single) onConfirm(counts); onClose(); };
   const stepBtn = { width: 26, height: 26, borderRadius: 8, border: "none", background: C.input, color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", lineHeight: 1 };
   return (
@@ -3905,7 +3905,7 @@ function AddCalSheet({ dates, setDates, today, yest, C, chip, theme, onClose, on
           );
         })}
       </div>
-      {!single && total > 0 && (
+      {!single && !uniqueDays && total > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12 }}>
           {Object.keys(counts).sort().map((s) => (
             <div key={s} style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -5731,7 +5731,12 @@ function FareCalcView({ allExpenses, dueAdd }) {
   const [busy, setBusy] = useState(false);
   const lookupVersion = useRef(0);
   const [purpose, setPurpose] = useState("");
-  const [date, setDate] = useState(ymdToday());
+  const [travelDates, setTravelDates] = useState([ymdToday()]);
+  const [calendarMode, setCalendarMode] = useState(null);
+  const date = travelDates[0];
+  const multiple = travelDates.length > 1;
+  const today = new Date(), yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
   const [card, setCard] = useState(null);
   const [round, setRound] = useState(false);
   const [returnDate, setReturnDate] = useState("");
@@ -5859,7 +5864,8 @@ function FareCalcView({ allExpenses, dueAdd }) {
     const route = clean.join(" → ");
     const legNotes = hasPaidFare ? "" : legs.map((r, i) => { const c = routePick[i] != null ? pickedRoute(i) : null; return `${legPairs[i][0]}→${legPairs[i][1]} ${fmt(amounts[i])}${r && !r.error ? "" : " (manual)"}${c ? ` [route: ${routeLabel(c)} · ${c.km} km · chosen]` : ""}`; }).join(" · ");
     const notes = [purpose.trim() && "Purpose: " + purpose.trim(), legNotes].filter(Boolean).join("\n");
-    const res = await insertExpense({ region: currency, date, category: "Transportation", shop: route, amount: total, return_date: round ? (returnDate || date) : null, return_amount: round ? returnFare : null, notes, expense_type: "normal", tags: "" });
+    const records = travelDates.map(day => ({ region: currency, date: day, category: "Transportation", shop: route, amount: total, return_date: round ? (multiple ? day : returnDate || day) : null, return_amount: round ? returnFare : null, notes, expense_type: "normal", tags: "" }));
+    const res = await insertExpense(multiple ? records : records[0]);
     // Feed the fare book so the next occurrence of these legs autofills.
     if (res.ok && !hasPaidFare) {
       const clashes = [], failures = [];
@@ -5885,18 +5891,19 @@ function FareCalcView({ allExpenses, dueAdd }) {
     }
     const out = hasPaidFare ? [{ route, amount: oneWay, source: "paid" }] : legs.map((r, i) => ({ from: legPairs[i][0], to: legPairs[i][1], amount: amounts[i], source: r && !r.error ? r.source : "manual", km: r && !r.error ? r.distance_km : null }));
     const back = round ? [{ route: reverseJourney(route), amount: returnFare, source: "confirmed" }] : [];
-    if (res.ok) setCard({ route, purpose: purpose.trim(), legs: !hasPaidFare && useDirect ? [{from: clean[0], to: clean[clean.length - 1], amount: oneWay, source: "confirmed"}] : out, back, hasPaidFare, oneWay, total, date, round, returnDate: returnDate || date, returnFare });
+    if (res.ok) setCard({ route, travelDates, purpose: purpose.trim(), legs: !hasPaidFare && useDirect ? [{from: clean[0], to: clean[clean.length - 1], amount: oneWay, source: "confirmed"}] : out, back, hasPaidFare, oneWay, total, date, round, returnDate: returnDate || date, returnFare });
     } finally { savingTripRef.current = false; setSavingTrip(false); }
   };
-  const startNew = () => { setCard(null); setDate(ymdToday()); setPurpose(""); setStops(["", ""]); setRound(false); setReturnDate(""); setReturnFareInput(""); reset(); };
+  const startNew = () => { setCard(null); setTravelDates([ymdToday()]); setCalendarMode(null); setPurpose(""); setStops(["", ""]); setRound(false); setReturnDate(""); setReturnFareInput(""); reset(); };
 
   if (card) return (
     <div className="cm-fade" style={{ maxWidth: 560, margin: "0 auto" }}>
       <div style={{ background: theme.cardBg, border: `1px solid ${theme.success}55`, borderRadius: 12, padding: 16 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 12 }}>
           <span style={{ fontSize: 13.5, fontWeight: 700, color: "#fff", display: "inline-flex", alignItems: "center", gap: 8 }}><Icon name="train" size={15}/>Journey saved</span>
-          <span style={{ fontSize: 10.5, color: theme.textMuted }}>{card.date}</span>
+          <span style={{ fontSize: 10.5, color: theme.textMuted }}>{card.travelDates.join(", ")}</span>
         </div>
+        {card.travelDates.length > 1 && <p>{card.travelDates.length} journeys · {fmt(card.total * card.travelDates.length)} total{card.round && " · same-day returns"}</p>}
         {card.purpose && <p>Purpose: {card.purpose}</p>}
         {[["Outbound", card.legs, theme.primary], ["Return", card.back || [], theme.accent]].map(([label, list, dot]) => list.length === 0 ? null : (
           <div key={label} style={{ marginBottom: 12 }}>
@@ -5996,10 +6003,20 @@ function FareCalcView({ allExpenses, dueAdd }) {
           </div>
         )}
         <div style={{display:"grid", gap:8, marginBottom:10}}>
-          <label style={labelStyle}>{round ? "Outward travel date" : "Travel date"}
-            <input type="date" aria-label="Travel date" value={date} onChange={e => setDate(e.target.value)} style={{...inputStyle,colorScheme:"dark"}}/>
-          </label>
-          {round && <label style={labelStyle}>Return date<input aria-label="Return date" type="date" min={date} value={returnDate || date} onChange={e => setReturnDate(e.target.value)} style={{...inputStyle,colorScheme:"dark"}}/></label>}
+          <div style={labelStyle}>{round ? "Outward travel dates" : "Travel dates"} · {travelDates.join(", ")}</div>
+          <div style={{display:"flex",gap:8}}>
+            {["Single day","Multiple days"].map(mode => <button key={mode} type="button" aria-expanded={calendarMode === mode} style={inputStyle} onClick={() => setCalendarMode(calendarMode === mode ? null : mode)}>{mode}</button>)}
+          </div>
+          {calendarMode && <AddCalSheet key={calendarMode} today={today} yest={yesterday} dates={travelDates} theme={theme}
+            C={{card:theme.cardBg,input:theme.inputBg,border:theme.cardBorder,muted:theme.textMuted,dim:theme.textDim,text:theme.text}}
+            chip={active => ({...inputStyle,background:active ? theme.primary : theme.inputBg})}
+            single={calendarMode === "Single day"} uniqueDays
+            initialCounts={Object.fromEntries(travelDates.map(day => [day,1]))}
+            setDates={days => { setTravelDates(days); setReturnDate(""); }}
+            onConfirm={counts => { setTravelDates(Object.keys(counts).sort()); setReturnDate(""); }}
+            confirmLabel={calendarMode === "Single day" ? "Done" : "Use these days"} onClose={() => setCalendarMode(null)}/>}
+          {round && multiple && <div>Each selected day includes its own same-day return.</div>}
+          {round && !multiple && <label style={labelStyle}>Return date<input aria-label="Return date" type="date" min={date} value={returnDate || date} onChange={e => setReturnDate(e.target.value)} style={{...inputStyle,colorScheme:"dark"}}/></label>}
           <label style={labelStyle}>Purpose of travel (optional)
             <input aria-label="Purpose of travel" value={purpose} placeholder="e.g. Commute to work" onChange={e => setPurpose(e.target.value)} style={inputStyle}/>
           </label>
@@ -6094,7 +6111,7 @@ function FareCalcView({ allExpenses, dueAdd }) {
               </div>}
               {!round && <div style={{fontSize:11,color:theme.textMuted,marginBottom:8}}>Returning later? Save this journey now, then choose Add return journey in History.</div>}
               {tripError && <div role="alert" style={{fontSize:11,color:theme.warning,marginBottom:8}}>{tripError}</div>}
-              <button onClick={save} disabled={!canSave} style={{ width: "100%", padding: "11px", borderRadius: 10, border: "none", cursor: canSave ? "pointer" : "not-allowed", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})`, opacity: canSave ? 1 : 0.5 }}>{savingTrip ? "Saving" : "Add"} {round ? "round trip" : "journey"} as expense{total != null ? ` · ${fmt(total)}` : ""}</button>
+              <button onClick={save} disabled={!canSave || !!calendarMode} style={{ width: "100%", padding: "11px", borderRadius: 10, border: "none", cursor: canSave ? "pointer" : "not-allowed", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "inherit", background: `linear-gradient(135deg,${theme.primary},${theme.accent})`, opacity: canSave ? 1 : 0.5 }}>{savingTrip ? "Saving" : "Add"} {round ? "round trip" : "journey"} as expense{multiple && ` × ${travelDates.length} days`}{total != null ? ` · ${fmt(total * travelDates.length)}` : ""}</button>
             </div>
           </div>
         )}
